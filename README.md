@@ -1,25 +1,71 @@
 # LaToile
 
-**Un workbench de gestion de projet AI-native, self-hosté.** Tu discutes avec un Manager IA ; lui orchestre une équipe d'agents à rôles fixes — Architecte, Backend, Frontend, Reviewer — qui spécifient, codent et vérifient. Tu regardes l'application se construire en direct (preview web, mobile d'abord), et rien ne merge sans ton approbation.
+**An AI-native, self-hosted project workbench.** You talk to a Manager agent; it orchestrates a fixed-role agent team — Architect, Backend, Frontend, Reviewer — that specs, builds, and verifies. You watch the application take shape live (web preview, mobile viewport first), and nothing merges without your explicit approval.
 
-> La Toile — le réseau parallèle dans lequel tes agents travaillent pendant que tu restes à la surface.
+> *La Toile* — the parallel network your agents travel through while you stay on the surface.
 
-## État
+## Why
 
-**Conception.** Ce dépôt contient actuellement le package d'architecture complet, produit par une session de brainstorm structuré (domaine → stack → données → architecture) informée par l'audit de deux codebases réelles :
+Coding agents block. They finish a turn, hit a permission prompt, or drift off-spec — and you are the bottleneck. Existing tools answer with either a chat window per agent (you are the router) or autonomous loops (you are the janitor). LaToile answers with **project management**: one Manager per project, a spec that precedes code, tasks dispatched to specialized roles, and a single inbox of decisions waiting for you.
 
-- [`docs/architecture-spec.md`](docs/architecture-spec.md) — vision, décisions actées (D1–D10), modèle de domaine, schéma ER, couches, contrat API, écrans, risques
-- [`docs/adrs.md`](docs/adrs.md) — les 4 décisions fondatrices et leurs alternatives rejetées
-- [`ARCHITECTURE_CONTRACT.md`](ARCHITECTURE_CONTRACT.md) — règles vérifiables (couches, secrets, erreurs, tests)
-- [`docs/guardian-checklist.md`](docs/guardian-checklist.md) — contrôles anti-dérive avant merge
+## How it works
 
-## Principes
+```
+You ──chat──► Manager ──► Architect ──► Spec v1 (design/ in the repo)
+                │                            │
+                │                            ▼
+                │              Tasks ──► Backend / Frontend runs ──► commits
+                │                            │
+                │                            ▼
+                │              Reviewer ──► verdict + diff
+                │                            │
+                ◄────── approval inbox ◄─────┘
+```
 
-- **Le projet est l'unité centrale**, pas la conversation.
-- **La spec précède le code** — versionnée, dans `design/` du repo du projet, maquettes comprises (contrat visuel du frontend).
-- **Approbation humaine obligatoire** — le Reviewer propose, toi seul disposes.
-- **Un binaire, une base SQLite, zéro dépendance externe** — Rust + axum + sqlx, agents pilotés via [Agent Client Protocol](https://agentclientprotocol.com).
+- **The project is the central entity** — not the conversation, not the session.
+- **Spec before code** — every task references an approved, versioned specification. Design artifacts (domain model, ER diagrams, HTML mockups) live in the project's own `design/` directory, so git gives you history, diff, and review for free.
+- **Mockups are the visual contract** — the HTML mockups produced at design time sit side-by-side with the live render in the Review screen. The frontend agent builds toward a target, not a vibe.
+- **Fixed roles, dedicated skills** — each role is bound to its own skill file (system prompt + playbook). The Architect runs a structured architecture-brainstorm method; the Reviewer never merges, only recommends.
+- **Human approval is a hard invariant** — enforced by the domain state machine, not by convention.
+- **Live preview** — the project's dev server is supervised and reverse-proxied into the UI, mobile viewport by default. When a frontend run finishes, the preview reloads itself.
 
-## Licence
+## Architecture at a glance
 
-AGPL-3.0-only. Si tu sers une version modifiée de LaToile en réseau, tu publies tes changements.
+| Layer | Choice | Why |
+|---|---|---|
+| Backend | Rust (axum), modular monolith in a Cargo workspace | Single binary on a VPS; the official `agent-client-protocol` crate is Rust |
+| Agent channel | [Agent Client Protocol](https://agentclientprotocol.com) with supervised spawning | Structured status, permissions, cancellation — no terminal scraping |
+| Database | SQLite via sqlx, embedded migrations | Single-user, self-hosted — Postgres can wait for multi-tenancy |
+| Frontend | React + Vite + Tailwind, embedded in the binary | No Node server to run; mobile-first is CSS, not a framework |
+| Realtime | Server-Sent Events with a monotonic cursor | One channel is enough for one user |
+| Secrets | Envelope encryption (XChaCha20-Poly1305), root key outside the DB | A database backup alone opens nothing |
+
+The full design — decisions D1–D10, the ER model, the API contract, the risk register — is in [`docs/architecture-spec.md`](docs/architecture-spec.md).
+
+## Documentation
+
+- [`docs/architecture-spec.md`](docs/architecture-spec.md) — complete architecture specification
+- [`docs/adrs.md`](docs/adrs.md) — the four founding decisions and their rejected alternatives
+- [`ARCHITECTURE_CONTRACT.md`](ARCHITECTURE_CONTRACT.md) — verifiable rules (layers, secrets, errors, tests)
+- [`docs/guardian-checklist.md`](docs/guardian-checklist.md) — anti-drift checks to run before merging
+
+## Status
+
+**Design phase.** This repository currently contains the architecture package only — no code yet. The spec was produced by a structured architecture brainstorm informed by audits of two real codebases (a tmux/PTY-based agent control plane, and an ACP-based agent desktop runtime). Every rule in the architecture contract is a lesson from those audits turned into a starting invariant.
+
+### Roadmap
+
+- [ ] Role skills: manager, backend, frontend, reviewer playbooks
+- [ ] Cargo workspace skeleton with a pure `core` from commit one
+- [ ] Agent channel over ACP with permission queue
+- [ ] Project + Manager chat + task board
+- [ ] Supervised live preview with auto-reload
+- [ ] Review screen: diff + verdict + mockup side-by-side
+
+## Contributing
+
+Not open yet — the codebase doesn't exist. Design feedback via issues is welcome.
+
+## License
+
+AGPL-3.0-only. If you serve a modified LaToile over a network, you publish your changes.
