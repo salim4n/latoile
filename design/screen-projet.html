@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaToile — Projet LaToile</title>
+<!--
+═══════════════════════════════════════════════════════════════════════════════
+CONTRACT — screen-projet.html
+Route : /projets/:id (ex. /projets/latoile)
+Purpose : vue projet — conversation avec le Manager, board des tâches, preview live
+  de l'app en construction.
+Languages : fr, en (décision D11) — toggle FR/EN en topbar mobile + sidebar desktop,
+  attributs data-i18n + dictionnaires inline, persistance localStorage (« latoile-lang »).
+Primary viewport : 390px mobile-first. Adaptation 1440px : sidebar (mêmes destinations
+  que la tab bar) + contenu max-width 1100px centré (le board garde ses colonnes côte à
+  côte, la preview ne s'étire pas).
+JS : toggle de langue uniquement (interaction de preview autorisée).
+
+Component inventory (blocs nommés) :
+  AppShell      — topbar (retour « ‹ Projets » + nom du projet + LangToggle + 1 action
+                  contextuelle : réglages) ; tab bar mobile ↔ sidebar desktop.
+  ProjectTabs   — segmented control Chat / Board / Preview (badge « live » sur Preview).
+                  INTERACTION ANNOTÉE, non scriptée : tap = bascule d'onglet dans le contenu
+                  (un seul onglet visible à la fois dans l'app réelle ; ici les trois sont
+                  empilés et étiquetés pour la revue).
+  ChatTab       — fil de messages bottom-anchored (Vous / Manager) ; les actions de
+                  l'agent sont des CARTES STRUCTURÉES dans le fil (ActionCard : tâche
+                  créée, run démarré), jamais du texte libre. Composer bottom-sticky.
+  BoardTab      — colonnes Prêt / En cours / Review / Terminé, scroll horizontal mobile
+                  (scroll-snap), cartes tâche : titre, agent assigné, identifiant, n° run.
+  PreviewTab    — barre d'outils (URL mono, badge « live », toggle Mobile/Desktop annoté),
+                  cadre téléphone montrant le rendu live de l'app.
+  PreviewError  — variante d'état : build échoué, extrait de log mono, action de reprise.
+
+States included :
+  CHAT (#chat) · BOARD (#board) · PREVIEW (#preview) · PREVIEW EN ERREUR (#preview-erreur).
+
+Data per block :
+  ChatTab    : messages utilisateur/Manager, ActionCard (tâche « Page de connexion » →
+               Frontend, run #42), composer.
+  BoardTab   : 4 colonnes, cartes avec titre (données, non traduites), agent, id, run.
+  PreviewTab : URL de preview, état « live », rendu de la page de connexion construite.
+  Données non traduites : titres de tâches, contenu de l'app en preview (MonApp), logs.
+═══════════════════════════════════════════════════════════════════════════════
+-->
+<style>
+:root {
+  --surface-1: #0E0F12; --surface-2: #16181D; --surface-3: #1E2128;
+  --border: #2A2E37;
+  --text-primary: #ECEDEF; --text-secondary: #A6ABB4; --text-muted: #6B7180;
+  --accent: #38BDF8; --accent-fg: #081018;
+  --success: #3FB27F; --warning: #F5B042; --danger: #E5534B;
+  --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px; --text-sm: 14px; --text-base: 16px; --text-lg: 20px; --text-xl: 24px;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
+  --radius-sm: 6px; --radius-md: 10px; --radius-pill: 999px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body { font-family: var(--font-body); font-size: var(--text-base); line-height: 1.5; background: var(--surface-1); color: var(--text-primary); }
+a { color: var(--accent); text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── AppShell ─────────────────────────────────────────────────────────────── */
+.shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.body-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: var(--space-3); height: 56px; padding: 0 var(--space-4); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.topbar .back { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-secondary); flex-shrink: 0; }
+.topbar .title { flex: 1; min-width: 0; font-size: var(--text-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-right { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-secondary); flex-shrink: 0; }
+.crumb { display: none; font-size: var(--text-base); font-weight: 600; }
+.conn { display: none; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); white-space: nowrap; }
+.conn .dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--success); }
+main { flex: 1; padding: var(--space-4); padding-bottom: calc(72px + var(--space-5)); }
+.main-inner { width: 100%; }
+
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; height: 64px; background: var(--surface-2); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+.tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: var(--text-xs); color: var(--text-muted); }
+.tabbar a[aria-current="page"] { color: var(--accent); }
+
+.sidebar { display: none; }
+
+@media (min-width: 1024px) {
+  .shell { flex-direction: row; }
+  .sidebar { display: flex; flex-direction: column; width: 240px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; background: var(--surface-2); border-right: 1px solid var(--border); padding: var(--space-4); }
+  .tabbar { display: none; }
+  .topbar .back, .topbar .title { display: none; }
+  .crumb { display: inline; flex: 1; }
+  .conn { display: inline-flex; }
+  main { padding: var(--space-5) var(--space-6); }
+  .main-inner { max-width: 1100px; margin: 0 auto; }
+}
+
+.side-logo { font-size: var(--text-lg); font-weight: 700; letter-spacing: -0.01em; padding: var(--space-2) var(--space-3); margin-bottom: var(--space-4); }
+.side-nav { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; }
+.side-nav a { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
+.side-nav a[aria-current="page"] { color: var(--accent); background: var(--surface-3); }
+.side-foot { border-top: 1px solid var(--border); padding-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+.side-user { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-3); }
+.avatar { width: 32px; height: 32px; border-radius: var(--radius-pill); background: var(--surface-3); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary); flex-shrink: 0; }
+.side-user .who { font-size: var(--text-sm); font-weight: 600; }
+.side-user .what { font-size: var(--text-xs); color: var(--text-muted); }
+
+/* ── LangToggle (i18n D11) ────────────────────────────────────────────────── */
+.lang-toggle { display: inline-flex; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; flex-shrink: 0; }
+.lang-toggle button { padding: 2px var(--space-2); font-size: var(--text-xs); font-weight: 700; color: var(--text-muted); border-radius: var(--radius-pill); }
+.lang-toggle button[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
+.sidebar .lang-toggle { align-self: flex-start; margin-left: var(--space-3); }
+
+/* ── Primitives partagées ─────────────────────────────────────────────────── */
+.badge { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); font-weight: 600; padding: 2px var(--space-2); border-radius: var(--radius-pill); border: 1px solid; white-space: nowrap; }
+.badge--success { color: var(--success); border-color: rgba(63, 178, 127, 0.4); background: rgba(63, 178, 127, 0.12); }
+.badge--warning { color: var(--warning); border-color: rgba(245, 176, 66, 0.4); background: rgba(245, 176, 66, 0.12); }
+.badge--danger  { color: var(--danger);  border-color: rgba(229, 83, 75, 0.4);  background: rgba(229, 83, 75, 0.12); }
+.badge--accent  { color: var(--accent);  border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.12); }
+.badge--neutral { color: var(--text-secondary); border-color: var(--border); background: var(--surface-3); }
+.badge .pulse-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--success); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .badge .pulse-dot { animation: none; } }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); font-weight: 600; font-size: var(--text-sm); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); border: 1px solid transparent; }
+.btn--primary { background: var(--accent); color: var(--accent-fg); }
+.btn--ghost { background: transparent; color: var(--text-primary); border-color: var(--border); }
+.btn--sm { padding: var(--space-2) var(--space-3); }
+
+.card { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4); }
+
+.state { border-top: 1px solid var(--border); padding-top: var(--space-5); margin-top: var(--space-5); }
+.state:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.state-label { display: inline-block; font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; color: var(--accent); border: 1px dashed rgba(56, 189, 248, 0.5); border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-4); }
+
+/* ── ProjectTabs (interaction annotée : bascule d'onglet, non scriptée) ───── */
+.tabs { display: flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-1); margin-bottom: var(--space-4); }
+.tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); border-radius: var(--radius-sm); }
+.tabs button[aria-selected="true"] { background: var(--surface-3); color: var(--accent); }
+@media (min-width: 1024px) { .tabs { max-width: 420px; } }
+
+/* ── ChatTab ──────────────────────────────────────────────────────────────── */
+.msg { margin-bottom: var(--space-4); max-width: 640px; }
+.msg-meta { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: var(--space-1); }
+.msg-body { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); }
+.msg-body p + p { margin-top: var(--space-2); }
+.msg--user { margin-left: auto; }
+.msg--user .msg-meta { text-align: right; }
+.msg--user .msg-body { background: var(--surface-3); }
+
+.action-card { margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.action-row { display: flex; gap: var(--space-3); padding: var(--space-3); align-items: flex-start; }
+.action-row + .action-row { border-top: 1px solid var(--border); }
+.action-row .ic { color: var(--text-secondary); flex-shrink: 0; margin-top: 2px; }
+.action-row strong { display: block; font-size: var(--text-sm); }
+.action-row p { font-size: var(--text-sm); color: var(--text-secondary); margin-top: 0; }
+
+.composer { position: sticky; bottom: 0; display: flex; gap: var(--space-2); padding: var(--space-3) 0 0; background: var(--surface-1); border-top: 1px solid var(--border); margin-top: var(--space-4); }
+.composer input { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); color: var(--text-primary); font: inherit; font-size: var(--text-sm); }
+.composer input::placeholder { color: var(--text-muted); }
+.composer .send { width: 44px; flex-shrink: 0; border-radius: var(--radius-md); background: var(--accent); color: var(--accent-fg); display: inline-flex; align-items: center; justify-content: center; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ── BoardTab : scroll horizontal mobile (annoté), colonnes fixes ─────────── */
+.board { display: flex; gap: var(--space-3); overflow-x: auto; padding-bottom: var(--space-2); scroll-snap-type: x proximity; }
+.col { flex: 0 0 248px; scroll-snap-align: start; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); }
+.col-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-3); }
+.col-head span:last-child { color: var(--text-muted); font-weight: 400; }
+.task { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); margin-bottom: var(--space-2); }
+.task:last-child { margin-bottom: 0; }
+.task h4 { font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-2); }
+.task-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
+.agent { color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 0 var(--space-2); white-space: nowrap; }
+
+/* ── PreviewTab ───────────────────────────────────────────────────────────── */
+.preview-toolbar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); flex-wrap: wrap; }
+.url { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px; }
+.seg button { padding: var(--space-1) var(--space-3); font-size: var(--text-xs); font-weight: 600; color: var(--text-secondary); border-radius: var(--radius-sm); }
+.seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--accent); }
+
+.phone { width: 240px; margin: 0 auto; border: 1px solid var(--border); border-radius: 24px; background: var(--surface-2); padding: var(--space-2); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
+.phone-screen { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px; min-height: 430px; display: flex; flex-direction: column; overflow: hidden; }
+.app-top { padding: var(--space-3); border-bottom: 1px solid var(--border); font-size: var(--text-xs); font-weight: 700; color: var(--text-secondary); display: flex; justify-content: space-between; }
+.app-body { flex: 1; padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; justify-content: center; }
+.app-body h5 { font-size: var(--text-base); font-weight: 700; text-align: center; margin-bottom: var(--space-1); }
+.app-body .sub { font-size: var(--text-xs); color: var(--text-muted); text-align: center; margin-bottom: var(--space-4); }
+.app-field { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--text-xs); color: var(--text-muted); margin-bottom: var(--space-2); }
+.app-cta { background: var(--accent); color: var(--accent-fg); border-radius: var(--radius-sm); padding: var(--space-2); font-size: var(--text-xs); font-weight: 700; text-align: center; margin-top: var(--space-4); }
+.app-alt { font-size: var(--text-xs); color: var(--text-muted); text-align: center; margin-top: var(--space-3); }
+
+/* ── PreviewError ─────────────────────────────────────────────────────────── */
+.build-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: var(--space-4) var(--space-3); }
+.build-error .ic { color: var(--danger); }
+.build-error h5 { font-size: var(--text-sm); font-weight: 700; margin: var(--space-2) 0 var(--space-1); }
+.build-error p { font-size: var(--text-xs); color: var(--text-secondary); }
+.build-log { width: 100%; font-family: var(--font-mono); font-size: 10px; line-height: 1.6; text-align: left; color: var(--danger); background: rgba(229, 83, 75, 0.08); border: 1px solid rgba(229, 83, 75, 0.3); border-radius: var(--radius-sm); padding: var(--space-2); margin: var(--space-3) 0; overflow-x: auto; white-space: pre; }
+.build-error .btn { width: 100%; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="side-logo">LaToile</div>
+    <nav class="side-nav" aria-label="Navigation principale" data-i18n-aria="nav.aria">
+      <a href="screen-inbox.html">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-5l-2 3h-6l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6l3.5-7z"/></svg>
+        <span data-i18n="nav.inbox">Inbox</span>
+      </a>
+      <a href="screen-projet.html" aria-current="page">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+        <span data-i18n="nav.projets">Projets</span>
+      </a>
+      <a href="screen-new-project.html">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span data-i18n="nav.creer">Créer</span>
+      </a>
+    </nav>
+    <div class="side-foot">
+      <div class="lang-toggle" role="group" aria-label="Langue d'affichage" data-i18n-aria="lang.aria">
+        <button type="button" data-lang="fr" aria-pressed="true">FR</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+      <div class="side-user">
+        <span class="avatar" aria-hidden="true">S</span>
+        <div><div class="who">salim4n</div><div class="what" data-i18n="shell.instance">instance locale</div></div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="body-col">
+    <header class="topbar">
+      <a class="back" href="screen-inbox.html" data-i18n="shell.back">‹ Projets</a>
+      <span class="title">LaToile</span>
+      <span class="crumb"><span data-i18n="shell.crumb1">Projets</span> / LaToile</span>
+      <div class="topbar-right">
+        <span class="conn"><span class="dot" aria-hidden="true"></span><span data-i18n="shell.connecte">connecté</span></span>
+        <div class="lang-toggle" role="group" aria-label="Langue d'affichage" data-i18n-aria="lang.aria">
+          <button type="button" data-lang="fr" aria-pressed="true">FR</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <button class="icon-btn" type="button" aria-label="Réglages du projet" data-i18n-aria="shell.settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <div class="main-inner">
+
+      <!-- ProjectTabs — INTERACTION ANNOTÉE : tap sur un onglet = bascule du contenu.
+           Dans l'app réelle un seul onglet est visible ; ici les contenus sont empilés. -->
+      <div class="tabs" role="tablist" aria-label="Onglets du projet" data-i18n-aria="tabs.aria">
+        <button type="button" role="tab" aria-selected="true">Chat</button>
+        <button type="button" role="tab" aria-selected="false">Board</button>
+        <button type="button" role="tab" aria-selected="false">Preview <span class="badge badge--success"><span class="pulse-dot" aria-hidden="true"></span><span data-i18n="preview.live">live</span></span></button>
+      </div>
+
+      <!-- ═══════════ ONGLET : CHAT ═══════════ -->
+      <section class="state" id="chat" aria-label="Onglet chat">
+        <span class="state-label" data-i18n="state.chat">ONGLET : CHAT</span>
+
+        <div class="msg msg--user">
+          <div class="msg-meta"><span data-i18n="chat.you">Vous</span> · 14:02</div>
+          <div class="msg-body"><p data-i18n="chat.user1">fais la page de connexion</p></div>
+        </div>
+
+        <div class="msg">
+          <div class="msg-meta">Manager · 14:02</div>
+          <div class="msg-body">
+            <p data-i18n="chat.mgr1">Bien reçu. Je crée la tâche et je la confie au Frontend — formulaire email + mot de passe, conforme à la maquette (spec v3). Vous pouvez suivre le run dans l'onglet Preview.</p>
+            <!-- ActionCard : les actions de l'agent sont des cartes structurées dans le fil -->
+            <div class="action-card">
+              <div class="action-row">
+                <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+                <div>
+                  <strong data-i18n="chat.task1">Tâche créée : Page de connexion → Frontend</strong>
+                  <p data-i18n="chat.task1sub">T-104 · colonne « En cours » du board</p>
+                </div>
+              </div>
+              <div class="action-row">
+                <svg class="ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <div>
+                  <strong data-i18n="chat.run1">Run démarré — run #42</strong>
+                  <p><span data-i18n="chat.run1meta">il y a 2 min ·</span> <a href="#preview" data-i18n="chat.run1link">voir la preview live</a></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg">
+          <div class="msg-meta">Manager · 14:03</div>
+          <div class="msg-body">
+            <p data-i18n="chat.mgr2">Quand le Frontend aura terminé, le Reviewer comparera le rendu à la maquette (spec v3). Rien ne sera fusionné sans votre approbation — vous la retrouverez dans l'Inbox.</p>
+          </div>
+        </div>
+
+        <!-- Composer bottom-sticky avec safe-area (dans l'app réelle, au-dessus de la tab bar) -->
+        <form class="composer" action="#" aria-label="Composer un message au Manager" data-i18n-aria="chat.composerAria">
+          <label for="composer-input" class="sr-only" data-i18n="chat.composerLabel">Message au Manager</label>
+          <input id="composer-input" type="text" placeholder="Message au Manager…" data-i18n-ph="chat.placeholder" autocomplete="off">
+          <button class="send" type="submit" aria-label="Envoyer" data-i18n-aria="chat.send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </form>
+      </section>
+
+      <!-- ═══════════ ONGLET : BOARD ═══════════ -->
+      <section class="state" id="board" aria-label="Onglet board">
+        <span class="state-label" data-i18n="state.board">ONGLET : BOARD</span>
+
+        <!-- Scroll horizontal sur mobile (scroll-snap) ; à 1440px les 4 colonnes tiennent côte à côte.
+             Les titres de tâches sont des données : non traduits. -->
+        <div class="board" aria-label="Board des tâches" data-i18n-aria="board.aria">
+          <div class="col">
+            <div class="col-head"><span data-i18n="board.pret">Prêt</span> <span>2</span></div>
+            <article class="task">
+              <h4>Mettre en place le pipeline de revue automatique avec comparaison maquette / rendu</h4>
+              <div class="task-foot"><span class="agent" data-i18n="agent.architecte">Architecte</span><span>T-107</span></div>
+            </article>
+            <article class="task">
+              <h4>Page d'inscription</h4>
+              <div class="task-foot"><span class="agent">Frontend</span><span>T-105</span></div>
+            </article>
+          </div>
+
+          <div class="col">
+            <div class="col-head"><span data-i18n="board.encours">En cours</span> <span>1</span></div>
+            <article class="task">
+              <h4>Page de connexion</h4>
+              <div class="task-foot"><span class="agent">Frontend</span><span>T-104 · run #42</span></div>
+            </article>
+          </div>
+
+          <div class="col">
+            <div class="col-head"><span data-i18n="board.review">Review</span> <span>1</span></div>
+            <article class="task">
+              <h4>Endpoint POST /auth/login</h4>
+              <div class="task-foot"><span class="agent">Reviewer</span><span>T-102 · run #41</span></div>
+            </article>
+          </div>
+
+          <div class="col">
+            <div class="col-head"><span data-i18n="board.termine">Terminé</span> <span>2</span></div>
+            <article class="task">
+              <h4>Initialisation du repo + CI</h4>
+              <div class="task-foot"><span class="agent">Backend</span><span>T-098</span></div>
+            </article>
+            <article class="task">
+              <h4>Maquettes spec v3</h4>
+              <div class="task-foot"><span class="agent" data-i18n="agent.architecte2">Architecte</span><span>T-096</span></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ ONGLET : PREVIEW ═══════════ -->
+      <section class="state" id="preview" aria-label="Onglet preview">
+        <span class="state-label" data-i18n="state.preview">ONGLET : PREVIEW</span>
+
+        <div class="preview-toolbar">
+          <span class="url">https://preview.latoile.local/runs/42</span>
+          <span class="badge badge--success"><span class="pulse-dot" aria-hidden="true"></span><span data-i18n="preview.live2">live</span></span>
+          <!-- INTERACTION ANNOTÉE : toggle Mobile/Desktop = bascule la largeur du cadre de rendu -->
+          <span class="seg" aria-label="Format de rendu" data-i18n-aria="preview.segAria">
+            <button type="button" aria-pressed="true">Mobile</button>
+            <button type="button" aria-pressed="false">Desktop</button>
+          </span>
+        </div>
+
+        <!-- Cadre téléphone : rendu live de l'app en construction (page de connexion, run #42).
+             Le contenu de l'app (MonApp) est une donnée : non traduit. -->
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="app-top"><span>MonApp</span><span>·</span></div>
+            <div class="app-body">
+              <h5>Connexion</h5>
+              <p class="sub">Accédez à votre espace</p>
+              <div class="app-field">Adresse e-mail</div>
+              <div class="app-field">Mot de passe</div>
+              <div class="app-cta">Se connecter</div>
+              <p class="app-alt">Pas encore de compte ? Créer un compte</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ ÉTAT : PREVIEW EN ERREUR ═══════════ -->
+      <section class="state" id="preview-erreur" aria-label="Preview en erreur">
+        <span class="state-label" data-i18n="state.previewErr">ÉTAT : PREVIEW EN ERREUR</span>
+
+        <div class="preview-toolbar">
+          <span class="url">https://preview.latoile.local/runs/42</span>
+          <span class="badge badge--danger" data-i18n="preview.buildFailed">build échoué</span>
+          <span class="seg" aria-label="Format de rendu" data-i18n-aria="preview.segAria2">
+            <button type="button" aria-pressed="true">Mobile</button>
+            <button type="button" aria-pressed="false">Desktop</button>
+          </span>
+        </div>
+
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="build-error">
+              <svg class="ic" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <h5 data-i18n="preview.errTitle">Le build a échoué</h5>
+              <p data-i18n="preview.errBody">Le Frontend a été notifié et prépare une correction.</p>
+              <pre class="build-log">✘ [ERROR] Unexpected token
+  src/components/LoginForm.tsx:27
+  `class=` attendu : `className=`</pre>
+              <button class="btn btn--ghost btn--sm" type="button" data-i18n="preview.errLogs">Voir les logs complets</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      </div>
+    </main>
+  </div>
+
+  <nav class="tabbar" aria-label="Navigation principale" data-i18n-aria="nav.aria2">
+    <a href="screen-inbox.html">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-5l-2 3h-6l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6l3.5-7z"/></svg>
+      <span data-i18n="nav.inbox2">Inbox</span>
+    </a>
+    <a href="screen-projet.html" aria-current="page">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      <span data-i18n="nav.projets2">Projets</span>
+    </a>
+    <a href="screen-new-project.html">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span data-i18n="nav.creer2">Créer</span>
+    </a>
+  </nav>
+</div>
+
+<script>
+// i18n (décision D11) — toggle FR/EN, interaction de preview autorisée.
+// Dictionnaires inline ; persistance localStorage pour garder la langue entre écrans.
+const I18N = {
+  fr: {
+    "meta.title": "LaToile — Projet LaToile",
+    "nav.aria": "Navigation principale",
+    "nav.aria2": "Navigation principale",
+    "nav.inbox": "Inbox",
+    "nav.inbox2": "Inbox",
+    "nav.projets": "Projets",
+    "nav.projets2": "Projets",
+    "nav.creer": "Créer",
+    "nav.creer2": "Créer",
+    "lang.aria": "Langue d'affichage",
+    "shell.back": "‹ Projets",
+    "shell.crumb1": "Projets",
+    "shell.connecte": "connecté",
+    "shell.instance": "instance locale",
+    "shell.settings": "Réglages du projet",
+    "tabs.aria": "Onglets du projet",
+    "state.chat": "ONGLET : CHAT",
+    "state.board": "ONGLET : BOARD",
+    "state.preview": "ONGLET : PREVIEW",
+    "state.previewErr": "ÉTAT : PREVIEW EN ERREUR",
+    "chat.you": "Vous",
+    "chat.user1": "fais la page de connexion",
+    "chat.mgr1": "Bien reçu. Je crée la tâche et je la confie au Frontend — formulaire email + mot de passe, conforme à la maquette (spec v3). Vous pouvez suivre le run dans l'onglet Preview.",
+    "chat.task1": "Tâche créée : Page de connexion → Frontend",
+    "chat.task1sub": "T-104 · colonne « En cours » du board",
+    "chat.run1": "Run démarré — run #42",
+    "chat.run1meta": "il y a 2 min ·",
+    "chat.run1link": "voir la preview live",
+    "chat.mgr2": "Quand le Frontend aura terminé, le Reviewer comparera le rendu à la maquette (spec v3). Rien ne sera fusionné sans votre approbation — vous la retrouverez dans l'Inbox.",
+    "chat.composerAria": "Composer un message au Manager",
+    "chat.composerLabel": "Message au Manager",
+    "chat.placeholder": "Message au Manager…",
+    "chat.send": "Envoyer",
+    "board.aria": "Board des tâches",
+    "board.pret": "Prêt",
+    "board.encours": "En cours",
+    "board.review": "Review",
+    "board.termine": "Terminé",
+    "agent.architecte": "Architecte",
+    "agent.architecte2": "Architecte",
+    "preview.live": "live",
+    "preview.live2": "live",
+    "preview.segAria": "Format de rendu",
+    "preview.segAria2": "Format de rendu",
+    "preview.buildFailed": "build échoué",
+    "preview.errTitle": "Le build a échoué",
+    "preview.errBody": "Le Frontend a été notifié et prépare une correction.",
+    "preview.errLogs": "Voir les logs complets"
+  },
+  en: {
+    "meta.title": "LaToile — LaToile project",
+    "nav.aria": "Main navigation",
+    "nav.aria2": "Main navigation",
+    "nav.inbox": "Inbox",
+    "nav.inbox2": "Inbox",
+    "nav.projets": "Projects",
+    "nav.projets2": "Projects",
+    "nav.creer": "Create",
+    "nav.creer2": "Create",
+    "lang.aria": "Display language",
+    "shell.back": "‹ Projects",
+    "shell.crumb1": "Projects",
+    "shell.connecte": "connected",
+    "shell.instance": "local instance",
+    "shell.settings": "Project settings",
+    "tabs.aria": "Project tabs",
+    "state.chat": "TAB: CHAT",
+    "state.board": "TAB: BOARD",
+    "state.preview": "TAB: PREVIEW",
+    "state.previewErr": "STATE: PREVIEW ERROR",
+    "chat.you": "You",
+    "chat.user1": "build the login page",
+    "chat.mgr1": "Got it. I'm creating the task and handing it to Frontend — email + password form, matching the mockup (spec v3). You can follow the run in the Preview tab.",
+    "chat.task1": "Task created: Login page → Frontend",
+    "chat.task1sub": "T-104 · board column “In progress”",
+    "chat.run1": "Run started — run #42",
+    "chat.run1meta": "2 min ago ·",
+    "chat.run1link": "see the live preview",
+    "chat.mgr2": "Once Frontend is done, the Reviewer will compare the render against the mockup (spec v3). Nothing gets merged without your approval — you'll find it in the Inbox.",
+    "chat.composerAria": "Write a message to the Manager",
+    "chat.composerLabel": "Message to the Manager",
+    "chat.placeholder": "Message the Manager…",
+    "chat.send": "Send",
+    "board.aria": "Task board",
+    "board.pret": "Ready",
+    "board.encours": "In progress",
+    "board.review": "Review",
+    "board.termine": "Done",
+    "agent.architecte": "Architect",
+    "agent.architecte2": "Architect",
+    "preview.live": "live",
+    "preview.live2": "live",
+    "preview.segAria": "Render format",
+    "preview.segAria2": "Render format",
+    "preview.buildFailed": "build failed",
+    "preview.errTitle": "Build failed",
+    "preview.errBody": "Frontend has been notified and is working on a fix.",
+    "preview.errLogs": "View full logs"
+  }
+};
+function applyLang(lang) {
+  const dict = I18N[lang] || I18N.fr;
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const k = el.getAttribute("data-i18n");
+    if (dict[k] !== undefined) el.textContent = dict[k];
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+    const k = el.getAttribute("data-i18n-ph");
+    if (dict[k] !== undefined) el.setAttribute("placeholder", dict[k]);
+  });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const k = el.getAttribute("data-i18n-aria");
+    if (dict[k] !== undefined) el.setAttribute("aria-label", dict[k]);
+  });
+  if (dict["meta.title"]) document.title = dict["meta.title"];
+  document.querySelectorAll(".lang-toggle [data-lang]").forEach((b) => {
+    b.setAttribute("aria-pressed", b.getAttribute("data-lang") === lang ? "true" : "false");
+  });
+  try { localStorage.setItem("latoile-lang", lang); } catch (e) {}
+}
+document.querySelectorAll(".lang-toggle [data-lang]").forEach((b) => {
+  b.addEventListener("click", () => applyLang(b.getAttribute("data-lang")));
+});
+let savedLang = "fr";
+try { savedLang = localStorage.getItem("latoile-lang") || "fr"; } catch (e) {}
+applyLang(savedLang);
+</script>
+</body>
+</html>

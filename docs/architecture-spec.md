@@ -24,6 +24,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D8 | Design artifacts live in the project repo (`design/`); the DB stores metadata only | Everything in the database — hides artifacts from git and agents |
 | D9 | Token auth everywhere, preview included | Open preview |
 | D10 | Preview auto-reloads when a frontend run finishes | Manual reload |
+| D11 | UI internationalized from day one: French + English, message catalogs, no hardcoded strings; the Manager answers in the user's language | FR-only now, retrofit later — retrofitting i18n costs 10× more |
 
 ## 3. Domain model
 
