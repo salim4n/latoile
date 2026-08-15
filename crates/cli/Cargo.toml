@@ -1,0 +1,11 @@
+[package]
+name = "latoile-cli"
+description = "The `latoile` binary: serve, migrate at startup."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "latoile"
+path = "main.rs"

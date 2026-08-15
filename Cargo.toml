@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+default-members = ["crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+repository = "https://github.com/salim4n/latoile"
+
+# Dependencies are added to a crate only when that crate uses them.
+# Boundary rules live in ARCHITECTURE_CONTRACT.md and are checked by
+# docs/guardian-checklist.md — core never gains an I/O dependency.
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
