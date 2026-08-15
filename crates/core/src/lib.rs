@@ -10,13 +10,27 @@
 //! one active run per task, one approved spec per project, `done` requires a
 //! granted review approval, the Manager never executes.
 
+pub mod approval;
+pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod preview;
+pub mod project;
+pub mod run;
+pub mod spec;
+pub mod task;
 
+pub use approval::{Approval, ApprovalKind, ApprovalStatus};
+pub use conversation::{Author, Conversation, Message};
 pub use error::{DomainError, TransitionError};
 pub use event::{EventKind, NewEvent};
 pub use ids::{
     ApprovalId, ConversationId, MessageId, PreviewId, ProjectId, RoleId, RunId, SpecVersionId,
     TaskId,
 };
+pub use preview::{Preview, PreviewStatus};
+pub use project::{Project, ProjectStatus};
+pub use run::{Run, RunStatus, TriggeredBy};
+pub use spec::{SpecStatus, SpecVersion};
+pub use task::{Task, TaskStatus};
