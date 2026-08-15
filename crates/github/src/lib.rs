@@ -3,3 +3,9 @@
 //! never from configuration files or the environment at call sites.
 //!
 //! Implements ports defined in `latoile-core`.
+
+mod client;
+mod error;
+
+pub use client::{GitHub, GitHubConfig, DEFAULT_TOKEN_NAME};
+pub use error::GitHubError;
