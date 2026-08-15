@@ -72,6 +72,43 @@ impl SpecStore for Store {
     }
 }
 
+/// Reads the port does not cover: the spec list and detail routes need them.
+/// They live here so SQL stays in the store (guardian #3); if the port grows
+/// a `get`/`list`, these become the impl.
+impl Store {
+    /// All versions of a project's spec, newest first.
+    pub async fn specs_for_project(
+        &self,
+        project: &latoile_core::ids::ProjectId,
+    ) -> PortResult<Vec<SpecVersion>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM spec_version WHERE project_id = ? \
+             ORDER BY version DESC"
+        ))
+        .bind(project.as_str())
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(row_to_spec)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// One version by id — the approve route fetches before it decides.
+    pub async fn spec_by_id(
+        &self,
+        id: &latoile_core::ids::SpecVersionId,
+    ) -> PortResult<Option<SpecVersion>> {
+        let row = sqlx::query(&format!("SELECT {COLUMNS} FROM spec_version WHERE id = ?"))
+            .bind(id.as_str())
+            .fetch_optional(self.pool())
+            .await
+            .map_err(StoreError::from)?;
+        row.map(|r| row_to_spec(&r)).transpose().map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

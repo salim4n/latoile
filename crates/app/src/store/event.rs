@@ -74,6 +74,36 @@ impl EventLog for Store {
     }
 }
 
+impl Store {
+    /// All projects' events after `after_seq`, oldest first. The SSE channel
+    /// is global (spec §5.3, D10); the port's `since` is per-project, so the
+    /// global tail is an inherent read here.
+    pub async fn events_since(&self, after_seq: u64) -> PortResult<Vec<(u64, NewEvent)>> {
+        let rows = sqlx::query(
+            "SELECT seq, project_id, kind, payload FROM event
+             WHERE seq > ? ORDER BY seq ASC",
+        )
+        .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    u64::try_from(r.try_get::<i64, _>("seq")?)
+                        .map_err(|_| StoreError::CorruptRow("negative seq".into()))?,
+                    NewEvent {
+                        project_id: ProjectId::new(r.try_get::<String, _>("project_id")?)?,
+                        kind: parse_kind(&r.try_get::<String, _>("kind")?)?,
+                        payload: r.try_get("payload")?,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
+            .map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

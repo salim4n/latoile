@@ -16,9 +16,12 @@ mod conversation;
 mod event;
 mod preview;
 mod project;
+mod role;
 mod run;
 mod spec;
 mod task;
+
+pub use role::RoleRow;
 
 use latoile_core::error::DomainError;
 use latoile_core::ports::PortError;

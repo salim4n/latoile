@@ -6,15 +6,23 @@
 //! RPITIT) makes the traits non-dyn-compatible, so constructor injection uses
 //! type parameters instead of `Arc<dyn …>`.
 
+mod approve_spec;
+mod create_project;
 mod dispatch_task;
 mod ensure_preview;
 mod grant_approval;
+mod reject_approval;
 mod send_message;
+mod stop_preview;
 
+pub use approve_spec::ApproveSpec;
+pub use create_project::{CreateProject, CreateProjectInput};
 pub use dispatch_task::{DispatchTask, DispatchTaskInput, DispatchedTask};
 pub use ensure_preview::{EnsurePreview, EnsuredPreview};
 pub use grant_approval::{GrantApproval, GrantedApproval};
+pub use reject_approval::RejectApproval;
 pub use send_message::{PostedMessage, SendMessage, SendMessageInput};
+pub use stop_preview::StopPreview;
 
 use latoile_core::error::DomainError;
 use latoile_core::ports::PortError;
