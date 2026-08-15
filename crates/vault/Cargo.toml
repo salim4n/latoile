@@ -5,3 +5,25 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[dependencies]
+latoile-core = { path = "../core" }
+# XChaCha20-Poly1305: 24-byte random nonces, constant-time in software.
+chacha20poly1305 = "0.10"
+# Key material is zeroed on drop.
+zeroize = "1"
+# The root key's written-down form, and the stored form of both blobs (the
+# secret table's columns are TEXT).
+base64 = "0.22"
+# Same SQLite setup as latoile-app.
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite",
+  "migrate",
+  "macros",
+] }
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+tempfile = "3"
