@@ -4,7 +4,8 @@
 
 /// Declare an id newtype: non-empty string wrapper with Display.
 macro_rules! id_newtype {
-    ($name:ident) => {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         pub struct $name(String);
 
@@ -39,10 +40,12 @@ id_newtype!(PreviewId);
 id_newtype!(ConversationId);
 id_newtype!(MessageId);
 
-/// A role identifier (`manager`, `architect`, `backend`, `frontend`,
-/// `reviewer`, …). Roles live in the database so new ones can be added
-/// without recompiling; the domain treats the id as opaque but non-empty.
-id_newtype!(RoleId);
+id_newtype!(
+    /// A role identifier (`manager`, `architect`, `backend`, `frontend`,
+    /// `reviewer`, …). Roles live in the database so new ones can be added
+    /// without recompiling; the domain treats the id as opaque but non-empty.
+    RoleId
+);
 
 #[cfg(test)]
 mod tests {

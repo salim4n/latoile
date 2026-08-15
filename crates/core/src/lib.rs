@@ -15,6 +15,8 @@ pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod ids;
+#[allow(async_fn_in_trait)] // see ports.rs module docs for the rationale
+pub mod ports;
 pub mod preview;
 pub mod project;
 pub mod run;
