@@ -5,3 +5,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[dependencies]
+latoile-core = { path = "../core" }
+tokio = { version = "1", features = ["process", "net", "time", "sync", "io-util", "rt"] }
+thiserror = "2"
+# Process-group kill on unix — dev servers spawn children (npm → node), and
+# killing only the direct child would orphan them (contract §3).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -1169,6 +1169,12 @@ version = "0.1.0"
 [[package]]
 name = "latoile-preview"
 version = "0.1.0"
+dependencies = [
+ "latoile-core",
+ "libc",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "latoile-server"
@@ -2327,6 +2333,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
