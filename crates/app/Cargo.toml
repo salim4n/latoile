@@ -5,3 +5,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[dependencies]
+latoile-core = { path = "../core" }
+# Same setup as Firetower's worker store, minus what SQLite-only never uses
+# (postgres, tls, chrono, uuid, json).
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite",
+  "migrate",
+  "macros",
+] }
+thiserror = "2"
+# Ids are minted by the application layer (core/ids.rs); ulid is the spec's
+# id format (architecture-spec.md §4).
+ulid = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
