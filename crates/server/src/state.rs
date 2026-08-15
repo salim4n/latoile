@@ -1,0 +1,190 @@
+//! App state and assembly. `build` wires the concrete adapters — the only
+//! place outside the CLI that knows all of them at once. Handlers see
+//! [`AppState`]: the store, the agent channel, the preview supervisor, the
+//! GitHub client, the token.
+//!
+//! **Token choice (D9).** `ServerConfig.token` wins; else `LATOILE_TOKEN`
+//! from the environment; else one is generated and returned by [`build`] so
+//! the CLI can print it once at startup. There is no user database to look
+//! anything up in — a single random bearer token is the whole mechanism.
+//!
+//! **Why the slots are enums.** The core ports are RPITIT traits — not
+//! object-safe, and a router generic over them could not promise `Send`
+//! handler futures. An enum over the concrete adapter plus a test stub
+//! keeps the router concrete, `Send`-checked, and fakeable without touching
+//! the app's type safety.
+
+use latoile_agents::{AcpChannel, AgentCommand, AgentTimeouts, ChannelConfig, ProcessConnector, RootDirs};
+use latoile_app::store::Store;
+use latoile_core::ids::{ProjectId, RunId};
+use latoile_core::ports::{
+    AgentChannel, GitHubClient, ManagerReply, PortResult, RepoInfo,
+};
+use latoile_core::Run;
+use latoile_github::{GitHub, GitHubConfig};
+use latoile_preview::Supervisor;
+use latoile_vault::Vault;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub const TOKEN_ENV: &str = "LATOILE_TOKEN";
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    /// Explicit token; falls back to `LATOILE_TOKEN`, then to a generated
+    /// one printed at startup.
+    pub token: Option<String>,
+    /// Agent sessions run with this as their root directory.
+    pub workspace: PathBuf,
+    /// Role skill preambles (`<dir>/<skill>/SKILL.md`).
+    pub skills_dir: PathBuf,
+    /// Where the vault's `master.key` lives (created 0600 on first run).
+    pub config_home: PathBuf,
+    /// GitHub API base — `None` means https://api.github.com.
+    pub github_api_base: Option<String>,
+}
+
+/// What failed while wiring the server.
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    #[error("store: {0}")]
+    Store(#[from] latoile_app::store::StoreError),
+    #[error("vault: {0}")]
+    Vault(#[from] latoile_vault::VaultError),
+}
+
+/// The agent channel, concrete. `Stub` exists only in tests.
+#[derive(Clone)]
+pub enum AgentSlot {
+    Real(Arc<AcpChannel<ProcessConnector, RootDirs>>),
+    #[cfg(test)]
+    Stub(crate::tests::StubAgents),
+}
+
+impl AgentChannel for AgentSlot {
+    async fn tell_manager(&self, project: &ProjectId, message: &str) -> PortResult<ManagerReply> {
+        match self {
+            Self::Real(channel) => channel.tell_manager(project, message).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.tell_manager(project, message).await,
+        }
+    }
+    async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String> {
+        match self {
+            Self::Real(channel) => channel.start_run(run, prompt).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.start_run(run, prompt).await,
+        }
+    }
+    async fn cancel_run(&self, run: &RunId) -> PortResult<()> {
+        match self {
+            Self::Real(channel) => channel.cancel_run(run).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.cancel_run(run).await,
+        }
+    }
+}
+
+/// The GitHub client, concrete. `Stub` exists only in tests.
+#[derive(Clone)]
+pub enum GitHubSlot {
+    Real(GitHub<Vault>),
+    #[cfg(test)]
+    Stub(Vec<RepoInfo>),
+}
+
+impl GitHubClient for GitHubSlot {
+    async fn list_repos(&self) -> PortResult<Vec<RepoInfo>> {
+        match self {
+            Self::Real(github) => github.list_repos().await,
+            #[cfg(test)]
+            Self::Stub(repos) => Ok(repos.clone()),
+        }
+    }
+    async fn open_pull_request(&self, repo: &str, head: &str, base: &str) -> PortResult<String> {
+        match self {
+            Self::Real(github) => github.open_pull_request(repo, head, base).await,
+            #[cfg(test)]
+            Self::Stub(_) => Ok("https://github.com/stub/pr/1".into()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Store,
+    pub agents: AgentSlot,
+    pub github: GitHubSlot,
+    pub previews: Supervisor,
+    /// For the preview reverse proxy — separate from the GitHub client so a
+    /// proxy failure never touches API state.
+    pub proxy_http: reqwest::Client,
+    pub(crate) token: Arc<str>,
+}
+
+impl AppState {
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+/// Resolve the token: config, then environment, then generate.
+fn resolve_token(config: &ServerConfig) -> (String, &'static str) {
+    if let Some(token) = &config.token {
+        return (token.clone(), "config");
+    }
+    if let Ok(token) = std::env::var(TOKEN_ENV) {
+        if !token.trim().is_empty() {
+            return (token, TOKEN_ENV);
+        }
+    }
+    (ulid::Ulid::new().to_string(), "generated")
+}
+
+/// Wire every adapter and return the router plus the token in effect — the
+/// CLI prints the token when it was generated.
+pub async fn build(
+    config: &ServerConfig,
+    db_path: &Path,
+) -> Result<(axum::Router, String, &'static str), BuildError> {
+    let store = Store::open(db_path).await?;
+    let (token, token_source) = resolve_token(config);
+
+    let (root_key, _source) = latoile_vault::load_root_key(&config.config_home)?;
+    let vault = Vault::open(db_path, root_key).await?;
+    let github = GitHub::new(
+        GitHubConfig {
+            api_base: config
+                .github_api_base
+                .clone()
+                .unwrap_or_else(|| GitHubConfig::default().api_base),
+            ..GitHubConfig::default()
+        },
+        vault,
+        GitHub::<Vault>::default_http(),
+    );
+
+    let timeouts = AgentTimeouts::default();
+    let agents = AcpChannel::new(
+        ChannelConfig {
+            skills_dir: config.skills_dir.clone(),
+            commands: std::collections::HashMap::new(),
+            default_command: AgentCommand::new("claude-agent-acp"),
+            timeouts,
+        },
+        ProcessConnector {
+            handshake: timeouts.handshake,
+        },
+        RootDirs(config.workspace.clone()),
+    );
+
+    let state = AppState {
+        store,
+        agents: AgentSlot::Real(Arc::new(agents)),
+        github: GitHubSlot::Real(github),
+        previews: Supervisor::default(),
+        proxy_http: reqwest::Client::new(),
+        token: Arc::from(token.as_str()),
+    };
+    Ok((crate::routes::router(state), token, token_source))
+}

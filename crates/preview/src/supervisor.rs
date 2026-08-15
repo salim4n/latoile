@@ -44,16 +44,28 @@ struct Entry {
 
 pub struct Supervisor {
     config: SupervisorConfig,
-    servers: Mutex<HashMap<String, Entry>>,
-    allocator: Mutex<PortAllocator>,
+    servers: std::sync::Arc<Mutex<HashMap<String, Entry>>>,
+    allocator: std::sync::Arc<Mutex<PortAllocator>>,
+}
+
+impl Clone for Supervisor {
+    /// Shared ownership of one registry: the server hands clones to handlers
+    /// and they must all supervise the SAME dev servers.
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config,
+            servers: self.servers.clone(),
+            allocator: self.allocator.clone(),
+        }
+    }
 }
 
 impl Supervisor {
     pub fn new(config: SupervisorConfig) -> Self {
         Self {
             config,
-            servers: Mutex::new(HashMap::new()),
-            allocator: Mutex::new(PortAllocator::default()),
+            servers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            allocator: std::sync::Arc::new(Mutex::new(PortAllocator::default())),
         }
     }
 

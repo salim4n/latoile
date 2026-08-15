@@ -33,6 +33,7 @@ impl Default for GitHubConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct GitHub<S> {
     config: GitHubConfig,
     secrets: S,

@@ -5,3 +5,32 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[dependencies]
+latoile-core = { path = "../core" }
+latoile-app = { path = "../app" }
+latoile-agents = { path = "../agents" }
+latoile-preview = { path = "../preview" }
+latoile-github = { path = "../github" }
+latoile-vault = { path = "../vault" }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# Message ids are minted here, same as app mints entity ids.
+ulid = "1"
+# The preview reverse proxy only. rustls + stream: bodies pass through,
+# nothing is buffered.
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "stream",
+] }
+# Contract §5: internal error details go to tracing, never to the client.
+tracing = "0.1"
+# The Stream trait the SSE response requires; axum does not re-export it.
+futures-core = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
