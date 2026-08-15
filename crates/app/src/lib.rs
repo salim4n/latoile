@@ -5,3 +5,6 @@
 //! Orchestrates through the ports defined in `latoile-core`; knows neither
 //! axum nor the outside world. The persistence module (`store/`) is the only
 //! place SQL lives outside the vault.
+
+pub mod store;
+pub mod use_cases;
