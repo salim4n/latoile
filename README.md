@@ -42,6 +42,19 @@ You ──chat──► Manager ──► Architect ──► Spec v1 (design/ i
 
 The full design — decisions D1–D10, the ER model, the API contract, the risk register — is in [`docs/architecture-spec.md`](docs/architecture-spec.md).
 
+## Running
+
+Requirements: Rust (see `rust-toolchain.toml`), Node 22+ with pnpm, and the agent ACP adapters on PATH (`claude-agent-acp` and/or `codex-acp`).
+
+```sh
+cd web && pnpm install && pnpm build   # build the embedded web UI (repeat per change)
+cargo run -p latoile-cli -- serve      # or a release binary: cargo build --release -p latoile-cli
+```
+
+`serve` prints the local URL and the bearer token — paste it into the UI (set `LATOILE_TOKEN` to choose your own; `latoile token` prints it back). State lives in `~/.local/share/latoile` (`--home` overrides): the SQLite database and the vault's `master.key`.
+
+The web UI is embedded via rust-embed: **release builds bake `web/dist` into the binary; debug builds read it live from disk**, so `pnpm build` + refresh suffices while developing — or `pnpm dev` for the Vite server, which proxies `/api` to port 7700. A placeholder `index.html` committed in `web/dist` keeps a fresh clone compiling before the first web build. Web checks: `pnpm lint`, `pnpm test` (vitest), `pnpm build` (typecheck + bundle).
+
 ## Documentation
 
 - [`docs/architecture-spec.md`](docs/architecture-spec.md) — complete architecture specification
@@ -51,16 +64,18 @@ The full design — decisions D1–D10, the ER model, the API contract, the risk
 
 ## Status
 
-**Design phase.** This repository currently contains the architecture package only — no code yet. The spec was produced by a structured architecture brainstorm informed by audits of two real codebases (a tmux/PTY-based agent control plane, and an ACP-based agent desktop runtime). Every rule in the architecture contract is a lesson from those audits turned into a starting invariant.
+**Working prototype.** The full backend stack exists — domain core, SQLite store, ACP agent channel, encrypted vault, GitHub client, preview supervisor, HTTP/SSE server, CLI — and the web UI (React + Vite + Tailwind) implements the design mockups' screens. The spec was produced by a structured architecture brainstorm informed by audits of two real codebases (a tmux/PTY-based agent control plane, and an ACP-based agent desktop runtime). Every rule in the architecture contract is a lesson from those audits turned into a starting invariant.
 
 ### Roadmap
 
+- [x] Cargo workspace skeleton with a pure `core` from commit one
+- [x] Agent channel over ACP with permission policy
+- [x] Project + Manager chat + task board
+- [x] Supervised live preview with auto-reload
+- [x] Review screen skeleton: verdict + approve/request-changes
 - [ ] Role skills: manager, backend, frontend, reviewer playbooks
-- [ ] Cargo workspace skeleton with a pure `core` from commit one
-- [ ] Agent channel over ACP with permission queue
-- [ ] Project + Manager chat + task board
-- [ ] Supervised live preview with auto-reload
-- [ ] Review screen: diff + verdict + mockup side-by-side
+- [ ] Orchestrator pass: execute Manager actions, run/review loop, approval side-effects
+- [ ] Review screen: diff + verdict + mockup side-by-side (needs reviewer output)
 
 ## Contributing
 
