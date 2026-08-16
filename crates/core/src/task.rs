@@ -102,6 +102,36 @@ impl Task {
         self.go(TaskStatus::Review)
     }
 
+    /// The reviewer run starts on this task. Only from `review`, and only
+    /// for the reviewer role — an executor run can never start here: the
+    /// task leaves review through the human's decision, not through more
+    /// work. The task itself does not move; the review's lifecycle is the
+    /// `Run`'s (one active run per task, the executor's is finished by then).
+    pub fn start_review(&self, role: &RoleId) -> Result<(), DomainError> {
+        if self.status != TaskStatus::Review {
+            return Err(DomainError::Invariant(
+                "a review run starts only on a task in review",
+            ));
+        }
+        if role.as_str() != "reviewer" {
+            return Err(DomainError::Invariant(
+                "only the reviewer runs on a task in review",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The run died (error or cancelled): the task goes back to the board,
+    /// ready to be re-dispatched. Deliberately not folded into `go`'s table —
+    /// `requeue` from in_progress must stay refused.
+    pub fn fail_run(&mut self) -> Result<(), DomainError> {
+        if self.status != TaskStatus::InProgress {
+            return Err(TransitionError::new("task", self.status.as_str(), "ready").into());
+        }
+        self.status = TaskStatus::Ready;
+        Ok(())
+    }
+
     pub fn request_changes(&mut self) -> Result<(), DomainError> {
         self.go(TaskStatus::ChangesRequested)
     }
@@ -233,5 +263,72 @@ mod tests {
         t.start().unwrap();
         assert!(t.requeue().is_err()); // InProgress → Ready
         assert!(t.request_changes().is_err()); // InProgress → ChangesRequested
+    }
+
+    #[test]
+    fn a_dead_run_sends_the_task_back_to_ready() {
+        let mut t = task();
+        t.bind_spec(spec());
+        t.start().unwrap();
+        t.fail_run().unwrap();
+        assert_eq!(t.status, TaskStatus::Ready);
+        // The spec binding survives: the task can start again immediately.
+        t.start().unwrap();
+        assert_eq!(t.status, TaskStatus::InProgress);
+    }
+
+    #[test]
+    fn fail_run_is_refused_from_everything_but_in_progress() {
+        // Ready: nothing ever started.
+        assert!(task().fail_run().is_err());
+
+        // Review: the reviewer is on it — a dead executor run must not
+        // bounce a task out of review.
+        let mut in_review = task();
+        in_review.bind_spec(spec());
+        in_review.start().unwrap();
+        in_review.submit_for_review().unwrap();
+        assert!(in_review.fail_run().is_err());
+
+        // ChangesRequested: requeue is the door, not fail_run.
+        let mut changes = task();
+        changes.bind_spec(spec());
+        changes.start().unwrap();
+        changes.submit_for_review().unwrap();
+        changes.request_changes().unwrap();
+        assert!(changes.fail_run().is_err());
+
+        // Done: terminal.
+        let mut done = task();
+        done.bind_spec(spec());
+        done.start().unwrap();
+        done.submit_for_review().unwrap();
+        done.approve(&granted_review()).unwrap();
+        assert!(done.fail_run().is_err());
+    }
+
+    #[test]
+    fn the_reviewer_starts_only_on_a_task_in_review() {
+        let reviewer = RoleId::new("reviewer").unwrap();
+        let mut t = task();
+        t.bind_spec(spec());
+        t.start().unwrap();
+        // Not yet: the task is still being built.
+        assert!(t.start_review(&reviewer).is_err());
+        t.submit_for_review().unwrap();
+        t.start_review(&reviewer).unwrap();
+    }
+
+    #[test]
+    fn no_executor_run_from_review() {
+        let mut t = task();
+        t.bind_spec(spec());
+        t.start().unwrap();
+        t.submit_for_review().unwrap();
+        // start() itself stays refused from review…
+        assert!(t.start().is_err());
+        // …and start_review refuses any other role.
+        assert!(t.start_review(&RoleId::new("frontend").unwrap()).is_err());
+        assert!(t.start_review(&RoleId::new("backend").unwrap()).is_err());
     }
 }
