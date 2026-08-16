@@ -125,10 +125,14 @@ async fn a_server_that_never_listens_is_killed_at_the_budget() {
     let err = sup.ensure(&p, "sleep 30").await.unwrap_err();
     assert!(err.to_string().contains("not ready"), "{err}");
 
-    // The port was handed back: a working command starts right away.
-    let (_, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    // The port was handed back. A fresh supervisor with a normal budget:
+    // the wedged one's 500 ms is for the failure path only — a cold python
+    // under parallel test load needs the real one.
+    let sup2 = Supervisor::new(config_at(24600));
+    let (_, port) = sup2.ensure(&p, SERVER_CMD).await.unwrap();
+    assert_eq!(port, 24600, "the timed-out server's port was not freed");
     assert!(listening(port).await);
-    sup.stop(&p).await.unwrap();
+    sup2.stop(&p).await.unwrap();
 }
 
 #[tokio::test]

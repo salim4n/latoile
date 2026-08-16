@@ -7,6 +7,7 @@
 //!   bearer token (D9); `/api/health` is the only open route.
 //! - Errors are `{code, message}` everywhere; internals go to `tracing`.
 
+mod assets;
 mod auth;
 mod error;
 mod routes;

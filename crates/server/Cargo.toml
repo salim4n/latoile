@@ -30,6 +30,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 tracing = "0.1"
 # The Stream trait the SSE response requires; axum does not re-export it.
 futures-core = "0.3"
+# The web UI embedded into the binary; debug builds read web/dist live.
+rust-embed = { version = "8", features = ["debug-embed"] }
+mime_guess = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

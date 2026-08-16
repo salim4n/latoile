@@ -53,6 +53,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .merge(protected)
+        // The web UI: embedded assets with SPA fallback (see assets.rs).
+        .fallback(crate::assets::static_or_spa)
         .with_state(state)
 }
 

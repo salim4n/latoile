@@ -293,3 +293,43 @@ async fn the_roles_route_lists_the_seeded_team() {
     assert_eq!(roles.as_array().unwrap().len(), 5);
     assert!(roles.as_array().unwrap().iter().any(|r| r["id"] == "manager"));
 }
+
+/// The documented D9 exception: `?token=` works for preview paths only.
+#[tokio::test]
+async fn the_query_token_only_opens_preview_paths() {
+    let (state, _, _) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    // Preview path with the query token: authenticated (404 — no preview
+    // running — but NOT 401).
+    let preview = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/api/projects/{project}/preview/?token={TOKEN}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::NOT_FOUND);
+
+    // The data API refuses the query token: headers only.
+    let data = app
+        .clone()
+        .oneshot(request("GET", &format!("/api/projects?token={TOKEN}"), None))
+        .await
+        .unwrap();
+    assert_eq!(data.status(), StatusCode::UNAUTHORIZED);
+
+    // And a wrong query token on a preview path is still a 401.
+    let wrong = app
+        .oneshot(request(
+            "GET",
+            &format!("/api/projects/{project}/preview/?token=nope"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+}
