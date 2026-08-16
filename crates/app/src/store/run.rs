@@ -107,6 +107,23 @@ impl RunStore for Store {
     }
 }
 
+impl Store {
+    /// Every run still holding a task's slot — the supervision loop's poll
+    /// set. Not a port method: nothing outside the driver needs it.
+    pub async fn active_runs(&self) -> PortResult<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM run WHERE status IN ('starting', 'running', 'blocked')"
+        ))
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(row_to_run)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

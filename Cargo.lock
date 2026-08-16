@@ -1488,6 +1488,7 @@ name = "latoile-app"
 version = "0.1.0"
 dependencies = [
  "latoile-core",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",
@@ -1500,6 +1501,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "latoile-server",
+ "rust-embed",
  "tokio",
 ]
 

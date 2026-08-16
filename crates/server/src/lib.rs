@@ -9,6 +9,7 @@
 
 mod assets;
 mod auth;
+pub mod driver;
 mod error;
 mod routes;
 mod state;

@@ -19,9 +19,24 @@ pub const TOKEN: &str = "test-token";
 
 /// The scripted agent channel: the Manager answers with a canned reply,
 /// runs get a canned session handle. Records what it was told.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct StubAgents {
     pub manager_messages: Arc<Mutex<Vec<String>>>,
+    /// The Manager's next answer — scriptable per test.
+    pub manager_reply: Arc<Mutex<String>>,
+    /// Scripted supervision answers, keyed by run id.
+    pub run_states:
+        Arc<Mutex<std::collections::HashMap<String, latoile_agents::RunState>>>,
+}
+
+impl Default for StubAgents {
+    fn default() -> Self {
+        Self {
+            manager_messages: Arc::new(Mutex::new(Vec::new())),
+            manager_reply: Arc::new(Mutex::new("Bien reçu, je m'en occupe.".into())),
+            run_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
 }
 
 impl AgentChannel for StubAgents {
@@ -31,11 +46,17 @@ impl AgentChannel for StubAgents {
             .unwrap()
             .push(message.to_string());
         Ok(ManagerReply {
-            content: "Bien reçu, je m'en occupe.".into(),
+            content: self.manager_reply.lock().unwrap().clone(),
             actions: None,
         })
     }
-    async fn start_run(&self, _r: &Run, _p: &str) -> PortResult<String> {
+    async fn start_run(&self, r: &Run, _p: &str) -> PortResult<String> {
+        // Registered as running so the supervision driver can be scripted:
+        // tests flip the entry to Done/Failed when the "agent" is done.
+        self.run_states.lock().unwrap().insert(
+            r.id.as_str().to_string(),
+            latoile_agents::RunState::Running,
+        );
         Ok("acp-stub".into())
     }
     async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
@@ -55,6 +76,9 @@ pub async fn state() -> (AppState, Store, StubAgents) {
         }]),
         previews: Supervisor::new(SupervisorConfig {
             base_port: 26100,
+            // The driver Ensures a preview after a finished run; in tests
+            // the dev command never listens, so keep the failure cheap.
+            readiness: std::time::Duration::from_millis(200),
             ..SupervisorConfig::default()
         }),
         proxy_http: reqwest::Client::new(),
@@ -114,5 +138,6 @@ pub async fn body_json(response: axum::response::Response) -> serde_json::Value 
         .to_bytes();
     serde_json::from_slice(&bytes).unwrap()
 }
+mod driver;
 mod flows;
 mod http;

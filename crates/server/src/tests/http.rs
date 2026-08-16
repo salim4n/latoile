@@ -179,3 +179,53 @@ async fn dispatch_with_an_approved_spec_starts_a_run() {
     let kinds: Vec<_> = events.iter().map(|(_, e)| e.kind).collect();
     assert_eq!(kinds, [EventKind::TaskReady, EventKind::RunStarted]);
 }
+
+/// The orchestration loop end to end: a Manager reply carrying an actions
+/// block dispatches a task and starts its run through the HTTP route.
+#[tokio::test]
+async fn a_manager_reply_with_actions_drives_the_board() {
+    let (state, store, agents) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let mut spec = latoile_core::SpecVersion::new(
+        latoile_core::ids::SpecVersionId::new("s1").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        1,
+        "design/",
+        None,
+    )
+    .unwrap();
+    spec.approve().unwrap();
+    SpecStore::save(&store, &spec).await.unwrap();
+
+    *agents.manager_reply.lock().unwrap() = "Je lance le Frontend.\n\n```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Page de connexion\", \"role_id\": \"frontend\", \"prompt\": \"Build it per design/\"}]\n```".into();
+
+    let sent = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({"content": "construis la page de connexion"})),
+        )))
+        .await
+        .unwrap();
+    let body = body_json(sent).await;
+    // The prose only — the block is stripped; the cards carry the action.
+    assert_eq!(body["reply"]["content"], "Je lance le Frontend.");
+    let cards: serde_json::Value =
+        serde_json::from_str(body["reply"]["actions"].as_str().unwrap()).unwrap();
+    assert_eq!(cards[0]["title"], "Run started — Page de connexion");
+
+    let tasks = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/tasks"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let tasks = body_json(tasks).await;
+    assert_eq!(tasks.as_array().unwrap().len(), 1);
+    assert_eq!(tasks[0]["status"], "in_progress");
+}

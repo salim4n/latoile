@@ -6,6 +6,7 @@
 //! everything else needs the bearer token printed at startup (D9).
 
 use clap::{Parser, Subcommand};
+use std::path::Path;
 use latoile_server::{ServerConfig, TOKEN_ENV};
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -77,6 +78,29 @@ impl Default for ServeArgs {
     }
 }
 
+/// The vendored role skills (repo `skills/`), embedded in release builds.
+#[derive(rust_embed::Embed)]
+#[folder = "../../skills"]
+struct Skills;
+
+/// Seed `<home>/skills` from the embedded copy. Existing files are never
+/// overwritten — the user's edits win over upgrades.
+fn ensure_skills(home: &Path) -> std::io::Result<()> {
+    let root = home.join("skills");
+    for path in Skills::iter() {
+        let target = root.join(path.as_ref());
+        if target.exists() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = Skills::get(&path).expect("iterated paths exist");
+        std::fs::write(&target, &file.data)?;
+    }
+    Ok(())
+}
+
 /// `~/.local/share/latoile`, or `$XDG_DATA_HOME/latoile` when set.
 fn default_home() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
@@ -128,11 +152,13 @@ async fn serve(home: PathBuf, args: ServeArgs) -> Result<(), Box<dyn std::error:
 
     // The database file's parent must exist before sqlx creates the file.
     std::fs::create_dir_all(&home)?;
+    // Role skills: the vendored defaults, unless the user edited them.
+    ensure_skills(&home)?;
     if let Some(parent) = db.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let (router, token, token_source) = latoile_server::build(&config, &db).await?;
+    let (router, token, token_source, driver) = latoile_server::build(&config, &db).await?;
 
     let listener = tokio::net::TcpListener::bind((args.bind, args.port)).await?;
     let addr = listener.local_addr()?;
@@ -146,6 +172,7 @@ async fn serve(home: PathBuf, args: ServeArgs) -> Result<(), Box<dyn std::error:
     }
 
     latoile_server::serve(listener, router, shutdown()).await?;
+    driver.abort();
     eprintln!("latoile: stopped");
     Ok(())
 }
@@ -230,7 +257,8 @@ mod tests {
             config_home: home.clone(),
             github_api_base: None,
         };
-        let (router, token, source) = latoile_server::build(&config, &db).await.unwrap();
+        let (router, token, source, driver) = latoile_server::build(&config, &db).await.unwrap();
+        driver.abort(); // the smoke test never supervises anything
         assert_eq!(token, "smoke");
         assert_eq!(source, "config");
 
@@ -253,6 +281,25 @@ mod tests {
         assert!(text.contains("\"status\":\"ok\""), "{text}");
 
         server.abort();
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn the_vendored_skills_are_seeded_without_overwriting() {
+        let home = std::env::temp_dir().join(format!("latoile-skills-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+
+        ensure_skills(&home).unwrap();
+        let manager = home.join("skills/project-manager/SKILL.md");
+        assert!(manager.exists(), "the manager skill was seeded");
+        let seeded = std::fs::read_to_string(&manager).unwrap();
+        assert!(seeded.contains("latoile-actions"), "wire format documented");
+
+        // A user edit survives a re-seed.
+        std::fs::write(&manager, "mine").unwrap();
+        ensure_skills(&home).unwrap();
+        assert_eq!(std::fs::read_to_string(&manager).unwrap(), "mine");
+
         std::fs::remove_dir_all(&home).ok();
     }
 }

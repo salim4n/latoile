@@ -110,6 +110,19 @@ impl GitHubClient for GitHubSlot {
     }
 }
 
+impl AgentSlot {
+    /// What the channel recorded for a run — the supervision driver's
+    /// window into the agent processes. `None` means the channel never saw
+    /// this run (a restart loses the registry: the run is lost).
+    pub async fn run_state(&self, run: &RunId) -> Option<latoile_agents::RunState> {
+        match self {
+            Self::Real(channel) => channel.run_state(run).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.run_states.lock().unwrap().get(run.as_str()).cloned(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
@@ -143,10 +156,12 @@ fn resolve_token(config: &ServerConfig) -> (String, &'static str) {
 
 /// Wire every adapter and return the router plus the token in effect — the
 /// CLI prints the token when it was generated.
+/// The router, the token in effect and its source, and the supervision
+/// driver's handle (abort it on shutdown).
 pub async fn build(
     config: &ServerConfig,
     db_path: &Path,
-) -> Result<(axum::Router, String, &'static str), BuildError> {
+) -> Result<(axum::Router, String, &'static str, tokio::task::JoinHandle<()>), BuildError> {
     let store = Store::open(db_path).await?;
     let (token, token_source) = resolve_token(config);
 
@@ -186,5 +201,6 @@ pub async fn build(
         proxy_http: reqwest::Client::new(),
         token: Arc::from(token.as_str()),
     };
-    Ok((crate::routes::router(state), token, token_source))
+    let driver = crate::driver::spawn(state.clone());
+    Ok((crate::routes::router(state), token, token_source, driver))
 }

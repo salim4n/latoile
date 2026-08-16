@@ -1,19 +1,16 @@
 //! `/api/projects/:id/messages` — the Manager thread. POST persists the
-//! owner's message (SendMessage), then runs the manager turn inline and
-//! persists the reply as a Manager message. This is the smallest honest
-//! wiring: the manager's structured `actions` are stored but NOT executed —
-//! turning them into tasks/runs is the orchestrator pass.
+//! owner's message (SendMessage), then runs the manager turn inline:
+//! the reply's actions block executes (ManagerTurn — tasks, runs, specs)
+//! and the reply is persisted with its display cards.
 
 use super::dto::MessageDto;
 use crate::error::ApiError;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use latoile_app::use_cases::{SendMessage, SendMessageInput};
-use latoile_core::event::{EventKind, NewEvent};
-use latoile_core::ids::{MessageId, ProjectId};
-use latoile_core::ports::{AgentChannel, ConversationStore, EventLog};
-use latoile_core::{Author, Message};
+use latoile_app::use_cases::{ManagerTurn, SendMessage, SendMessageInput};
+use latoile_core::ids::ProjectId;
+use latoile_core::ports::{AgentChannel, ConversationStore};
 use serde::{Deserialize, Serialize};
 
 pub async fn list(
@@ -62,7 +59,12 @@ pub async fn send(
 
     let reply = match state.agents.tell_manager(&project_id, &body.content).await {
         Ok(reply) if !reply.content.trim().is_empty() => {
-            Some(persist_reply(&state, &project_id, reply).await?)
+            // The Manager's actions execute here — tasks appear on the
+            // board, runs start, specs draft — before the reply renders.
+            let outcome = ManagerTurn::new(state.store.clone(), state.agents.clone())
+                .record_reply(&project_id, reply)
+                .await?;
+            Some(MessageDto::from(&outcome.message))
         }
         Ok(_) => None,
         Err(e) => {
@@ -75,40 +77,6 @@ pub async fn send(
 
     Ok(Json(SendResponse {
         message: MessageDto::from(&posted.message),
-        reply: reply.map(|m| MessageDto::from(&m)),
+        reply,
     }))
-}
-
-/// Persist the Manager's answer as a thread message, with its structured
-/// actions attached, and journal it.
-async fn persist_reply(
-    state: &AppState,
-    project_id: &ProjectId,
-    reply: latoile_core::ports::ManagerReply,
-) -> Result<Message, ApiError> {
-    let conversation = state
-        .store
-        .for_project(project_id)
-        .await?
-        .ok_or(ApiError::not_found("conversation"))?;
-    let message = Message::new(
-        MessageId::new(ulid::Ulid::new().to_string())
-            .map_err(|e| ApiError::bad_request(e.to_string()))?,
-        conversation.id,
-        Author::Manager,
-        reply.content,
-        reply.actions,
-    )
-    .map_err(ApiError::domain)?;
-    ConversationStore::append(&state.store, &message).await?;
-    EventLog::append(
-        &state.store,
-        &NewEvent {
-            project_id: project_id.clone(),
-            kind: EventKind::MessagePosted,
-            payload: format!("{{\"message_id\":\"{}\"}}", message.id),
-        },
-    )
-    .await?;
-    Ok(message)
 }
