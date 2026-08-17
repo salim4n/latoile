@@ -13,6 +13,7 @@ mod ensure_preview;
 mod grant_approval;
 mod manager_turn;
 mod reject_approval;
+mod routing;
 mod send_message;
 mod stop_preview;
 
@@ -23,6 +24,7 @@ pub use ensure_preview::{EnsurePreview, EnsuredPreview};
 pub use grant_approval::{GrantApproval, GrantedApproval};
 pub use manager_turn::{ManagerOutcome, ManagerTurn};
 pub use reject_approval::RejectApproval;
+pub use routing::{RoleRouting, Routing, PROVIDERS, ROLES};
 pub use send_message::{PostedMessage, SendMessage, SendMessageInput};
 pub use stop_preview::StopPreview;
 

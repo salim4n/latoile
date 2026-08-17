@@ -12,9 +12,15 @@ path = "main.rs"
 
 [dependencies]
 latoile-server = { path = "../server" }
+latoile-vault = { path = "../vault" }
+latoile-core = { path = "../core" }
 # Same idiom as Firetower's CLI: derive + env-backed flags.
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 # The vendored role skills, baked into the binary and seeded into the home
 # directory on first run (a fresh clone + install works out of the box).
 rust-embed = { version = "8", features = ["debug-embed"] }
+# The one place a subscriber exists: fmt to stderr, RUST_LOG to override.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Interactive secret input must disable terminal echo.
+rpassword = "7"

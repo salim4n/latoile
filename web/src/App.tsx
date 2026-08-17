@@ -11,6 +11,7 @@ import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { NewProjectScreen } from "./screens/NewProjectScreen";
 import { ProjectScreen } from "./screens/ProjectScreen";
 import { ReviewScreen } from "./screens/ReviewScreen";
+import { SettingsScreen } from "./screens/SettingsScreen";
 
 export function App() {
   const [authed, setAuthed] = useState(() => getToken() !== null);
@@ -33,6 +34,7 @@ export function App() {
           <Route path="/projects/new" element={<NewProjectScreen />} />
           <Route path="/projects/:id" element={<ProjectScreen />} />
           <Route path="/reviews/:approvalId" element={<ReviewScreen />} />
+          <Route path="/settings" element={<SettingsScreen />} />
           <Route path="*" element={<InboxScreen />} />
         </Routes>
       </BrowserRouter>

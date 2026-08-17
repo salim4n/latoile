@@ -76,6 +76,7 @@ export function InboxScreen() {
   const { t } = useT();
   const approvals = useAsync(api.approvals, []);
   const projects = useAsync(api.projects, []);
+  const auth = useAsync(api.agentAuthStatusAll, []);
   useEventReload(
     ["approval_requested", "approval_granted", "approval_rejected", "run_blocked"],
     approvals.reload,
@@ -96,6 +97,18 @@ export function InboxScreen() {
 
   return (
     <Shell title="Inbox">
+      {auth.data && !auth.data.claude.authenticated && !auth.data.codex.authenticated && (
+        <Link
+          className="card row"
+          to="/settings"
+          style={{ marginBottom: "var(--space-4)", borderColor: "rgba(245, 176, 66, 0.4)" }}
+        >
+          <div className="row-main">
+            <p>{t("inbox.auth.banner")}</p>
+          </div>
+          <span className="badge badge--warning">{t("inbox.auth.cta")}</span>
+        </Link>
+      )}
       {loading && <Skeletons />}
       {failed && (
         <ErrorState

@@ -50,6 +50,9 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 5. An executor run carries: task + spec excerpts + role skill. Never free-form chat.
 6. The preview always serves the declared `work_branch`; if it serves anything else, the UI reports `stale` — it never lies.
 7. The Manager never receives dangerous permissions; it does not write code.
+8. Every fixed role has one persisted provider assignment (`claude` or
+   `codex`). A change affects the next fresh executor session; changing the
+   Manager provider evicts its persistent session before the next message.
 
 ### 3.3 Domain events
 
@@ -79,6 +82,7 @@ erDiagram
     TASK ||--o{ RUN : "executed by"
     ROLE ||--o{ RUN : "played by"
     RUN ||--o{ APPROVAL : "requests"
+    ROLE ||--|| SETTING : "routed by"
 
     PROJECT {
         text id PK "ulid"
@@ -178,6 +182,10 @@ erDiagram
         text created_at
         text rotated_at
     }
+    SETTING {
+        text key PK "routing.role"
+        text value "claude | codex"
+    }
 ```
 
 Constraints: partial unique indexes for active run/task, active preview/project, approved spec/project. Audit fields everywhere. Soft delete only on `PROJECT` (`deleted_at`).
@@ -189,7 +197,7 @@ Constraints: partial unique indexes for active run/task, active preview/project,
 ```
 crates/
 ├── core/      pure domain: entities, state machines, events, ports (traits). Zero I/O, zero async
-├── agents/    ACP channel: supervised spawn, sessions, permissions, usage
+├── agents/    ACP channel + provider CLI auth: supervised spawn, sessions, permissions, usage
 ├── preview/   dev-server supervision, port allocation, reverse proxy
 ├── github/    GitHub API client
 ├── vault/     secrets (XChaCha20-Poly1305, root key outside the DB)
@@ -245,6 +253,12 @@ sequenceDiagram
 | GET | `/api/projects/:id/preview/*` | dev-server reverse proxy (token required) |
 | GET | `/api/events?after=<seq>` | SSE, cursor resume |
 | GET | `/api/roles` | roles + skills |
+| GET/PUT | `/api/settings/routing` | role → provider assignments |
+| GET | `/api/agent-auth/status` | Claude and Codex CLI login status |
+| POST | `/api/agent-auth/start` | start a provider login challenge |
+| GET | `/api/agent-auth/:id` | poll a login challenge |
+| POST | `/api/agent-auth/:id/code` | submit Claude's authorization code |
+| POST | `/api/agent-auth/disconnect` | log out through the provider CLI |
 
 Errors: `{code, message}`; internal error chains are never returned to the client (lesson V-H3 from the Firetower audit).
 
@@ -254,6 +268,7 @@ Errors: `{code, message}`; internal error chains are never returned to the clien
 2. **Project** — Manager chat / task board / preview (mobile viewport default, desktop toggle)
 3. **Review** (P0) — diff + reviewer verdict + **target mockup side-by-side with the render**
 4. **New project** — pick repo → initial brief to the Manager
+5. **Settings** — provider connections + fixed-role provider routing
 
 ## 6. Stack decision record
 

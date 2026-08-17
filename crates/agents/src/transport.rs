@@ -47,8 +47,7 @@ pub trait Connection: Send {
     ) -> impl std::future::Future<Output = Result<TurnResult, AgentError>> + Send + 'a;
     /// `session/cancel` — best effort: the prompt resolves with
     /// `StopReason::Cancelled` when the agent honours it.
-    fn cancel(&mut self)
-    -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_;
+    fn cancel(&mut self) -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_;
 }
 
 /// How connections are made. The real one spawns processes; tests script.
@@ -106,6 +105,7 @@ pub struct ProcessConnection {
     actor: JoinHandle<()>,
     session: Option<String>,
     handshake: Duration,
+    workspace: PathBuf,
 }
 
 impl Drop for ProcessConnection {
@@ -135,6 +135,7 @@ impl ProcessConnection {
         let notif_tx = updates_tx.clone();
         let perm_tx = updates_tx;
         let perm_workspace = workspace.to_path_buf();
+        let actor_workspace = workspace.to_path_buf();
 
         let actor = tokio::spawn(async move {
             let run = Client
@@ -158,7 +159,7 @@ impl ProcessConnection {
                     agent_client_protocol::on_receive_request!(),
                 )
                 .connect_with(agent, move |conn| async move {
-                    actor(conn, cmd_rx, ready_tx, handshake).await
+                    actor(conn, cmd_rx, ready_tx, handshake, actor_workspace).await
                 })
                 .await;
             // The connection ending is not necessarily an error worth
@@ -173,6 +174,7 @@ impl ProcessConnection {
                 actor,
                 session: None,
                 handshake,
+                workspace: workspace.to_path_buf(),
             }),
             Ok(Err(e)) => Err(AgentError::Handshake(e)),
             Err(_) => Err(AgentError::AgentGone),
@@ -210,9 +212,9 @@ fn answer_permission(
         .or(request.options.first());
 
     responder.respond(RequestPermissionResponse::new(match option {
-        Some(o) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-            o.option_id.clone(),
-        )),
+        Some(o) => {
+            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(o.option_id.clone()))
+        }
         None => RequestPermissionOutcome::Cancelled,
     }))
 }
@@ -224,17 +226,19 @@ async fn actor(
     mut rx: mpsc::Receiver<Cmd>,
     ready: oneshot::Sender<Result<(), String>>,
     handshake: Duration,
+    workspace: PathBuf,
 ) -> Result<(), agent_client_protocol::Error> {
     let init = conn
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task();
-    let _ = ready.send(
-        match tokio::time::timeout(handshake, init).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => Err("initialize timed out".into()),
-        },
-    );
+    let _ = ready.send(match tokio::time::timeout(handshake, init).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err(format!(
+            "initialize timed out (cwd: {})",
+            workspace.display()
+        )),
+    });
 
     let mut session: Option<agent_client_protocol::schema::v1::SessionId> = None;
     while let Some(cmd) = rx.recv().await {
@@ -294,9 +298,7 @@ impl Connection for ProcessConnection {
         async move { self.run_prompt(text).await }
     }
 
-    fn cancel(
-        &mut self,
-    ) -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_ {
+    fn cancel(&mut self) -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_ {
         async move { self.send_cancel().await }
     }
 }
@@ -313,7 +315,9 @@ impl ProcessConnection {
             .map_err(|_| AgentError::AgentGone)?;
         let id = tokio::time::timeout(self.handshake, rx)
             .await
-            .map_err(|_| AgentError::Timeout("session/new"))?
+            .map_err(|_| {
+                AgentError::Timeout(format!("session/new (cwd: {})", self.workspace.display()))
+            })?
             .map_err(|_| AgentError::AgentGone)?
             .map_err(AgentError::Session)?;
         self.session = Some(id);
@@ -359,6 +363,9 @@ impl ProcessConnection {
     }
 
     async fn send_cancel(&mut self) -> Result<(), AgentError> {
-        self.cmd.send(Cmd::Cancel).await.map_err(|_| AgentError::AgentGone)
+        self.cmd
+            .send(Cmd::Cancel)
+            .await
+            .map_err(|_| AgentError::AgentGone)
     }
 }

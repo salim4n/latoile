@@ -12,8 +12,14 @@ latoile-core = { path = "../core" }
 # connect_with, AcpAgent subprocess transport (process-group spawn, kills the
 # group on drop), schema re-exported under `schema::v1`.
 agent-client-protocol = "=2.0.0"
-tokio = { version = "1", features = ["rt", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "process", "io-util", "macros"] }
 thiserror = "2"
+# Auth session ids.
+ulid = "1"
+# Login CLIs re-exec (codex's npm wrapper → vendored binary): the whole
+# process group must die, not just the direct child.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 # Permission decisions inspect a tool call's raw JSON input.
 serde_json = "1"
 

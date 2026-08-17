@@ -18,6 +18,7 @@ mod preview;
 mod project;
 mod role;
 mod run;
+mod setting;
 mod spec;
 mod task;
 
@@ -142,9 +143,14 @@ pub(crate) mod test_fixtures {
 
     pub(crate) async fn store_with_approved_spec() -> Store {
         let store = store_with_project().await;
-        let mut spec =
-            SpecVersion::new(SpecVersionId::new(SPEC).unwrap(), PROJECT.clone(), 1, "design/", None)
-                .unwrap();
+        let mut spec = SpecVersion::new(
+            SpecVersionId::new(SPEC).unwrap(),
+            PROJECT.clone(),
+            1,
+            "design/",
+            None,
+        )
+        .unwrap();
         spec.approve().unwrap();
         SpecStore::save(&store, &spec).await.unwrap();
         store

@@ -44,7 +44,9 @@ The full design — decisions D1–D10, the ER model, the API contract, the risk
 
 ## Running
 
-Requirements: Rust (see `rust-toolchain.toml`), Node 22+ with pnpm, and the agent ACP adapters on PATH (`claude-agent-acp` and/or `codex-acp`).
+Requirements: Rust 1.85+, Node 22+ with pnpm, the provider CLIs (`claude`
+and/or `codex`), and their ACP adapters on PATH (`claude-agent-acp` and/or
+`codex-acp`).
 
 ```sh
 cd web && pnpm install && pnpm build   # build the embedded web UI (repeat per change)
@@ -52,6 +54,16 @@ cargo run -p latoile-cli -- serve      # or a release binary: cargo build --rele
 ```
 
 `serve` prints the local URL and the bearer token — paste it into the UI (set `LATOILE_TOKEN` to choose your own; `latoile token` prints it back). State lives in `~/.local/share/latoile` (`--home` overrides): the SQLite database and the vault's `master.key`.
+
+Open **Settings** to connect Claude or Codex with the provider's own login
+flow and choose the provider used by each fixed role. Provider credentials
+stay owned by their CLI; LaToile stores only the role routing. Store the
+GitHub token through the encrypted vault (interactive input is hidden):
+
+```sh
+cargo run -p latoile-cli -- secret set github_token
+cargo run -p latoile-cli -- secret list       # names only, never values
+```
 
 The web UI is embedded via rust-embed: **release builds bake `web/dist` into the binary; debug builds read it live from disk**, so `pnpm build` + refresh suffices while developing — or `pnpm dev` for the Vite server, which proxies `/api` to port 7700. A placeholder `index.html` committed in `web/dist` keeps a fresh clone compiling before the first web build. Web checks: `pnpm lint`, `pnpm test` (vitest), `pnpm build` (typecheck + bundle).
 

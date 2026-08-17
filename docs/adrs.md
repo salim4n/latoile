@@ -38,6 +38,12 @@ Three observed approaches: PTY/tmux (Firetower — heuristics-based status, docu
 
 All agents go through the `agent-client-protocol` v2 crate behind an `agents/` port defined in `core`. The Manager holds a persistent session per project (resumed on each message); executors are ephemeral runs (spawn → task → exit). Permissions follow the AionCore pattern: allow/approval/reject heuristics (auto-reject: `.env`, absolute paths, `docker`), then a human approval queue.
 
+Each fixed role is routed to either Claude or Codex through a persisted
+setting. The provider's native CLI owns login/status/logout; LaToile only
+supervises that interactive flow and then launches the matching ACP adapter.
+Changing executor routing applies to the next run. Changing Manager routing
+evicts the persistent session so its next message starts with the new adapter.
+
 ## Rationale
 
 - Structured status, cancellation, permissions, and usage — exactly what Firetower lacks for Codex.

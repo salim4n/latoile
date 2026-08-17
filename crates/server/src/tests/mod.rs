@@ -2,8 +2,8 @@
 //! ephemeral SQLite store, a stub agent channel, and a stub GitHub client —
 //! no process, no network beyond loopback, no real token.
 
-use crate::state::{AgentSlot, AppState, GitHubSlot};
 use crate::router;
+use crate::state::{AgentSlot, AppState, GitHubSlot};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -25,8 +25,7 @@ pub struct StubAgents {
     /// The Manager's next answer — scriptable per test.
     pub manager_reply: Arc<Mutex<String>>,
     /// Scripted supervision answers, keyed by run id.
-    pub run_states:
-        Arc<Mutex<std::collections::HashMap<String, latoile_agents::RunState>>>,
+    pub run_states: Arc<Mutex<std::collections::HashMap<String, latoile_agents::RunState>>>,
 }
 
 impl Default for StubAgents {
@@ -53,10 +52,10 @@ impl AgentChannel for StubAgents {
     async fn start_run(&self, r: &Run, _p: &str) -> PortResult<String> {
         // Registered as running so the supervision driver can be scripted:
         // tests flip the entry to Done/Failed when the "agent" is done.
-        self.run_states.lock().unwrap().insert(
-            r.id.as_str().to_string(),
-            latoile_agents::RunState::Running,
-        );
+        self.run_states
+            .lock()
+            .unwrap()
+            .insert(r.id.as_str().to_string(), latoile_agents::RunState::Running);
         Ok("acp-stub".into())
     }
     async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
@@ -82,6 +81,35 @@ pub async fn state() -> (AppState, Store, StubAgents) {
             ..SupervisorConfig::default()
         }),
         proxy_http: reqwest::Client::new(),
+        agent_auth: {
+            let cmd = |script: &str| latoile_agents::AgentCommand {
+                program: "sh".into(),
+                args: vec!["-c".into(), script.into()],
+                env: Vec::new(),
+            };
+            let login_claude =
+                "printf 'https://claude.com/oauth/authorize?test=1\\n'; read line; [ \"$line\" = good ]";
+            let login_codex =
+                "printf 'Go to https://auth.openai.com/codex/device and enter TEST-CODE1\\n'; sleep 60";
+            latoile_agents::AgentAuthManager::new(latoile_agents::DEFAULT_TTL)
+                .with_commands(
+                    latoile_agents::AuthProvider::Claude,
+                    latoile_agents::ProviderCommands {
+                        login: cmd(login_claude),
+                        status: cmd("printf '{\"loggedIn\": true, \"email\":\"moi@example.com\"}'"),
+                        logout: cmd("true"),
+                    },
+                )
+                .with_commands(
+                    latoile_agents::AuthProvider::Codex,
+                    latoile_agents::ProviderCommands {
+                        login: cmd(login_codex),
+                        status: cmd("echo 'Not logged in'; exit 1"),
+                        logout: cmd("true"),
+                    },
+                )
+        },
+        routing: latoile_agents::SharedRouting::default(),
         token: Arc::from(TOKEN),
     };
     (state, store, agents)
@@ -138,6 +166,8 @@ pub async fn body_json(response: axum::response::Response) -> serde_json::Value 
         .to_bytes();
     serde_json::from_slice(&bytes).unwrap()
 }
+mod agent_auth;
 mod driver;
 mod flows;
 mod http;
+mod settings;

@@ -2,14 +2,16 @@
 //! live here (contract §2, guardian #5). `/api/health` is the only open
 //! route; everything else sits behind the bearer token (D9).
 
-pub mod dto;
+mod agent_auth;
 mod approvals;
+pub mod dto;
 mod events;
 mod github;
 mod messages;
 mod preview;
 mod projects;
 mod runs;
+mod settings;
 mod specs;
 mod tasks;
 
@@ -37,11 +39,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/spec-versions", get(specs::list))
         .route("/api/spec-versions/{id}/approve", post(specs::approve))
         .route("/api/roles", get(roles))
+        .route("/api/agent-auth/start", post(agent_auth::start))
+        .route("/api/agent-auth/status", get(agent_auth::status_all))
+        .route("/api/agent-auth/disconnect", post(agent_auth::disconnect))
+        .route(
+            "/api/settings/routing",
+            get(settings::get_routing).put(settings::put_routing),
+        )
+        .route("/api/agent-auth/{id}", get(agent_auth::status))
+        .route("/api/agent-auth/{id}/code", post(agent_auth::submit_code))
         .route("/api/github/repos", get(github::repos))
         .route("/api/events", get(events::stream))
         .route(
             "/api/projects/{id}/preview",
-            get(preview::status).post(preview::ensure).delete(preview::stop),
+            get(preview::status)
+                .post(preview::ensure)
+                .delete(preview::stop),
         )
         .route("/api/projects/{id}/preview/", any(preview::proxy_root))
         .route("/api/projects/{id}/preview/{*path}", any(preview::proxy))

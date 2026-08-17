@@ -7,7 +7,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { LangToggle, useT } from "../i18n";
 import { onStatus, type ConnStatus } from "../events";
-import { InboxIcon, PlusIcon, ProjectsIcon } from "./icons";
+import { GearIcon, InboxIcon, PlusIcon, ProjectsIcon } from "./icons";
 
 function Conn() {
   const { t } = useT();
@@ -28,6 +28,7 @@ function NavLinks({ current }: { current: string }) {
     { to: "/", key: "inbox", label: t("nav.inbox"), icon: <InboxIcon /> },
     { to: "/projects", key: "projects", label: t("nav.projects"), icon: <ProjectsIcon /> },
     { to: "/projects/new", key: "create", label: t("nav.create"), icon: <PlusIcon /> },
+    { to: "/settings", key: "settings", label: t("nav.settings"), icon: <GearIcon /> },
   ];
   return (
     <>
@@ -68,7 +69,13 @@ export function Shell({
   // then Create — same destinations, same order, both bars.
   const path = location.pathname;
   const current =
-    path === "/projects/new" ? "create" : path.startsWith("/projects") ? "projects" : "inbox";
+    path === "/projects/new"
+      ? "create"
+      : path.startsWith("/projects")
+        ? "projects"
+        : path === "/settings"
+          ? "settings"
+          : "inbox";
 
   return (
     <div className="shell">

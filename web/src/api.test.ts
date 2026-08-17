@@ -45,4 +45,34 @@ describe("api", () => {
     expect(getToken()).toBeNull();
     expect(notified).toBe(true);
   });
+
+  it("agent-auth start posts to the right route", async () => {
+    setToken("abc");
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ session_id: "s1", status: "starting", url: null, error: null }),
+        { status: 200 },
+      ),
+    );
+    const session = await api.agentAuthStart("claude");
+    expect(session.session_id).toBe("s1");
+    expect(spy.mock.calls[0][0]).toBe("/api/agent-auth/start");
+    expect(spy.mock.calls[0][1]?.method).toBe("POST");
+  });
+
+  it("routing reads and writes the settings route", async () => {
+    setToken("abc");
+    const routing = {
+      manager: "claude", architect: "claude", backend: "codex",
+      frontend: "codex", reviewer: "claude",
+    } as const;
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(routing), { status: 200 }),
+    );
+    expect((await api.getRouting()).backend).toBe("codex");
+    await api.putRouting(routing);
+    const put = spy.mock.calls[1];
+    expect(put[0]).toBe("/api/settings/routing");
+    expect(put[1]?.method).toBe("PUT");
+  });
 });

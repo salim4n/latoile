@@ -17,7 +17,7 @@
 //! port has no completion callback. That is the one seam a future wiring
 //! step should close.
 
-use crate::config::ChannelConfig;
+use crate::config::{AgentCommand, ChannelConfig};
 use crate::error::AgentError;
 use crate::preamble::Preambles;
 use crate::transport::{Connection, Connector};
@@ -31,24 +31,95 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 
-/// Where sessions work. Sync and simple: resolving a directory must not need
-/// the database — the CLI assembles whatever lookup it wants behind this.
-pub trait ProjectDirs: Send + Sync {
-    fn manager_dir(&self, project: &ProjectId) -> Option<PathBuf>;
-    fn run_dir(&self, run: &Run) -> Option<PathBuf>;
+/// Which binary a role runs under. Sync and infallible: the server keeps a
+/// shared map refreshed from the settings table; the agents crate never
+/// sees the database.
+pub trait RoutingSource: Send + Sync {
+    fn command_for(&self, role: &str) -> AgentCommand;
 }
 
-/// Every session in one root directory. The workable V1 default: ACP agents
-/// scope file tools to the session `cwd`, and the prompt text carries the
-/// exact checkout path.
+/// The static map from configuration — every role falls back to its
+/// default command.
+impl RoutingSource for ChannelConfig {
+    fn command_for(&self, role: &str) -> AgentCommand {
+        ChannelConfig::command_for(self, role).clone()
+    }
+}
+
+/// The routing map the server refreshes from the settings table. Reads are
+/// a lock away; writes replace the map wholesale (five rows, no deltas).
+#[derive(Clone, Default)]
+pub struct SharedRouting {
+    inner: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
+}
+
+impl SharedRouting {
+    pub fn set_all(&self, entries: Vec<(String, String)>) {
+        *self.inner.write().expect("routing poisoned") = entries.into_iter().collect();
+    }
+}
+
+impl RoutingSource for SharedRouting {
+    fn command_for(&self, role: &str) -> AgentCommand {
+        let provider = self
+            .inner
+            .read()
+            .expect("routing poisoned")
+            .get(role)
+            .cloned()
+            .unwrap_or_else(|| "claude".into());
+        let binary = match provider.as_str() {
+            "codex" => "codex-acp",
+            _ => "claude-agent-acp",
+        };
+        AgentCommand::new(binary)
+    }
+}
+
+/// Where sessions work: the project's `local_path` — the checkout the code
+/// lives in. Resolution needs the store, so the trait is async (desugared
+/// `Send` futures: the channel's callers are axum handlers). `None` means
+/// unknown project; a nonexistent directory is refused before any spawn.
+pub trait ProjectDirs: Send + Sync {
+    fn manager_dir<'a>(
+        &'a self,
+        project: &'a ProjectId,
+    ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a;
+    fn run_dir<'a>(
+        &'a self,
+        run: &'a Run,
+    ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a;
+}
+
+/// Every session in one directory — the tests' fixture.
 pub struct RootDirs(pub PathBuf);
 
+#[allow(clippy::manual_async_fn)] // the trait needs the explicit `+ Send`
 impl ProjectDirs for RootDirs {
-    fn manager_dir(&self, _project: &ProjectId) -> Option<PathBuf> {
-        Some(self.0.clone())
+    fn manager_dir<'a>(
+        &'a self,
+        _project: &'a ProjectId,
+    ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a {
+        async move { Some(self.0.clone()) }
     }
-    fn run_dir(&self, _run: &Run) -> Option<PathBuf> {
-        Some(self.0.clone())
+    fn run_dir<'a>(
+        &'a self,
+        _run: &'a Run,
+    ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a {
+        async move { Some(self.0.clone()) }
+    }
+}
+
+/// Refuse a workspace that doesn't exist BEFORE anything spawns — a bad cwd
+/// surfaces as a clear error, never as a 30-second timeout.
+fn checked_dir(dir: PathBuf) -> Result<PathBuf, AgentError> {
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(AgentError::NoWorkspace(format!(
+            "the project directory does not exist: {}",
+            dir.display()
+        )))
     }
 }
 
@@ -75,26 +146,35 @@ struct ManagerEntry<C> {
 /// answer concurrently while prompts on one manager stay serial.
 type ManagerSlot<C> = Arc<Mutex<ManagerEntry<C>>>;
 
-pub struct AcpChannel<C: Connector, D: ProjectDirs> {
+pub struct AcpChannel<C: Connector, D: ProjectDirs, R: RoutingSource> {
     config: ChannelConfig,
     connector: C,
     dirs: D,
+    routing: R,
     preambles: Preambles,
     managers: Mutex<HashMap<String, ManagerSlot<C::Conn>>>,
     runs: Mutex<HashMap<String, RunEntry>>,
 }
 
-impl<C: Connector, D: ProjectDirs> AcpChannel<C, D> {
-    pub fn new(config: ChannelConfig, connector: C, dirs: D) -> Self {
+impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
+    pub fn new(config: ChannelConfig, connector: C, dirs: D, routing: R) -> Self {
         let preambles = Preambles::new(config.skills_dir.clone());
         Self {
             config,
             connector,
             dirs,
+            routing,
             preambles,
             managers: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Drop every persistent manager session; the next message respawns
+    /// under the current routing. Called when routing changes — a running
+    /// session keeps the provider it started with until then.
+    pub async fn evict_managers(&self) {
+        self.managers.lock().await.clear();
     }
 
     /// Where a run stands, for the app layer polling from its own loop.
@@ -105,10 +185,7 @@ impl<C: Connector, D: ProjectDirs> AcpChannel<C, D> {
             .map(|e| e.state.lock().expect("run state poisoned").clone())
     }
 
-    async fn manager_for(
-        &self,
-        project: &ProjectId,
-    ) -> Result<ManagerSlot<C::Conn>, AgentError> {
+    async fn manager_for(&self, project: &ProjectId) -> Result<ManagerSlot<C::Conn>, AgentError> {
         let mut managers = self.managers.lock().await;
         if let Some(entry) = managers.get(project.as_str()) {
             return Ok(entry.clone());
@@ -116,11 +193,11 @@ impl<C: Connector, D: ProjectDirs> AcpChannel<C, D> {
         let dir = self
             .dirs
             .manager_dir(project)
-            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))?;
-        let mut conn = self
-            .connector
-            .connect(self.config.command_for("manager"), &dir)
-            .await?;
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
+            .and_then(checked_dir)?;
+        let command = self.routing.command_for("manager");
+        let mut conn = self.connector.connect(&command, &dir).await?;
         conn.new_session(&dir).await?;
         let entry = Arc::new(Mutex::new(ManagerEntry {
             conn,
@@ -131,7 +208,7 @@ impl<C: Connector, D: ProjectDirs> AcpChannel<C, D> {
     }
 }
 
-impl<C: Connector, D: ProjectDirs> AgentChannel for AcpChannel<C, D> {
+impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel<C, D, R> {
     async fn tell_manager(&self, project: &ProjectId, message: &str) -> PortResult<ManagerReply> {
         let entry = self.manager_for(project).await?;
         let mut guard = entry.lock().await;
@@ -145,12 +222,16 @@ impl<C: Connector, D: ProjectDirs> AgentChannel for AcpChannel<C, D> {
             format!("{preamble}\n\n---\n\n{message}")
         };
 
-        let turn = match tokio::time::timeout(self.config.timeouts.prompt, guard.conn.prompt(&prompt))
-            .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(AgentError::Timeout("prompt")),
-        };
+        let turn =
+            match tokio::time::timeout(self.config.timeouts.prompt, guard.conn.prompt(&prompt))
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(AgentError::Timeout(format!(
+                    "prompt (project {})",
+                    project.as_str()
+                ))),
+            };
 
         match turn {
             Ok(turn) => {
@@ -180,9 +261,11 @@ impl<C: Connector, D: ProjectDirs> AgentChannel for AcpChannel<C, D> {
         let dir = self
             .dirs
             .run_dir(run)
-            .ok_or_else(|| AgentError::NoWorkspace(format!("run {}", run.id.as_str())))?;
-        let command = self.config.command_for(run.role_id.as_str());
-        let mut conn = self.connector.connect(command, &dir).await?;
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("run {}", run.id.as_str())))
+            .and_then(checked_dir)?;
+        let command = self.routing.command_for(run.role_id.as_str());
+        let mut conn = self.connector.connect(&command, &dir).await?;
         conn.new_session(&dir).await?;
 
         let preamble = self.preambles.for_role(&run.role_id);
@@ -216,12 +299,12 @@ impl<C: Connector, D: ProjectDirs> AgentChannel for AcpChannel<C, D> {
         // Unknown run: already gone is the wanted state — fine.
         if let Some(entry) = self.runs.lock().await.remove(run.as_str()) {
             entry.abort.abort(); // the connection — and the process — die
-            *entry.state.lock().expect("run state poisoned") = RunState::Done(RunOutcome::Cancelled);
+            *entry.state.lock().expect("run state poisoned") =
+                RunState::Done(RunOutcome::Cancelled);
         }
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests;

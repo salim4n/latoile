@@ -14,12 +14,11 @@
 //! keeps the router concrete, `Send`-checked, and fakeable without touching
 //! the app's type safety.
 
-use latoile_agents::{AcpChannel, AgentCommand, AgentTimeouts, ChannelConfig, ProcessConnector, RootDirs};
+use crate::dirs::StoreDirs;
+use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector, SharedRouting};
 use latoile_app::store::Store;
 use latoile_core::ids::{ProjectId, RunId};
-use latoile_core::ports::{
-    AgentChannel, GitHubClient, ManagerReply, PortResult, RepoInfo,
-};
+use latoile_core::ports::{AgentChannel, GitHubClient, ManagerReply, PortResult, RepoInfo};
 use latoile_core::Run;
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
@@ -56,7 +55,7 @@ pub enum BuildError {
 /// The agent channel, concrete. `Stub` exists only in tests.
 #[derive(Clone)]
 pub enum AgentSlot {
-    Real(Arc<AcpChannel<ProcessConnector, RootDirs>>),
+    Real(Arc<AcpChannel<ProcessConnector, StoreDirs, SharedRouting>>),
     #[cfg(test)]
     Stub(crate::tests::StubAgents),
 }
@@ -111,6 +110,16 @@ impl GitHubClient for GitHubSlot {
 }
 
 impl AgentSlot {
+    /// Drop persistent manager sessions (routing changed). The next message
+    /// respawns under the new provider; runs are ephemeral and unaffected.
+    pub async fn evict_managers(&self) {
+        match self {
+            Self::Real(channel) => channel.evict_managers().await,
+            #[cfg(test)]
+            Self::Stub(_) => {}
+        }
+    }
+
     /// What the channel recorded for a run — the supervision driver's
     /// window into the agent processes. `None` means the channel never saw
     /// this run (a restart loses the registry: the run is lost).
@@ -132,6 +141,10 @@ pub struct AppState {
     /// For the preview reverse proxy — separate from the GitHub client so a
     /// proxy failure never touches API state.
     pub proxy_http: reqwest::Client,
+    /// Click-to-login sessions for the agent runtime.
+    pub agent_auth: latoile_agents::AgentAuthManager,
+    /// The live role→provider map the channel reads; refreshed on PUT.
+    pub routing: SharedRouting,
     pub(crate) token: Arc<str>,
 }
 
@@ -161,7 +174,15 @@ fn resolve_token(config: &ServerConfig) -> (String, &'static str) {
 pub async fn build(
     config: &ServerConfig,
     db_path: &Path,
-) -> Result<(axum::Router, String, &'static str, tokio::task::JoinHandle<()>), BuildError> {
+) -> Result<
+    (
+        axum::Router,
+        String,
+        &'static str,
+        tokio::task::JoinHandle<()>,
+    ),
+    BuildError,
+> {
     let store = Store::open(db_path).await?;
     let (token, token_source) = resolve_token(config);
 
@@ -180,17 +201,27 @@ pub async fn build(
     );
 
     let timeouts = AgentTimeouts::default();
+    // Seed the live routing from the settings table.
+    let routing = SharedRouting::default();
+    let stored = latoile_app::use_cases::Routing::new(store.clone())
+        .get()
+        .await
+        .map_err(|e| {
+            BuildError::Store(latoile_app::store::StoreError::CorruptRow(e.to_string()))
+        })?;
+    routing.set_all(stored.into_iter().map(|r| (r.role, r.provider)).collect());
+
     let agents = AcpChannel::new(
         ChannelConfig {
             skills_dir: config.skills_dir.clone(),
             commands: std::collections::HashMap::new(),
-            default_command: AgentCommand::new("claude-agent-acp"),
-            timeouts,
+            ..ChannelConfig::default()
         },
         ProcessConnector {
             handshake: timeouts.handshake,
         },
-        RootDirs(config.workspace.clone()),
+        StoreDirs::new(store.clone(), config.workspace.clone()),
+        routing.clone(),
     );
 
     let state = AppState {
@@ -199,6 +230,8 @@ pub async fn build(
         github: GitHubSlot::Real(github),
         previews: Supervisor::default(),
         proxy_http: reqwest::Client::new(),
+        agent_auth: latoile_agents::AgentAuthManager::production(),
+        routing,
         token: Arc::from(token.as_str()),
     };
     let driver = crate::driver::spawn(state.clone());

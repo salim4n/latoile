@@ -71,6 +71,15 @@ impl Vault {
             .ok_or_else(|| VaultError::NotFound(name.to_string()))
     }
 
+    /// The stored names, sorted. Names only — a value never leaves through
+    /// a listing. Inherent, not on the port: only the CLI needs it.
+    pub async fn names(&self) -> Result<Vec<String>, VaultError> {
+        let rows = sqlx::query("SELECT name FROM secret ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("name")).collect())
+    }
+
     /// Store a value, replacing whatever was there. The replacement re-seals
     /// under a fresh per-secret key and stamps `rotated_at` — an overwrite IS
     /// a rotation.
@@ -95,11 +104,10 @@ impl Vault {
     /// Read a value. `None` means nothing is stored — a normal state, not an
     /// error. A value that is there but doesn't verify IS an error.
     async fn get_plain(&self, name: &str) -> Result<Option<String>, VaultError> {
-        let Some(row) =
-            sqlx::query("SELECT ciphertext, wrapped_key FROM secret WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await?
+        let Some(row) = sqlx::query("SELECT ciphertext, wrapped_key FROM secret WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
         else {
             return Ok(None);
         };
@@ -143,7 +151,10 @@ mod tests {
     async fn a_stored_secret_comes_back() {
         let v = vault().await;
         v.put("github", "gho_a-token").await.unwrap();
-        assert_eq!(v.get("github").await.unwrap().as_deref(), Some("gho_a-token"));
+        assert_eq!(
+            v.get("github").await.unwrap().as_deref(),
+            Some("gho_a-token")
+        );
     }
 
     #[tokio::test]
@@ -166,7 +177,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            row.try_get::<Option<String>, _>("rotated_at").unwrap().is_some(),
+            row.try_get::<Option<String>, _>("rotated_at")
+                .unwrap()
+                .is_some(),
             "an overwrite is a rotation"
         );
     }
@@ -178,7 +191,10 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::migrate!("../../migrations/app").run(&pool).await.unwrap();
+        sqlx::migrate!("../../migrations/app")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let ours = Vault::new(pool.clone(), RootKey::generate());
         ours.put("github", "a-token").await.unwrap();
@@ -234,6 +250,24 @@ mod tests {
         first.put("github", "a-token").await.unwrap();
 
         let second = Vault::open(&path, root).await.unwrap();
-        assert_eq!(second.get("github").await.unwrap().as_deref(), Some("a-token"));
+        assert_eq!(
+            second.get("github").await.unwrap().as_deref(),
+            Some("a-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn names_lists_names_only() {
+        let v = vault().await;
+        v.put("github_token", "gho_x").await.unwrap();
+        v.put("anthropic", "sk-y").await.unwrap();
+        assert_eq!(v.names().await.unwrap(), ["anthropic", "github_token"]);
+        assert!(Vault::open_ephemeral(RootKey::generate())
+            .await
+            .unwrap()
+            .names()
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

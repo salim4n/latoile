@@ -46,9 +46,7 @@ impl Connection for FakeConn {
             })
         }
     }
-    fn cancel(
-        &mut self,
-    ) -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_ {
+    fn cancel(&mut self) -> impl std::future::Future<Output = Result<(), AgentError>> + Send + '_ {
         async move { Ok(()) }
     }
 }
@@ -63,6 +61,8 @@ impl Drop for FakeConn {
 struct FakeConnector {
     conns: StdMutex<VecDeque<FakeConn>>,
     spawned: AtomicUsize,
+    commands: Arc<StdMutex<Vec<String>>>,
+    workspaces: Arc<StdMutex<Vec<PathBuf>>>,
 }
 
 impl FakeConnector {
@@ -76,10 +76,15 @@ impl Connector for FakeConnector {
     type Conn = FakeConn;
     fn connect<'a>(
         &'a self,
-        _command: &'a AgentCommand,
-        _workspace: &'a Path,
+        command: &'a AgentCommand,
+        workspace: &'a Path,
     ) -> impl std::future::Future<Output = Result<FakeConn, AgentError>> + Send + 'a {
         async move {
+            self.commands.lock().unwrap().push(command.program.clone());
+            self.workspaces
+                .lock()
+                .unwrap()
+                .push(workspace.to_path_buf());
             self.spawned.fetch_add(1, Ordering::SeqCst);
             Ok(self.conns.lock().unwrap().pop_front().unwrap_or(FakeConn {
                 log: Arc::new(StdMutex::new(vec![])),
@@ -107,8 +112,10 @@ fn channel(
     config: ChannelConfig,
     connector: FakeConnector,
     root: &Path,
-) -> AcpChannel<FakeConnector, RootDirs> {
-    AcpChannel::new(config, connector, RootDirs(root.to_path_buf()))
+) -> AcpChannel<FakeConnector, RootDirs, ChannelConfig> {
+    // The config doubles as the static routing source.
+    let routing = config.clone();
+    AcpChannel::new(config, connector, RootDirs(root.to_path_buf()), routing)
 }
 
 fn project() -> ProjectId {
@@ -125,7 +132,7 @@ fn run(id: &str) -> Run {
 }
 
 async fn wait_for<C: Connector, D: ProjectDirs>(
-    ch: &AcpChannel<C, D>,
+    ch: &AcpChannel<C, D, ChannelConfig>,
     run: &RunId,
     want: impl Fn(&RunState) -> bool,
 ) -> RunState {
@@ -153,11 +160,16 @@ async fn the_manager_answers_and_the_preamble_heads_the_first_prompt_only() {
     });
     let ch = channel(config, connector, dir.path());
 
-    let reply = ch.tell_manager(&project(), "construis la page").await.unwrap();
+    let reply = ch
+        .tell_manager(&project(), "construis la page")
+        .await
+        .unwrap();
     assert_eq!(reply.content, "réponse");
     assert_eq!(reply.actions, None);
 
-    ch.tell_manager(&project(), "et le formulaire ?").await.unwrap();
+    ch.tell_manager(&project(), "et le formulaire ?")
+        .await
+        .unwrap();
     let prompts = log.lock().unwrap();
     assert!(prompts[0].starts_with("SKILL MANAGER\n\n---\n\n"));
     assert_eq!(prompts[1], "et le formulaire ?", "no preamble twice");
@@ -182,7 +194,10 @@ async fn a_wedged_manager_is_evicted_and_the_next_message_respawns() {
 
     let err = ch.tell_manager(&project(), "allo").await;
     assert!(err.is_err(), "a wedged manager must not hang the caller");
-    assert!(wedged.load(Ordering::SeqCst), "the wedged process is killed");
+    assert!(
+        wedged.load(Ordering::SeqCst),
+        "the wedged process is killed"
+    );
 
     // Next message: a fresh session answers.
     let reply = ch.tell_manager(&project(), "allo").await.unwrap();
@@ -280,4 +295,92 @@ async fn cancelling_an_unknown_run_is_fine() {
     let (dir, config) = fixture();
     let ch = channel(config, FakeConnector::default(), dir.path());
     ch.cancel_run(&RunId::new("ghost").unwrap()).await.unwrap();
+}
+
+/// A routing change applies to NEW sessions only: the live manager
+/// keeps its provider until evicted.
+#[tokio::test]
+async fn a_routing_change_applies_after_eviction() {
+    use std::sync::RwLock;
+
+    #[derive(Clone)]
+    struct Switchable(std::sync::Arc<RwLock<String>>);
+    impl crate::channel::RoutingSource for Switchable {
+        fn command_for(&self, _role: &str) -> AgentCommand {
+            AgentCommand::new(self.0.read().unwrap().clone())
+        }
+    }
+
+    let (dir, config) = fixture();
+    let routing = Switchable(std::sync::Arc::new(RwLock::new("claude-agent-acp".into())));
+    let connector = FakeConnector::default();
+    let commands = connector.commands.clone();
+    let ch: AcpChannel<FakeConnector, RootDirs, _> = AcpChannel::new(
+        config,
+        connector,
+        RootDirs(dir.path().to_path_buf()),
+        routing.clone(),
+    );
+
+    ch.tell_manager(&project(), "allo").await.unwrap();
+    assert_eq!(commands.lock().unwrap().last().unwrap(), "claude-agent-acp");
+
+    // The user switches the manager to codex: the LIVE session does
+    // not move…
+    *routing.0.write().unwrap() = "codex-acp".into();
+    ch.tell_manager(&project(), "encore").await.unwrap();
+    assert_eq!(commands.lock().unwrap().last().unwrap(), "claude-agent-acp");
+
+    // …until eviction; the next message spawns under the new provider.
+    ch.evict_managers().await;
+    ch.tell_manager(&project(), "encore").await.unwrap();
+    assert_eq!(commands.lock().unwrap().last().unwrap(), "codex-acp");
+}
+
+/// The resolved project directory is what the agent spawns in — this is
+/// the E2E bug's regression test.
+#[tokio::test]
+async fn the_session_starts_in_the_project_directory() {
+    let (dir, config) = fixture();
+    let project_dir = dir.path().join("checkout");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    struct FixedDirs(PathBuf);
+    impl ProjectDirs for FixedDirs {
+        async fn manager_dir(&self, _p: &ProjectId) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+        async fn run_dir(&self, _r: &Run) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    let connector = FakeConnector::default();
+    let workspaces = connector.workspaces.clone();
+    let routing = config.clone();
+    let ch: AcpChannel<FakeConnector, FixedDirs, ChannelConfig> =
+        AcpChannel::new(config, connector, FixedDirs(project_dir.clone()), routing);
+
+    ch.tell_manager(&project(), "allo").await.unwrap();
+    assert_eq!(workspaces.lock().unwrap().as_slice(), &[project_dir]);
+}
+
+/// A project directory that doesn't exist is a clear error, before any
+/// spawn — never a 30-second timeout.
+#[tokio::test]
+async fn a_nonexistent_project_directory_fails_fast() {
+    let (dir, config) = fixture();
+    let connector = FakeConnector::default();
+    let workspaces = connector.workspaces.clone();
+    let missing = dir.path().join("never-created");
+    let routing = config.clone();
+    let ch = AcpChannel::new(config, connector, RootDirs(missing.clone()), routing);
+
+    let err = ch.tell_manager(&project(), "allo").await.unwrap_err();
+    assert!(err.to_string().contains("does not exist"), "{err}");
+    assert!(err.to_string().contains("never-created"), "{err}");
+    assert!(
+        workspaces.lock().unwrap().is_empty(),
+        "nothing was spawned for a bad cwd"
+    );
 }

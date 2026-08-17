@@ -21,9 +21,10 @@ pub enum AgentError {
     #[error("the prompt failed: {0}")]
     Prompt(String),
     /// A phase exceeded its configured budget. The process is killed rather
-    /// than left running (contract §3: no orphans).
+    /// than left running (contract §3: no orphans). The message names the
+    /// phase AND the working directory — a bare "timed out" is undebuggable.
     #[error("the agent timed out during {0}")]
-    Timeout(&'static str),
+    Timeout(String),
     /// The process died or closed the transport while we were waiting on it.
     #[error("the agent process is gone")]
     AgentGone,

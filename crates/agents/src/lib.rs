@@ -18,15 +18,20 @@
 //!   at runtime; everything above it is testable without a process.
 //! - [`channel`] — the `AgentChannel` implementation itself.
 
+mod auth;
 mod channel;
 mod config;
 mod error;
-mod preamble;
 mod policy;
+mod preamble;
 mod transport;
 mod updates;
 
-pub use channel::{AcpChannel, ProjectDirs, RootDirs, RunState};
+pub use auth::{
+    AgentAuthManager, AuthError, AuthProvider, AuthSessionView, AuthStatus, ProviderCommands,
+    ProviderStatus, DEFAULT_TTL,
+};
+pub use channel::{AcpChannel, ProjectDirs, RootDirs, RoutingSource, RunState, SharedRouting};
 pub use config::{AgentCommand, AgentTimeouts, ChannelConfig};
 pub use error::AgentError;
 pub use updates::{AgentUpdate, RunOutcome};

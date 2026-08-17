@@ -118,6 +118,31 @@ export interface Preview {
   alive: boolean;
 }
 
+export type AgentProvider = "claude" | "codex";
+
+export interface ProviderStatus {
+  authenticated: boolean;
+  detail: string | null;
+}
+
+export interface Role {
+  id: string;
+  label: string;
+}
+
+export type Routing = Record<"manager" | "architect" | "backend" | "frontend" | "reviewer", AgentProvider>;
+
+export interface AgentAuthSession {
+  session_id: string;
+  provider: AgentProvider;
+  status: "starting" | "waiting_for_input" | "validating" | "authenticated" | "failed" | "expired";
+  url: string | null;
+  input_required: boolean;
+  user_code: string | null;
+  hint: string | null;
+  error: string | null;
+}
+
 export interface Repo {
   full_name: string;
   description: string | null;
@@ -149,4 +174,29 @@ export const api = {
     request<Preview>(`/api/projects/${project}/preview`, { method: "POST" }),
   stopPreview: (project: string) =>
     request<void>(`/api/projects/${project}/preview`, { method: "DELETE" }),
+  agentAuthStart: (provider: AgentProvider) =>
+    request<AgentAuthSession>("/api/agent-auth/start", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    }),
+  agentAuthStatus: (id: string) => request<AgentAuthSession>(`/api/agent-auth/${id}`),
+  agentAuthStatusAll: () =>
+    request<Record<AgentProvider, ProviderStatus>>("/api/agent-auth/status"),
+  agentAuthDisconnect: (provider: AgentProvider) =>
+    request<ProviderStatus>("/api/agent-auth/disconnect", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    }),
+  roles: () => request<Role[]>("/api/roles"),
+  getRouting: () => request<Routing>("/api/settings/routing"),
+  putRouting: (routing: Routing) =>
+    request<Routing>("/api/settings/routing", {
+      method: "PUT",
+      body: JSON.stringify(routing),
+    }),
+  agentAuthCode: (id: string, code: string) =>
+    request<AgentAuthSession>(`/api/agent-auth/${id}/code`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
 };

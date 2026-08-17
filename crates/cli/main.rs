@@ -5,10 +5,13 @@
 //! `master.key`, the agent workspace. `/api/health` is the only open route;
 //! everything else needs the bearer token printed at startup (D9).
 
+mod secret;
+
 use clap::{Parser, Subcommand};
-use std::path::Path;
 use latoile_server::{ServerConfig, TOKEN_ENV};
+use std::io::IsTerminal;
 use std::net::IpAddr;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -35,6 +38,9 @@ enum Command {
     /// Print the token in effect, or how to set one — without starting
     /// anything.
     Token,
+
+    /// Manage vault secrets (the GitHub token lives here).
+    Secret(secret::SecretArgs),
 }
 
 #[derive(clap::Args, Clone)]
@@ -114,12 +120,38 @@ fn default_home() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Logs go to stderr, before anything can fail silently. `try_init`: a
+    // test binary may already have a subscriber — never panic on it.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,latoile=debug")),
+        )
+        .try_init()
+        .ok();
+
     let cli = Cli::parse();
     let home = cli.home.unwrap_or_else(default_home);
 
     match cli.command {
         Some(Command::Token) => token(),
         Some(Command::Serve(args)) => serve(home, args).await,
+        Some(Command::Secret(args)) => match args.action {
+            secret::SecretCommand::Set { name } => {
+                let mut stderr = std::io::stderr();
+                if std::io::stdin().is_terminal() {
+                    secret::secret_set_interactive(&home, args.db, &name, &mut stderr).await
+                } else {
+                    let mut stdin = std::io::stdin().lock();
+                    secret::secret_set(&home, args.db, &name, &mut stdin, &mut stderr).await
+                }
+            }
+            secret::SecretCommand::List => {
+                let mut stdout = std::io::stdout();
+                secret::secret_list(&home, args.db, &mut stdout).await
+            }
+        },
         None => serve(home, ServeArgs::default()).await,
     }
 }
@@ -178,9 +210,20 @@ async fn serve(home: PathBuf, args: ServeArgs) -> Result<(), Box<dyn std::error:
 }
 
 async fn shutdown() {
-    if tokio::signal::ctrl_c().await.is_ok() {
-        eprintln!("\nlatoile: shutting down…");
+    // SIGINT (Ctrl-C) or SIGTERM: either way we shut down cleanly so
+    // supervised children (agents, dev servers, login challenges) are
+    // reaped instead of orphaned.
+    let sigterm = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM handler")
+            .recv()
+            .await;
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm => {}
     }
+    eprintln!("\nlatoile: shutting down…");
 }
 
 #[cfg(test)]
@@ -197,14 +240,7 @@ mod tests {
     #[test]
     fn serve_takes_port_bind_and_home() {
         let cli = Cli::try_parse_from([
-            "latoile",
-            "--home",
-            "/tmp/lt",
-            "serve",
-            "--port",
-            "9999",
-            "--bind",
-            "0.0.0.0",
+            "latoile", "--home", "/tmp/lt", "serve", "--port", "9999", "--bind", "0.0.0.0",
         ])
         .unwrap();
         assert_eq!(cli.home.as_deref(), Some(std::path::Path::new("/tmp/lt")));
@@ -262,7 +298,9 @@ mod tests {
         assert_eq!(token, "smoke");
         assert_eq!(source, "config");
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             latoile_server::serve(listener, router, std::future::pending::<()>()).await
@@ -301,5 +339,22 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&manager).unwrap(), "mine");
 
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn secret_subcommand_parses() {
+        let cli = Cli::try_parse_from(["latoile", "secret", "set", "github_token"]).unwrap();
+        match cli.command {
+            Some(Command::Secret(args)) => {
+                assert!(matches!(args.action, secret::SecretCommand::Set { .. }));
+                if let secret::SecretCommand::Set { name } = args.action {
+                    assert_eq!(name, "github_token");
+                }
+                assert!(args.db.is_none());
+            }
+            _ => panic!("expected secret"),
+        }
+        let cli = Cli::try_parse_from(["latoile", "--home", "/tmp/lt", "secret", "list"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Secret(_))));
     }
 }

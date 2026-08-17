@@ -4,7 +4,7 @@
 //!
 //! `async fn` in traits is native (Rust 1.75+): a future is not a runtime, so
 //! `core` stays dependency-free while adapters stay async. No `async-trait`
-//! crate, no tokio. The `async_fn_in_trait` lint is allowed at the module
+//! crate, no async runtime. The `async_fn_in_trait` lint is allowed at the module
 //! declaration (see lib.rs): LaToile is a single binary and every adapter is
 //! `Send` by construction — if that ever changes, switch to `trait_variant`.
 //!
