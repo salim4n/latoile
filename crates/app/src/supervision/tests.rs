@@ -3,8 +3,8 @@
 use super::*;
 use crate::store::test_fixtures;
 use latoile_core::ids::{RoleId, TaskId};
-use latoile_core::ports::PermissionRequest;
-use latoile_core::{Run, TriggeredBy};
+use latoile_core::ports::{PermissionRequest, VisualComparisonStore};
+use latoile_core::{Run, TriggeredBy, VisualComparison, VisualComparisonStatus};
 
 /// A run mid-flight (Running) on the fixture task, which is InProgress.
 async fn store_with_running_run() -> (Store, Run, Task) {
@@ -27,6 +27,36 @@ fn permission() -> PermissionRequest {
     PermissionRequest {
         id: "perm-1".into(),
         summary: "Execute a command inside the project workspace".into(),
+    }
+}
+
+fn passed_visual_evidence(run: &RunId) -> VisualComparison {
+    VisualComparison {
+        id: latoile_core::VisualComparisonId::new(format!("visual:{}:home", run.as_str())).unwrap(),
+        spec_version_id: latoile_core::SpecVersionId::new(test_fixtures::SPEC).unwrap(),
+        project_id: test_fixtures::PROJECT.clone(),
+        run_id: run.clone(),
+        comparison_id: "home-default".into(),
+        manifest_digest: "c".repeat(64),
+        package_commit_sha: "1".repeat(40),
+        baseline_png_digest: "d".repeat(64),
+        status: VisualComparisonStatus::Passed,
+        changed_pixels: 0,
+        total_pixels: 100,
+        pixel_ratio_micros: 0,
+        max_geometry_delta_milli: 0,
+        accessibility_changes: 0,
+        render_png_digest: Some("1".repeat(64)),
+        pixel_diff_digest: Some("2".repeat(64)),
+        heatmap_png_digest: Some("3".repeat(64)),
+        geometry_diff_digest: Some("4".repeat(64)),
+        accessibility_diff_digest: Some("5".repeat(64)),
+        environment_digest: Some("6".repeat(64)),
+        browser_version: Some("Chrome/151".into()),
+        font_fingerprint: Some("7".repeat(64)),
+        failure_code: None,
+        failure_message: None,
+        recovery_action: None,
     }
 }
 
@@ -307,6 +337,10 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
         .await
         .unwrap()
         .is_empty());
+    let evidence = passed_visual_evidence(&executor.id);
+    VisualComparisonStore::save(&store, &evidence)
+        .await
+        .unwrap();
 
     let reviewer = start_review(
         &store,
@@ -318,11 +352,25 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
     .await
     .unwrap();
     let output = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "verdict": "approve",
         "summary": "Le changement respecte la tâche et la spec.",
         "findings": [],
-        "suggested_follow_ups": []
+        "suggested_follow_ups": [],
+        "visual_evidence": {
+            "applicability": "required",
+            "references": [{
+                "evidence_id": evidence.id.as_str(),
+                "manifest_digest": evidence.manifest_digest,
+                "baseline_png_digest": evidence.baseline_png_digest,
+                "render_png_digest": evidence.render_png_digest,
+                "pixel_diff_digest": evidence.pixel_diff_digest,
+                "heatmap_png_digest": evidence.heatmap_png_digest,
+                "geometry_diff_digest": evidence.geometry_diff_digest,
+                "accessibility_diff_digest": evidence.accessibility_diff_digest,
+                "environment_digest": evidence.environment_digest,
+            }]
+        }
     })
     .to_string();
     let applied = apply(&store, &reviewer.id, &Observed::finished(output))
@@ -340,8 +388,11 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
     assert_eq!(pending[0].run_id, reviewer.id);
     assert_eq!(pending[0].kind, ApprovalKind::Review);
     let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
-    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["schema_version"], 2);
     assert_eq!(payload["verdict"], "approve");
+    assert_eq!(payload["gate"]["trusted_v2"], true);
+    assert_eq!(payload["gate"]["approvable"], true);
+    assert_eq!(payload["reviewed_run_id"], executor.id.as_str());
 
     let again = apply(&store, &reviewer.id, &Observed::finished("ignored"))
         .await
@@ -479,6 +530,7 @@ async fn the_reviewer_is_dispatched_on_a_task_in_review() {
     .unwrap();
     assert_eq!(review.role_id.as_str(), "reviewer");
     assert_eq!(review.status, RunStatus::Running);
+    assert_eq!(review.reviewed_run_id.as_ref(), Some(&run.id));
     // The task itself stays in review — the human decides.
     let task = TaskStore::get(&store, &run.task_id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Review);

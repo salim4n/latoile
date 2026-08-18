@@ -36,6 +36,7 @@ run the paid, stateful real-provider canary.
 | 22 | Spec approval is immutable | Domain/app/agent/server/UI tests prove complete manifest metadata, Git/tree/content revalidation, drift refusal, atomic approval, exact-commit artifact rendering and pre-dispatch revalidation |
 | 23 | Visual baselines are real and deterministic | Capture/app/server/UI tests prove network-blocked Chromium capture, explicit readiness/selectors/masks, PNG + DOM + AX hashes, immutable repeat, actionable failure and pre-approval/pre-dispatch gates |
 | 24 | Live visual evidence is measured, not narrated | Capture/app/server tests prove exact loopback-only navigation, cleared browser environment, approved masks, real render/diff/heatmap artifacts, immutable hashes, fixed thresholds, invalid capture and a known 16 px regression |
+| 25 | Reviewer V2 cannot replay or invent evidence | App/server tests bind one immutable reviewed run, match the full current project/spec evidence set and hashes, canonicalize failed gates, and refuse grants for V1 or non-approvable V2 payloads |
 
 ## Anti-drift rules
 

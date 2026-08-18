@@ -36,6 +36,14 @@ to the exact supervised `127.0.0.1:<preview-port>` origin and blocks HTTPS,
 file, FTP and every WebSocket. A browser/font mismatch records an invalid,
 actionable comparison rather than calculating a misleading similarity score.
 
+The subsequent Reviewer run is permanently bound to that executor run. Its V2
+response must echo the exact evidence ids and hashes shown in the prompt; the
+server reloads project, approved spec and comparison rows before writing the
+approval. A missing, stale, cross-project, hash-mismatched, invalid or blocking
+set yields `changes_requested` and the grant endpoint refuses it. Historic V1
+approval records remain visible after migration but cannot be granted as
+trusted evidence; relaunch the Reviewer to obtain V2.
+
 Store the GitHub token through stdin, never as an argument:
 
 ```sh

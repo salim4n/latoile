@@ -32,6 +32,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D16 | Spec approval revalidates a complete machine-readable visual manifest and exact Git/content provenance; approval, supersession, task binding and event are one transaction | Trust validation performed only when the Architect originally generated the draft |
 | D17 | Every required P0 mockup is rendered by isolated Chromium before approval; immutable PNG, DOM geometry, accessibility and environment hashes gate approval and dispatch | Ad-hoc screenshots or Reviewer self-reported measurements |
 | D18 | A finished frontend run is captured from the exact supervised loopback route and compared to its immutable baseline; fixed server thresholds classify real pixel, geometry and accessibility evidence | Reviewer prose, manual screenshots or an unrestricted browser session |
+| D19 | Reviewer V2 is immutably bound to one executor run; only exact server evidence ids/hashes for the current project/spec can produce an approvable gate | Self-reported frames, stale evidence reuse or trusting a model-supplied status |
 
 ## 3. Domain model
 
@@ -111,6 +112,13 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     changes and environment are immutable and hashed. Domain-owned thresholds
     classify `invalid`, `blocking`, `reservation` or `passed`; invalid evidence
     carries no fabricated pixel metrics.
+21. A Reviewer run has one immutable `reviewed_run_id`. V2 output declares
+    visual applicability and echoes exact evidence ids/hashes, but cannot emit
+    trusted status, metrics or gate fields. The server matches the complete set
+    against that run, current project and approved task spec, reconstructs the
+    payload from stored evidence and canonicalizes every failed gate to
+    `changes_requested`. Only trusted approvable V2 payloads may be granted;
+    historic V1 approvals stay readable and non-grantable.
 
 ### 3.3 Domain events
 
@@ -124,7 +132,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | `architect` | complete content-addressed `app-architect-brainstorm` bundle | persistent read-only discovery, then isolated package run | durable Q/A + verified `SpecVersion` and static `design/v…/` package |
 | `backend` | `backend-engineer` | ephemeral ACP run | commits + sanitized evidence |
 | `frontend` | `frontend-engineer` | ephemeral ACP run | commits + sanitized evidence |
-| `reviewer` | `code-reviewer` | ephemeral ACP run | structured verdict → human `Approval` |
+| `reviewer` | `code-reviewer` | ephemeral ACP run bound to one executor | V2 judgement + exact evidence references → server-gated human `Approval` |
 
 ## 4. Data model (ER)
 
@@ -249,6 +257,7 @@ erDiagram
         text base_sha "nullable"
         text head_sha "nullable"
         text artifacts "bounded sanitized JSON"
+        text reviewed_run_id FK "immutable; Reviewer only"
         text started_at
         text ended_at
     }
@@ -314,7 +323,7 @@ erDiagram
     }
 ```
 
-Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one delivery per project; one immutable visual baseline per spec/comparison and one immutable complete comparison per run/scenario; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0010`).
+Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one immutable review-subject edge per Reviewer run; one delivery per project; one immutable visual baseline per spec/comparison and one immutable complete comparison per run/scenario; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0011`).
 
 ## 5. Architecture
 
@@ -376,8 +385,9 @@ sequenceDiagram
     C-->>A: render + pixel diff + heatmap + DOM/AX changes + environment
     A->>DB: immutable VISUAL_COMPARISON + server threshold status
     A->>R: task + approved spec + trusted visual ids/hashes + Git evidence
-    R-->>A: structured latoile-review verdict
-    A->>DB: reviewer RUN finished + review APPROVAL requested
+    R-->>A: V2 judgement + exact evidence ids/hashes
+    A->>A: match run/project/spec/full hash set; rebuild trusted metrics; gate
+    A->>DB: reviewer RUN finished + gated review APPROVAL requested
     A-->>You: SSE ApprovalRequested (Reviewer evidence attached)
     You->>S: POST /approvals/:id granted
     A->>DB: TASK → done
@@ -432,7 +442,7 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 
 1. **Inbox** — pending approvals + blocked runs
 2. **Project** — Manager chat / task board / preview (mobile viewport default, desktop toggle)
-3. **Review** (P0) — verdict, findings, diff excerpt and structured spec/render comparison supplied by the Reviewer
+3. **Review** (P0) — verdict, findings, diff excerpt and immutable spec/render evidence supplied and gated by the server
 4. **New project** — pick repo → initial brief to the persistent Architect discovery
 5. **Settings** — provider connections + fixed-role provider routing
 

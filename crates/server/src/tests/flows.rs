@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use latoile_agents::{RunOutcome, RunReport, RunState};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RunId, SpecVersionId, TaskId};
-use latoile_core::ports::{ApprovalStore, EventLog, RunStore, SpecStore, TaskStore};
+use latoile_core::ports::{
+    ApprovalStore, EventLog, RunStore, SpecStore, TaskStore, VisualComparisonStore,
+};
 use latoile_core::{Approval, ApprovalKind, Preview, PreviewId, SpecVersion, Task};
 use latoile_core::{RoleId, TriggeredBy};
 use tower::ServiceExt;
@@ -63,6 +65,7 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
         TriggeredBy::Manager,
     );
     reviewer.begin().unwrap();
+    reviewer.bind_review_subject(executor.id.clone()).unwrap();
     reviewer.finish("review complete").unwrap();
     RunStore::save(store, &reviewer).await.unwrap();
 
@@ -71,14 +74,26 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
         reviewer.id,
         ApprovalKind::Review,
         serde_json::json!({
-            "schema_version": 1,
-            "verdict": "changes_requested",
-            "summary": "Le focus clavier doit être corrigé.",
+            "schema_version": 2,
+            "reviewed_run_id": executor.id.as_str(),
+            "verdict": "approve_with_reservations",
+            "summary": "Le rendu est approuvable avec une réserve clavier.",
             "findings": [{
-                "severity": "blocking",
+                "severity": "reservation",
                 "text": "Focus clavier absent.",
                 "location": "web/src/Login.tsx:42"
-            }]
+            }],
+            "suggested_follow_ups": ["Corriger le focus clavier."],
+            "visual_evidence": {
+                "applicability": "required",
+                "references": []
+            },
+            "gate": {
+                "trusted_v2": true,
+                "approvable": true,
+                "code": "trusted",
+                "message": "Verdict lié aux preuves serveur."
+            }
         })
         .to_string(),
     );
@@ -352,12 +367,35 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     let second_reviewer = second_reviewer.expect("corrected work must dispatch a new Reviewer");
     assert_eq!(second_reviewer.status, latoile_core::RunStatus::Running);
 
+    let comparisons = VisualComparisonStore::list_for_run(
+        &store,
+        second_reviewer.reviewed_run_id.as_ref().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(comparisons.len(), 1);
+    let evidence = &comparisons[0];
+
     let corrected_review = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "verdict": "approve",
         "summary": "Le focus et le test clavier sont conformes.",
         "findings": [],
-        "suggested_follow_ups": []
+        "suggested_follow_ups": [],
+        "visual_evidence": {
+            "applicability": "required",
+            "references": [{
+                "evidence_id": evidence.id.as_str(),
+                "manifest_digest": evidence.manifest_digest,
+                "baseline_png_digest": evidence.baseline_png_digest,
+                "render_png_digest": evidence.render_png_digest,
+                "pixel_diff_digest": evidence.pixel_diff_digest,
+                "heatmap_png_digest": evidence.heatmap_png_digest,
+                "geometry_diff_digest": evidence.geometry_diff_digest,
+                "accessibility_diff_digest": evidence.accessibility_diff_digest,
+                "environment_digest": evidence.environment_digest,
+            }]
+        }
     })
     .to_string();
     agents.run_states.lock().unwrap().insert(
@@ -451,11 +489,9 @@ async fn approving_a_spec_marks_the_project_specced() {
         .await
         .unwrap()
         .to_bytes();
-    assert!(
-        String::from_utf8(gallery.to_vec())
-            .unwrap()
-            .contains("stub artifact gallery.html")
-    );
+    assert!(String::from_utf8(gallery.to_vec())
+        .unwrap()
+        .contains("stub artifact gallery.html"));
 
     let captured = app
         .clone()
@@ -639,13 +675,11 @@ async fn the_roles_route_lists_the_seeded_team() {
         .unwrap();
     let roles = body_json(response).await;
     assert_eq!(roles.as_array().unwrap().len(), 5);
-    assert!(
-        roles
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| r["id"] == "manager")
-    );
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["id"] == "manager"));
 }
 
 /// The documented D9 exception: `?token=` works for preview paths only.

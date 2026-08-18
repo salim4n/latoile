@@ -296,13 +296,18 @@ async fn review_context(
             .iter()
             .map(|evidence| {
                 format!(
-                    "- evidence `{}` scenario `{}` status `{}`; baseline {}; render {}; heatmap {}; pixels {}/{} ({} ppm); geometry max {} milli-px; accessibility changes {}; failure {}",
+                    "- evidence_id `{}` scenario `{}` status `{}`; manifest_digest `{}`; baseline_png_digest `{}`; render_png_digest `{}`; pixel_diff_digest `{}`; heatmap_png_digest `{}`; geometry_diff_digest `{}`; accessibility_diff_digest `{}`; environment_digest `{}`; pixels {}/{} ({} ppm); geometry max {} milli-px; accessibility changes {}; failure {}",
                     evidence.id.as_str(),
                     evidence.comparison_id,
                     evidence.status.as_str(),
+                    evidence.manifest_digest,
                     evidence.baseline_png_digest,
                     evidence.render_png_digest.as_deref().unwrap_or("none"),
+                    evidence.pixel_diff_digest.as_deref().unwrap_or("none"),
                     evidence.heatmap_png_digest.as_deref().unwrap_or("none"),
+                    evidence.geometry_diff_digest.as_deref().unwrap_or("none"),
+                    evidence.accessibility_diff_digest.as_deref().unwrap_or("none"),
+                    evidence.environment_digest.as_deref().unwrap_or("none"),
                     evidence.changed_pixels,
                     evidence.total_pixels,
                     evidence.pixel_ratio_micros,

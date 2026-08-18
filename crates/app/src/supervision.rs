@@ -8,13 +8,15 @@
 //! its task to `review` and the reviewer is dispatched ([`start_review`],
 //! §5.2).
 
-use crate::review_result::{review_failure_payload, review_payload};
+use crate::review_result::{review_failure_payload, trusted_review_payload, ReviewTrustContext};
 use crate::store::Store;
 use crate::use_cases::UseCaseError;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RoleId, RunId, TaskId};
 use latoile_core::ports::PermissionRequest;
-use latoile_core::ports::{AgentChannel, ApprovalStore, EventLog, RunStore, TaskStore};
+use latoile_core::ports::{
+    AgentChannel, ApprovalStore, EventLog, RunStore, SpecStore, TaskStore, VisualComparisonStore,
+};
 use latoile_core::{Approval, ApprovalKind, Run, RunStatus, Task, TaskStatus, TriggeredBy};
 
 /// What the channel says about a run the store believes is active.
@@ -71,7 +73,8 @@ pub enum Step {
     DispatchReviewer,
     /// Create the human approval from a terminal Reviewer result.
     RequestReviewApproval {
-        payload: String,
+        output: String,
+        failure_reason: Option<String>,
     },
     RequestPermissionApproval {
         request: PermissionRequest,
@@ -245,7 +248,8 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
             ));
             if run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review {
                 steps.push(Step::RequestReviewApproval {
-                    payload: review_payload(summary),
+                    output: summary.clone(),
+                    failure_reason: None,
                 });
                 steps.push(Step::Journal(
                     EventKind::ApprovalRequested,
@@ -302,7 +306,8 @@ fn finish_failed_review(run: &Run, task: &Task, steps: &mut Vec<Step>, reason: &
     if !steps.is_empty() && run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review
     {
         steps.push(Step::RequestReviewApproval {
-            payload: review_failure_payload(reason),
+            output: String::new(),
+            failure_reason: Some(reason.to_string()),
         });
         steps.push(Step::Journal(
             EventKind::ApprovalRequested,
@@ -386,12 +391,19 @@ pub async fn apply(
             Step::SubmitForReview => task.submit_for_review()?,
             Step::DispatchReviewer => reviewer_dispatch_requested = true,
             Step::RequeueTask => task.fail_run()?,
-            Step::RequestReviewApproval { payload } => {
+            Step::RequestReviewApproval {
+                output,
+                failure_reason,
+            } => {
                 // Persist the Reviewer's terminal state before exposing its
                 // approval. The deterministic id makes a retry an upsert,
                 // never a second decision card.
                 RunStore::save(store, &run).await?;
                 TaskStore::save(store, &task).await?;
+                let payload = match failure_reason {
+                    Some(reason) => review_failure_payload(&reason),
+                    None => gate_review_output(store, &run, &task, &output).await?,
+                };
                 let approval = Approval::new(
                     review_approval_id(&run.id)?,
                     run.id.clone(),
@@ -481,6 +493,48 @@ pub async fn apply(
     })
 }
 
+async fn gate_review_output(
+    store: &Store,
+    reviewer: &Run,
+    task: &Task,
+    output: &str,
+) -> Result<String, UseCaseError> {
+    let Some(reviewed_run_id) = reviewer.reviewed_run_id.as_ref() else {
+        return Ok(review_failure_payload(
+            "Reviewer V2 is not bound to an executor run; relaunch the review",
+        ));
+    };
+    let Some(reviewed) = RunStore::get(store, reviewed_run_id).await? else {
+        return Ok(review_failure_payload(
+            "the executor run bound to Reviewer V2 no longer exists",
+        ));
+    };
+    if reviewed.task_id != task.id
+        || reviewed.status != RunStatus::Finished
+        || reviewed.role_id.as_str() == "reviewer"
+    {
+        return Ok(review_failure_payload(
+            "Reviewer V2 subject is not a finished executor run on this task",
+        ));
+    }
+
+    let approved = SpecStore::approved_for_project(store, &task.project_id).await?;
+    let current_spec_id = approved
+        .as_ref()
+        .and_then(|spec| (task.spec_version_id.as_ref() == Some(&spec.id)).then_some(&spec.id));
+    let evidence = VisualComparisonStore::list_for_run(store, reviewed_run_id).await?;
+    Ok(trusted_review_payload(
+        output,
+        &ReviewTrustContext {
+            project_id: &task.project_id,
+            spec_version_id: current_spec_id,
+            reviewed_run_id,
+            visual_required: reviewed.role_id.as_str() == "frontend",
+            evidence: &evidence,
+        },
+    ))
+}
+
 fn review_approval_id(run_id: &RunId) -> Result<ApprovalId, UseCaseError> {
     Ok(ApprovalId::new(format!("review-{}", run_id.as_str()))?)
 }
@@ -515,8 +569,21 @@ pub async fn start_review<A: AgentChannel>(
         role,
         TriggeredBy::Manager,
     );
+    let subject = RunStore::get(store, finished_run)
+        .await?
+        .ok_or(UseCaseError::NotFound("finished run"))?;
+    if subject.task_id != task.id
+        || subject.status != RunStatus::Finished
+        || subject.role_id.as_str() == "reviewer"
+    {
+        return Err(latoile_core::DomainError::Invariant(
+            "a review subject must be a finished executor run on the same task",
+        )
+        .into());
+    }
+    run.bind_review_subject(subject.id)?;
     let prompt = format!(
-        "Review the changes produced by run {} on task {:?}.\n\n{}\n\nReturn exactly one fenced `latoile-review` JSON block conforming to schema_version 1.",
+        "Review the changes produced by run {} on task {:?}.\n\n{}\n\nReturn exactly one fenced `latoile-review` JSON block conforming to schema_version 2. Required fields: schema_version, verdict, summary, findings, suggested_follow_ups, visual_evidence. For a frontend run set visual_evidence.applicability to `required` and echo every server evidence id plus manifest, baseline, render, pixel-diff, heatmap, geometry, accessibility and environment digest exactly. For a non-visual run set it to `not_applicable` with an empty references array. Never emit status, metrics, target/render frames or a trust gate: the server owns those facts.",
         finished_run.as_str(),
         task.title,
         if context.is_empty() { "(no execution context available)" } else { context },

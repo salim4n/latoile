@@ -80,6 +80,12 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   blocked. The server stores immutable render, pixel diff, heatmap, DOM and
   accessibility changes plus environment hashes. Fixed domain thresholds —
   never Reviewer prose — classify invalid, blocking, reservation or passed.
+- Every Reviewer run stores one immutable `reviewed_run_id`. Reviewer V2 may
+  cite only the exact server evidence set for that finished executor run and
+  current project/spec, with every artifact hash unchanged. The server rebuilds
+  status and metrics from SQLite, canonicalizes failed gates to
+  `changes_requested`, and permits a grant only when `trusted_v2` and
+  `approvable` are both true. Legacy V1 payloads remain readable but untrusted.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked
@@ -111,7 +117,8 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Data fetching only through the transport module (generated client or hooks); no direct `fetch` in components.
 - The bearer-aware SSE reader is confined to `events.ts`, parses frames without
   casts and exposes only event kind/payload strings. External Reviewer JSON is
-  runtime-validated by `reviewPayload.ts` and degrades safely when malformed.
+  runtime-validated by `reviewPayload.ts`; only its V2 server gate can enable
+  approval, while malformed and legacy payloads degrade safely.
 - The owner sees structured package findings and the exact static gallery from
   the pinned commit before the approval action becomes available.
 - Baseline capture starts automatically after immutable validation. The owner

@@ -96,12 +96,13 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Executor supervision with bounded Git evidence and fail-closed ACP permissions
 - [x] Supervised live preview with auto-reload
 - [x] Reviewer-before-human flow, corrective runs and audited decisions
+- [x] Reviewer V2 bound to exact server-produced visual evidence ids and hashes
 - [x] Review screen with verdict, findings, diff and spec/render comparison
 - [x] Owner-controlled push, remote SHA verification and idempotent Pull Request
 - [x] Opt-in real-provider V1 vertical-slice canary
 - [x] Blocking startup recovery, preview health reconciliation, paired backup/restore and release smoke
 
-Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) distinguish shipped trusted capture evidence from the pending Reviewer V2 binding and decision-grade artifact UI, alongside fresh Manager context assembly and project status promotion.
+Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) distinguish shipped trusted capture and Reviewer V2 gating from the pending decision-grade artifact UI, alongside fresh Manager context assembly and project status promotion.
 
 ## Contributing
 

@@ -455,3 +455,52 @@ Authenticated routes expose comparison metadata, render and heatmap bytes.
 + Reviewers and UI consumers receive stable ids and hashes, not self-reported frames.
 + Missing routes, selectors, browsers or environment parity remain actionable and non-reviewable.
 − Live evidence requires a ready loopback preview and the same Chromium/font runtime as approval.
+
+---
+
+# ADR-014 — Bind Reviewer V2 to one server-owned evidence set
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+Passing trusted ids to a Reviewer prompt is insufficient if the response may
+substitute an older id, alter a digest, omit a failing scenario or self-report
+an approvable status. Inferring the executor from task chronology is also
+ambiguous after corrective runs. Existing V1 approvals contain synthetic
+target/render frames and must remain readable without gaining V2 trust.
+
+## Decision
+
+Every Reviewer run stores one immutable `reviewed_run_id` foreign key before
+ACP dispatch. V2 output contains judgement plus an explicit visual
+applicability decision and exact evidence ids/hashes; it has no model-writable
+status, metric or gate field. On termination, LaToile reloads the bound
+finished executor, task, current approved spec and complete comparison set.
+It rejects any missing, duplicate, unknown, stale, cross-project, wrong-run,
+wrong-spec or hash-mismatched reference, then reconstructs statuses and metrics
+from server rows.
+
+Frontend evidence that is missing, invalid or blocking is non-approvable.
+Server reservations must be acknowledged by a reservation verdict. Non-visual
+runs must explicitly declare `not_applicable` with no references. Every failed
+gate is stored as `changes_requested` with an actionable blocking finding, and
+the grant use case independently requires a trusted, approvable V2 envelope.
+V1 rows are not rewritten and never pass that check.
+
+## Rejected alternatives
+
+- Trust ids mentioned in the prompt: the model can omit or alter them.
+- Infer the reviewed run from the latest task run: retries and corrections make chronology unsafe.
+- Let the Reviewer emit status/metrics: recreates self-reported visual truth.
+- Upgrade V1 rows in place: would falsely confer trust without server evidence.
+- Hide malformed or failed reviews: removes the recovery path from the owner.
+
+## Consequences
+
++ A review approval is cryptographically and relationally tied to the exact run and spec evidence.
++ Complete blocking evidence stays trusted evidence while remaining impossible to approve.
++ Backend and other non-visual work remains reviewable through an explicit applicability branch.
++ Migration preserves audit history without presenting legacy frames as trusted capture.
+− Legacy pending reviews must be rerun before they can be granted.

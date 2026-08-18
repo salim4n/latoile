@@ -3,6 +3,7 @@
 //! permission approvals only record the decision.
 
 use super::UseCaseError;
+use crate::review_result::review_payload_is_approvable;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, TaskId};
 use latoile_core::ports::{ApprovalStore, EventLog, RunStore, TaskStore};
@@ -73,6 +74,13 @@ impl<A: ApprovalStore, R: RunStore, T: TaskStore, E: EventLog> GrantApproval<A, 
         // 3. Domain. `grant` is only valid from pending (guaranteed above);
         // a review approval then drives the task to `done`, and the domain
         // refuses if the task is not in review.
+        if approval.kind == ApprovalKind::Review && !review_payload_is_approvable(&approval.payload)
+        {
+            return Err(latoile_core::DomainError::Invariant(
+                "only a trusted and approvable Reviewer V2 verdict can be granted",
+            )
+            .into());
+        }
         approval.grant_with_comment(comment)?;
         let mut completed = None;
         if approval.kind == ApprovalKind::Review {
@@ -135,6 +143,28 @@ mod tests {
     use crate::store::test_fixtures;
     use latoile_core::{ApprovalStatus, TaskStatus};
 
+    fn approvable_review_payload(reviewed_run: &latoile_core::RunId) -> String {
+        serde_json::json!({
+            "schema_version": 2,
+            "reviewed_run_id": reviewed_run.as_str(),
+            "verdict": "approve",
+            "summary": "Le verdict et ses preuves ont passé le gate serveur.",
+            "findings": [],
+            "suggested_follow_ups": [],
+            "visual_evidence": {
+                "applicability": "not_applicable",
+                "references": []
+            },
+            "gate": {
+                "trusted_v2": true,
+                "approvable": true,
+                "code": "trusted",
+                "message": "Preuves exactes."
+            }
+        })
+        .to_string()
+    }
+
     /// A granted review approval drives its task to `done`.
     #[tokio::test]
     async fn granting_a_review_approval_completes_the_task() {
@@ -157,7 +187,7 @@ mod tests {
             ApprovalId::new("a1").unwrap(),
             run.id.clone(),
             ApprovalKind::Review,
-            "{}".into(),
+            approvable_review_payload(&run.id),
         );
         ApprovalStore::save(&store, &approval).await.unwrap();
 
@@ -170,7 +200,11 @@ mod tests {
         assert_eq!(out.approval.status, ApprovalStatus::Granted);
         assert_eq!(out.task_completed, Some(task.id.clone()));
         assert_eq!(
-            TaskStore::get(&store, &task.id).await.unwrap().unwrap().status,
+            TaskStore::get(&store, &task.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
             TaskStatus::Done
         );
         assert!(store.list_pending().await.unwrap().is_empty());
@@ -218,7 +252,7 @@ mod tests {
             ApprovalId::new("a1").unwrap(),
             run.clone(),
             ApprovalKind::Review,
-            "{}".into(),
+            approvable_review_payload(&run),
         );
         ApprovalStore::save(&store, &approval).await.unwrap();
 
@@ -241,5 +275,61 @@ mod tests {
             .execute(&ApprovalId::new("ghost").unwrap())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_v1_and_non_approvable_v2_reviews_cannot_be_granted() {
+        for payload in [
+            serde_json::json!({
+                "schema_version": 1,
+                "verdict": "approve",
+                "summary": "Legacy",
+                "findings": [],
+                "suggested_follow_ups": []
+            })
+            .to_string(),
+            serde_json::json!({
+                "schema_version": 2,
+                "reviewed_run_id": "r1",
+                "verdict": "changes_requested",
+                "summary": "Capture bloquante.",
+                "findings": [{
+                    "severity": "blocking",
+                    "text": "Écart visuel.",
+                    "location": "visual:home"
+                }],
+                "suggested_follow_ups": [],
+                "visual_evidence": {
+                    "applicability": "required",
+                    "references": []
+                },
+                "gate": {
+                    "trusted_v2": false,
+                    "approvable": false,
+                    "code": "visual_evidence_blocking",
+                    "message": "Corriger le rendu."
+                }
+            })
+            .to_string(),
+        ] {
+            let (store, run) = test_fixtures::store_with_run().await;
+            let approval = Approval::new(
+                ApprovalId::new("untrusted").unwrap(),
+                run,
+                ApprovalKind::Review,
+                payload,
+            );
+            ApprovalStore::save(&store, &approval).await.unwrap();
+            let uc = GrantApproval::new(store.clone(), store.clone(), store.clone(), store.clone());
+            assert!(uc.execute(&approval.id).await.is_err());
+            assert_eq!(
+                ApprovalStore::get(&store, &approval.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                ApprovalStatus::Pending
+            );
+        }
     }
 }
