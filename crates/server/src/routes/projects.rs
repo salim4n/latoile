@@ -21,7 +21,7 @@ pub struct CreateProjectBody {
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProjectDto>>, ApiError> {
-    let projects = state.store.list().await?;
+    let projects = state.store.list_project_rows().await?;
     Ok(Json(projects.iter().map(ProjectDto::from).collect()))
 }
 

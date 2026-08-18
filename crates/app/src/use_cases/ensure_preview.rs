@@ -54,7 +54,7 @@ impl<PJ: ProjectStore, PV: PreviewStore, S: PreviewSupervisor, E: EventLog>
             Some(mut preview) => {
                 let (pid, port) = self
                     .supervisor
-                    .ensure(&preview, &project.dev_command)
+                    .ensure(&preview, &project.dev_command, &project.local_path)
                     .await?;
                 preview.refresh()?;
                 preview.port = port;
@@ -71,7 +71,7 @@ impl<PJ: ProjectStore, PV: PreviewStore, S: PreviewSupervisor, E: EventLog>
                 );
                 let (pid, port) = self
                     .supervisor
-                    .ensure(&preview, &project.dev_command)
+                    .ensure(&preview, &project.dev_command, &project.local_path)
                     .await?;
                 preview.port = port;
                 preview.mark_ready(pid)?;
@@ -113,7 +113,13 @@ mod tests {
     struct FakeSupervisor;
 
     impl PreviewSupervisor for FakeSupervisor {
-        async fn ensure(&self, _p: &Preview, _cmd: &str) -> PortResult<(u32, u16)> {
+        async fn ensure(
+            &self,
+            _p: &Preview,
+            _cmd: &str,
+            working_dir: &str,
+        ) -> PortResult<(u32, u16)> {
+            assert_eq!(working_dir, "/srv/latoile/mon-app");
             Ok((4242, 4100))
         }
         async fn stop(&self, _p: &Preview) -> PortResult<()> {
@@ -122,12 +128,7 @@ mod tests {
     }
 
     fn use_case(store: &Store) -> EnsurePreview<Store, Store, FakeSupervisor, Store> {
-        EnsurePreview::new(
-            store.clone(),
-            store.clone(),
-            FakeSupervisor,
-            store.clone(),
-        )
+        EnsurePreview::new(store.clone(), store.clone(), FakeSupervisor, store.clone())
     }
 
     #[tokio::test]
@@ -163,7 +164,10 @@ mod tests {
         assert!(!second.recycled);
         assert_eq!(second.preview, first.preview);
         // No second event.
-        assert_eq!(store.since(&test_fixtures::PROJECT, 0).await.unwrap().len(), 1);
+        assert_eq!(
+            store.since(&test_fixtures::PROJECT, 0).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]

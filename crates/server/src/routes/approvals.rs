@@ -9,11 +9,10 @@ use axum::extract::{Path, State};
 use axum::Json;
 use latoile_app::use_cases::{GrantApproval, RejectApproval};
 use latoile_core::ids::ApprovalId;
-use latoile_core::ports::ApprovalStore;
 use serde::Deserialize;
 
 pub async fn pending(State(state): State<AppState>) -> Result<Json<Vec<ApprovalDto>>, ApiError> {
-    let approvals = state.store.list_pending().await?;
+    let approvals = state.store.list_pending_for_inbox().await?;
     Ok(Json(approvals.iter().map(ApprovalDto::from).collect()))
 }
 

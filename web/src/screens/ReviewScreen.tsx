@@ -1,8 +1,5 @@
-// The review screen (P0 signature): the verdict card and the sticky
-// Approve / Request-changes bar. The mockup's diff and mockup-vs-render
-// frames need reviewer output that only the orchestrator pass produces —
-// V1 renders them when the payload carries them, and says so when it
-// doesn't.
+// LaToile's human signature point. The visual blocks and the untrusted agent
+// payload parser are split out so this screen keeps the decision flow obvious.
 
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -10,137 +7,121 @@ import { api } from "../api";
 import { useAsync } from "../hooks";
 import { useT } from "../i18n";
 import { Shell } from "../components/Shell";
-import { Skeletons } from "../components/states";
-
-type Decision = "approved" | "rejected" | null;
-
-interface VerdictPayload {
-  summary?: string;
-  findings?: { text: string; loc?: string }[];
-}
-
-function parsePayload(raw: string): VerdictPayload {
-  try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+import { EmptyState, ErrorState } from "../components/states";
+import {
+  CompareBlock,
+  DiffBlock,
+  ReviewLoading,
+  runLabel,
+  type ReviewDecision,
+  VerdictCard,
+} from "./ReviewBlocks";
+import { parseReviewPayload } from "./reviewPayload";
 
 export function ReviewScreen() {
   const { t } = useT();
   const { approvalId = "" } = useParams();
-  // The port exposes the pending list only; a decided approval is gone from
-  // it, which is exactly how the "already decided" state is detected.
   const approvals = useAsync(api.approvals, []);
-  const [decision, setDecision] = useState<Decision>(null);
+  const [decision, setDecision] = useState<ReviewDecision>(null);
   const [busy, setBusy] = useState(false);
+  const [decisionError, setDecisionError] = useState(false);
 
-  const approval = (approvals.data ?? []).find((a) => a.id === approvalId);
-  const payload = approval ? parsePayload(approval.payload) : {};
+  const approval = (approvals.data ?? []).find((item) => item.id === approvalId);
+  const payload = approval ? parseReviewPayload(approval.payload) : null;
+  const screenTitle = approval?.task_title
+    ? `${t("review.screen.prefix")}${approval.task_title}`
+    : t("review.title");
+  const crumb = approval
+    ? `${approval.project_name ?? "LaToile"} / Reviews / run ${runLabel(approval.run_id)}`
+    : t("review.title");
 
   async function decide(granted: boolean) {
-    if (busy) return;
+    if (busy || !approval) return;
     setBusy(true);
+    setDecisionError(false);
     try {
       await api.decide(approvalId, granted);
       setDecision(granted ? "approved" : "rejected");
+    } catch {
+      setDecisionError(true);
     } finally {
       setBusy(false);
     }
   }
 
   const decided = decision !== null;
-  const badge = decided ? (
-    decision === "approved" ? (
-      <span className="badge badge--success">{t("review.badge.approved")}</span>
-    ) : (
-      <span className="badge badge--danger">{t("review.badge.rejected")}</span>
-    )
-  ) : (
-    <span className="badge badge--warning">{t("review.badge.pending")}</span>
-  );
-  const verdictClass = decided
-    ? decision === "approved"
-      ? "verdict verdict--ok"
-      : "verdict verdict--ko"
-    : "verdict";
 
   return (
-    <Shell back={t("shell.back.inbox")} title={t("review.title")}>
-      {approvals.loading && <Skeletons />}
-
-      {approvals.data && (
-        <>
-          <div className={verdictClass}>
-            <div className="verdict-head">
-              {badge}
-              <span className="badge badge--neutral">
-                Reviewer · run {approval?.run_id ?? "?"}
-              </span>
-            </div>
-            <h2>{t("review.title")}</h2>
-            <p className="summary">{payload.summary ?? t("review.no.details")}</p>
-            {payload.findings && payload.findings.length > 0 && (
-              <div className="findings">
-                <h3>Findings ({payload.findings.length})</h3>
-                {payload.findings.map((finding, i) => (
-                  <div className="finding" key={i}>
-                    <span className="sev" aria-hidden="true" />
-                    <div>
-                      {finding.text}
-                      {finding.loc && <span className="loc">{finding.loc}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!approval && (
-              <p className="summary" style={{ marginTop: "var(--space-2)" }}>
-                {t("review.gone")}
-              </p>
-            )}
-          </div>
+    <Shell back={t("shell.back.inbox")} title={screenTitle} crumb={crumb} wide>
+      {approvals.loading && <ReviewLoading label={t("review.loading")} />}
+      {approvals.error && (
+        <ErrorState
+          title={t("review.error.title")}
+          body={t("review.error.body")}
+          onRetry={approvals.reload}
+        />
+      )}
+      {approvals.data && !approval && (
+        <EmptyState
+          title={t("review.gone.title")}
+          body={t("review.gone")}
+          action={<Link className="btn btn--primary" to="/">{t("review.back")}</Link>}
+        />
+      )}
+      {approval && payload && (
+        <section
+          className="review-state"
+          aria-label={decided ? t("review.state.decided") : t("review.state.pending")}
+        >
+          <span className="state-label">
+            {t(decision === "approved"
+              ? "review.state.approved"
+              : decision === "rejected"
+                ? "review.state.rejected"
+                : "review.state.pending")}
+          </span>
+          <VerdictCard approval={approval} payload={payload} decision={decision} />
+          {payload.diff && <DiffBlock diff={payload.diff} runId={approval.run_id} />}
+          {payload.comparison && (
+            <CompareBlock comparison={payload.comparison} runId={approval.run_id} />
+          )}
+          {!payload.diff && !payload.comparison && (
+            <p className="review-details-note">{t("review.details.missing")}</p>
+          )}
 
           <div className="actionbar">
             {decided && (
               <p className="merged-note">
-                {t(
-                  decision === "approved"
-                    ? "review.decided.approved"
-                    : "review.decided.rejected",
-                )}
+                {decision === "approved"
+                  ? `${t("review.run")} ${runLabel(approval.run_id)} ${t("review.decided.approved")}`
+                  : t("review.decided.rejected")}
               </p>
             )}
-            {!decided && approval && (
-              <>
-                <button
-                  className="btn btn--primary btn--block"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => decide(true)}
-                >
-                  {t("review.approve")}
-                </button>
-                <div className="divider" aria-hidden="true" />
-                <button
-                  className="btn btn--danger btn--block"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => decide(false)}
-                >
-                  {t("review.changes")}
-                </button>
-              </>
-            )}
-            {(decided || !approval) && (
-              <Link className="btn btn--ghost btn--block" to="/">
-                {t("review.back")}
-              </Link>
-            )}
+            <button
+              className="btn btn--primary btn--block"
+              type="button"
+              disabled={busy || decided}
+              onClick={() => decide(true)}
+            >
+              {busy && <span className="spin" aria-hidden="true" />}
+              {busy ? t("review.deciding") : t("review.approve")}
+            </button>
+            <div className="divider" aria-hidden="true" />
+            <button
+              className="btn btn--danger btn--block"
+              type="button"
+              disabled={busy || decided}
+              onClick={() => decide(false)}
+            >
+              {t("review.changes")}
+            </button>
           </div>
-        </>
+          {decisionError && (
+            <p className="review-decision-error" role="alert">
+              {t("review.decision.error")}
+            </p>
+          )}
+        </section>
       )}
     </Shell>
   );

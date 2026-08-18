@@ -22,7 +22,11 @@ mod setting;
 mod spec;
 mod task;
 
+pub use approval::InboxApprovalRow;
+pub use conversation::ProjectMessageRow;
+pub use project::ProjectListRow;
 pub use role::RoleRow;
+pub use task::ProjectTaskRow;
 
 use latoile_core::error::DomainError;
 use latoile_core::ports::PortError;

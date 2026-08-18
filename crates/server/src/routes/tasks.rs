@@ -19,7 +19,7 @@ pub async fn list(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<TaskDto>>, ApiError> {
     let id = ProjectId::new(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let tasks = state.store.list_for_project(&id).await?;
+    let tasks = state.store.list_project_task_rows(&id).await?;
     Ok(Json(tasks.iter().map(TaskDto::from).collect()))
 }
 

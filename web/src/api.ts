@@ -83,6 +83,7 @@ export interface Project {
   work_branch: string;
   status: "draft" | "specced" | "building" | "live";
   dev_command: string;
+  last_activity_at?: string;
 }
 
 export interface Task {
@@ -93,6 +94,7 @@ export interface Task {
   description: string;
   status: "ready" | "in_progress" | "review" | "changes_requested" | "done";
   position: number;
+  latest_run_id?: string;
 }
 
 export interface Approval {
@@ -101,6 +103,13 @@ export interface Approval {
   kind: "spec" | "review" | "permission";
   status: "pending" | "granted" | "rejected";
   payload: string;
+  /// Present on the Inbox read model. Decision responses keep these optional
+  /// because they return the domain entity after the transition.
+  project_id?: string;
+  project_name?: string;
+  task_title?: string;
+  role_id?: string;
+  created_at?: string;
 }
 
 export interface Message {
@@ -108,6 +117,7 @@ export interface Message {
   author: "user" | "manager";
   content: string;
   actions: string | null;
+  created_at?: string;
 }
 
 export interface Preview {
@@ -116,6 +126,7 @@ export interface Preview {
   port: number;
   status: "starting" | "ready" | "stale" | "error" | "stopped";
   alive: boolean;
+  logs: string[];
 }
 
 export type AgentProvider = "claude" | "codex";
@@ -146,6 +157,7 @@ export interface AgentAuthSession {
 export interface Repo {
   full_name: string;
   description: string | null;
+  private: boolean;
 }
 
 // ── Calls (one per route, spec §5.3) ────────────────────────────────────────

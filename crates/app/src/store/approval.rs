@@ -36,6 +36,51 @@ fn row_to_approval(row: &SqliteRow) -> Result<Approval, StoreError> {
 
 const COLUMNS: &str = "id, run_id, kind, status, payload";
 
+/// Query-side projection for the owner Inbox. Audit/context columns stay out
+/// of the domain entity, while the UI receives enough real data to explain a
+/// pending decision without issuing one request per run/task/project.
+pub struct InboxApprovalRow {
+    pub approval: Approval,
+    pub project_id: String,
+    pub project_name: String,
+    pub task_title: String,
+    pub role_id: String,
+    pub created_at: String,
+}
+
+impl Store {
+    pub async fn list_pending_for_inbox(&self) -> PortResult<Vec<InboxApprovalRow>> {
+        let rows = sqlx::query(
+            "SELECT a.id, a.run_id, a.kind, a.status, a.payload,
+                    t.project_id, p.name AS project_name, t.title AS task_title,
+                    r.role_id, a.created_at
+             FROM approval a
+             JOIN run r ON r.id = a.run_id
+             JOIN task t ON t.id = r.task_id
+             JOIN project p ON p.id = t.project_id
+             WHERE a.status = 'pending' AND p.deleted = 0
+             ORDER BY a.created_at, a.id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(InboxApprovalRow {
+                    approval: row_to_approval(row)?,
+                    project_id: row.try_get("project_id")?,
+                    project_name: row.try_get("project_name")?,
+                    task_title: row.try_get("task_title")?,
+                    role_id: row.try_get("role_id")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
+            .map_err(Into::into)
+    }
+}
+
 impl ApprovalStore for Store {
     /// The inbox: everything still waiting for the owner, oldest first.
     async fn list_pending(&self) -> PortResult<Vec<Approval>> {
@@ -116,5 +161,21 @@ mod tests {
         a.reject().unwrap();
         s.save(&a).await.unwrap();
         assert!(s.list_pending().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbox_projection_carries_the_decision_context() {
+        let (s, run) = test_fixtures::store_with_run().await;
+        s.save(&approval("a1", run.as_str(), ApprovalKind::Review))
+            .await
+            .unwrap();
+
+        let inbox = s.list_pending_for_inbox().await.unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].project_id, "p1");
+        assert_eq!(inbox[0].project_name, "Mon App");
+        assert_eq!(inbox[0].task_title, "Page de connexion");
+        assert_eq!(inbox[0].role_id, "frontend");
+        assert!(inbox[0].created_at.ends_with('Z'));
     }
 }

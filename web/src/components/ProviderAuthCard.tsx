@@ -1,8 +1,5 @@
-// One provider's connection card (Settings → Connexions). The status comes
-// from the provider's own CLI via the server: a connected provider shows
-// its state and a Disconnect action — never a Connect button. A
-// disconnected provider shows the connect flow (Claude: URL + paste; Codex:
-// URL + device code).
+// Provider connection card from the Settings visual contract. Credentials stay
+// owned by the provider CLI; this component only supervises its login challenge.
 
 import { useEffect, useState } from "react";
 import { api, type AgentAuthSession, type AgentProvider, type ProviderStatus } from "../api";
@@ -29,13 +26,10 @@ export function ProviderAuthCard({
   const [actionError, setActionError] = useState(false);
   const [locallyDisconnected, setLocallyDisconnected] = useState(false);
 
-  // A later successful status refresh (for example, login in another tab)
-  // supersedes the optimistic local disconnect.
   useEffect(() => {
     if (status?.authenticated) setLocallyDisconnected(false);
   }, [status?.authenticated]);
 
-  // Poll while a login session is in flight.
   const active = session && !TERMINAL.includes(session.status);
   useEffect(() => {
     if (!active || !session) return;
@@ -45,7 +39,7 @@ export function ProviderAuthCard({
         setSession(next);
         if (TERMINAL.includes(next.status)) onChanged();
       } catch {
-        // retried next tick
+        // The challenge remains visible and the next interval retries.
       }
     }, 2000);
     return () => clearInterval(timer);
@@ -65,8 +59,8 @@ export function ProviderAuthCard({
     }
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
     if (!session || !code.trim() || busy) return;
     setBusy(true);
     setActionError(false);
@@ -100,133 +94,138 @@ export function ProviderAuthCard({
     }
   }
 
-  // ── Connected: state first, disconnect behind an inline confirm ──
-  if (
+  const mark = provider === "claude" ? "CL" : "CX";
+  const connected =
     !locallyDisconnected &&
     (status?.authenticated || session?.status === "authenticated") &&
-    !active
-  ) {
+    !active;
+
+  if (connected) {
     return (
-      <div className="card" style={{ marginBottom: "var(--space-3)" }}>
-        <div className="item-head" style={{ marginBottom: 0 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
-            <span className="conn">
-              <span className="dot" aria-hidden="true" />
-            </span>
-            <strong>{label}</strong>
-            <span className="badge badge--success">{t("auth.connected.detail")}</span>
-            {status?.detail && <span className="item-sub">{status.detail}</span>}
-          </span>
+      <article className="card settings-provider-card">
+        <div className="settings-provider-head">
+          <div className="settings-provider-id">
+            <span className="settings-provider-mark" aria-hidden="true">{mark}</span>
+            <div>
+              <div className="settings-provider-name">
+                <strong>{label}</strong>
+                <span className="badge badge--success">{t("auth.connected.detail")}</span>
+              </div>
+              {status?.detail && <p className="settings-provider-detail">{status.detail}</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-provider-actions">
           {confirming ? (
-            <span style={{ display: "inline-flex", gap: "var(--space-2)", alignItems: "center" }}>
-              <span className="item-sub">{t("auth.disconnect.confirm")}</span>
+            <div className="settings-confirm" role="group" aria-label={t("auth.disconnect.confirm")}>
+              <span>{t("auth.disconnect.confirm")}</span>
               <button className="btn btn--danger btn--sm" type="button" disabled={busy} onClick={disconnect}>
                 {t("auth.disconnect")}
               </button>
               <button className="btn btn--ghost btn--sm" type="button" onClick={() => setConfirming(false)}>
                 {t("auth.cancel")}
               </button>
-            </span>
+            </div>
           ) : (
-            <button className="btn btn--ghost btn--sm" type="button" onClick={() => setConfirming(true)}>
+            <button className="btn btn--danger btn--sm" type="button" onClick={() => setConfirming(true)}>
               {t("auth.disconnect")}
             </button>
           )}
         </div>
-        {actionError && (
-          <p className="hint" role="alert" style={{ color: "var(--danger)" }}>
-            {t("auth.action.error")}
-          </p>
-        )}
-      </div>
+        {actionError && <p className="settings-action-error" role="alert">{t("auth.action.error")}</p>}
+      </article>
     );
   }
 
-  // ── Not connected: the connect flow ──
   return (
-    <div className="card" style={{ marginBottom: "var(--space-3)" }}>
-      <div className="item-head">
-        <strong>{label}</strong>
-        {session?.status === "failed" && <span className="badge badge--danger">{t("auth.failed")}</span>}
-        {session?.status === "expired" && <span className="badge badge--danger">{t("auth.expired")}</span>}
+    <article className={`card settings-provider-card${active ? " settings-provider-card--active" : ""}`}>
+      <div className="settings-provider-head">
+        <div className="settings-provider-id">
+          <span className="settings-provider-mark" aria-hidden="true">{mark}</span>
+          <div>
+            <div className="settings-provider-name">
+              <strong>{label}</strong>
+              {!session && <span className="badge badge--neutral">{t("auth.disconnected")}</span>}
+              {session?.status === "failed" && <span className="badge badge--danger">{t("auth.failed")}</span>}
+              {session?.status === "expired" && <span className="badge badge--danger">{t("auth.expired")}</span>}
+            </div>
+            {!session && <p className="settings-provider-detail">{t(`auth.${provider}.detail` as const)}</p>}
+          </div>
+        </div>
       </div>
 
-      {actionError && (
-        <p className="hint" role="alert" style={{ color: "var(--danger)" }}>
-          {t("auth.action.error")}
-        </p>
-      )}
+      {actionError && <p className="settings-action-error" role="alert">{t("auth.action.error")}</p>}
 
       {!session && (
-        <div className="item-actions">
-          <button className="btn btn--primary btn--sm" type="button" disabled={busy} onClick={start}>
+        <div className="settings-provider-actions">
+          <button
+            className={`btn ${provider === "claude" ? "btn--primary" : "btn--ghost"} btn--sm`}
+            type="button"
+            disabled={busy}
+            onClick={start}
+          >
             {busy ? t("state.loading") : t(provider === "claude" ? "auth.connect" : "auth.connect.codex")}
           </button>
         </div>
       )}
 
       {session && (session.status === "starting" || session.status === "validating") && (
-        <p className="item-sub">
+        <p className="settings-waiting" aria-live="polite">
           <span className="spin" aria-hidden="true" /> {t("state.loading")}
         </p>
       )}
 
-      {session && session.status === "waiting_for_input" && (
-        <>
-          <div className="item-actions">
-            {session.url && (
-              <a className="btn btn--primary btn--sm" href={session.url} target="_blank" rel="noreferrer">
-                {t("auth.open")}
-              </a>
-            )}
-          </div>
+      {session?.status === "waiting_for_input" && (
+        <div className="settings-device-flow">
           {session.input_required ? (
-            <form className="composer" onSubmit={submit}>
-              <label htmlFor={`auth-code-${provider}`} className="sr-only">
-                {t("auth.paste")}
-              </label>
-              <input
-                id={`auth-code-${provider}`}
-                type="text"
-                autoComplete="off"
-                placeholder={t("auth.paste")}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-              />
-              <button className="send" type="submit" aria-label={t("auth.validate")} disabled={busy}>
-                ➤
-              </button>
-            </form>
+            <>
+              {session.url && (
+                <a className="btn btn--primary btn--block" href={session.url} target="_blank" rel="noreferrer">
+                  {t("auth.open")}
+                </a>
+              )}
+              <form className="composer settings-code-form" onSubmit={submit}>
+                <label htmlFor={`auth-code-${provider}`} className="sr-only">{t("auth.paste")}</label>
+                <input
+                  id={`auth-code-${provider}`}
+                  type="text"
+                  autoComplete="off"
+                  placeholder={t("auth.paste")}
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                />
+                <button className="send" type="submit" aria-label={t("auth.validate")} disabled={busy}>➤</button>
+              </form>
+            </>
           ) : (
             <>
-              {session.user_code ? (
-                <>
-                  <p className="item-sub">{t("auth.enter.code")}</p>
-                  <code className="cmd" style={{ fontSize: "var(--text-lg)", textAlign: "center" }}>
-                    {session.user_code}
-                  </code>
-                </>
-              ) : (
-                session.hint && <code className="cmd">{session.hint}</code>
+              <p className="settings-device-instruction">{t("auth.enter.code")}</p>
+              {session.user_code && <code className="settings-device-code">{session.user_code}</code>}
+              {!session.user_code && session.hint && <code className="cmd">{session.hint}</code>}
+              {session.url && (
+                <a className="btn btn--primary btn--block" href={session.url} target="_blank" rel="noreferrer">
+                  {t("auth.open")}
+                </a>
               )}
-              <p className="item-sub">
-                <span className="spin" aria-hidden="true" /> {t("auth.waiting")}
+              <p className="settings-waiting" aria-live="polite">
+                <span className="settings-pulse" aria-hidden="true" /> {t("auth.waiting")}
               </p>
             </>
           )}
-        </>
+        </div>
       )}
 
       {session && TERMINAL.includes(session.status) && session.status !== "authenticated" && (
-        <>
+        <div className="settings-device-flow">
           {session.error && <code className="cmd">{session.error}</code>}
-          <div className="item-actions">
+          <div className="settings-provider-actions">
             <button className="btn btn--ghost btn--sm" type="button" disabled={busy} onClick={start}>
               {t("auth.retry")}
             </button>
           </div>
-        </>
+        </div>
       )}
-    </div>
+    </article>
   );
 }

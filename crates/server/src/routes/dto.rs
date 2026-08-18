@@ -2,10 +2,10 @@
 //! to an explicit shape here — the API contract is visible in one place and
 //! a domain refactor can't silently change the wire.
 
-use latoile_app::store::RoleRow;
-use latoile_core::{
-    Approval, Message, Preview, Project, Run, SpecVersion, Task,
+use latoile_app::store::{
+    InboxApprovalRow, ProjectListRow, ProjectMessageRow, ProjectTaskRow, RoleRow,
 };
+use latoile_core::{Approval, Message, Preview, Project, Run, SpecVersion, Task};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -19,6 +19,8 @@ pub struct ProjectDto {
     pub local_path: String,
     pub status: &'static str,
     pub dev_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
 }
 
 impl From<&Project> for ProjectDto {
@@ -33,7 +35,16 @@ impl From<&Project> for ProjectDto {
             local_path: p.local_path.clone(),
             status: p.status.as_str(),
             dev_command: p.dev_command.clone(),
+            last_activity_at: None,
         }
+    }
+}
+
+impl From<&ProjectListRow> for ProjectDto {
+    fn from(row: &ProjectListRow) -> Self {
+        let mut dto = Self::from(&row.project);
+        dto.last_activity_at = Some(row.last_activity_at.clone());
+        dto
     }
 }
 
@@ -68,6 +79,8 @@ pub struct TaskDto {
     pub description: String,
     pub status: &'static str,
     pub position: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_run_id: Option<String>,
 }
 
 impl From<&Task> for TaskDto {
@@ -81,7 +94,16 @@ impl From<&Task> for TaskDto {
             description: t.description.clone(),
             status: t.status.as_str(),
             position: t.position,
+            latest_run_id: None,
         }
+    }
+}
+
+impl From<&ProjectTaskRow> for TaskDto {
+    fn from(row: &ProjectTaskRow) -> Self {
+        let mut dto = Self::from(&row.task);
+        dto.latest_run_id.clone_from(&row.latest_run_id);
+        dto
     }
 }
 
@@ -113,6 +135,16 @@ pub struct ApprovalDto {
     pub kind: &'static str,
     pub status: &'static str,
     pub payload: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 impl From<&Approval> for ApprovalDto {
@@ -123,6 +155,28 @@ impl From<&Approval> for ApprovalDto {
             kind: a.kind.as_str(),
             status: a.status.as_str(),
             payload: a.payload.clone(),
+            project_id: None,
+            project_name: None,
+            task_title: None,
+            role_id: None,
+            created_at: None,
+        }
+    }
+}
+
+impl From<&InboxApprovalRow> for ApprovalDto {
+    fn from(row: &InboxApprovalRow) -> Self {
+        Self {
+            id: row.approval.id.as_str().to_string(),
+            run_id: row.approval.run_id.as_str().to_string(),
+            kind: row.approval.kind.as_str(),
+            status: row.approval.status.as_str(),
+            payload: row.approval.payload.clone(),
+            project_id: Some(row.project_id.clone()),
+            project_name: Some(row.project_name.clone()),
+            task_title: Some(row.task_title.clone()),
+            role_id: Some(row.role_id.clone()),
+            created_at: Some(row.created_at.clone()),
         }
     }
 }
@@ -133,6 +187,8 @@ pub struct MessageDto {
     pub author: &'static str,
     pub content: String,
     pub actions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 impl From<&Message> for MessageDto {
@@ -142,7 +198,16 @@ impl From<&Message> for MessageDto {
             author: m.author.as_str(),
             content: m.content.clone(),
             actions: m.actions.clone(),
+            created_at: None,
         }
+    }
+}
+
+impl From<&ProjectMessageRow> for MessageDto {
+    fn from(row: &ProjectMessageRow) -> Self {
+        let mut dto = Self::from(&row.message);
+        dto.created_at = Some(row.created_at.clone());
+        dto
     }
 }
 
@@ -154,10 +219,11 @@ pub struct PreviewDto {
     pub status: &'static str,
     pub branch: String,
     pub alive: bool,
+    pub logs: Vec<String>,
 }
 
 impl PreviewDto {
-    pub fn of(p: &Preview, alive: bool) -> Self {
+    pub fn of(p: &Preview, alive: bool, logs: Vec<String>) -> Self {
         Self {
             id: p.id.as_str().to_string(),
             project_id: p.project_id.as_str().to_string(),
@@ -165,6 +231,7 @@ impl PreviewDto {
             status: p.status.as_str(),
             branch: p.branch.clone(),
             alive,
+            logs,
         }
     }
 }

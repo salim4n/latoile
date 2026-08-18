@@ -68,7 +68,13 @@ async fn a_granted_review_closes_the_task() {
         .oneshot(authed(request("GET", "/api/approvals", None)))
         .await
         .unwrap();
-    assert_eq!(body_json(pending).await.as_array().unwrap().len(), 1);
+    let pending = body_json(pending).await;
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["project_id"], project);
+    assert_eq!(pending[0]["project_name"], "Mon App");
+    assert_eq!(pending[0]["task_title"], "Page de connexion");
+    assert_eq!(pending[0]["role_id"], "frontend");
+    assert!(pending[0]["created_at"].as_str().unwrap().ends_with('Z'));
 
     let decided = app
         .clone()
@@ -149,14 +155,22 @@ async fn approving_a_spec_marks_the_project_specced() {
 
     let approved = app
         .clone()
-        .oneshot(authed(request("POST", "/api/spec-versions/s1/approve", None)))
+        .oneshot(authed(request(
+            "POST",
+            "/api/spec-versions/s1/approve",
+            None,
+        )))
         .await
         .unwrap();
     assert_eq!(approved.status(), StatusCode::OK);
     assert_eq!(body_json(approved).await["status"], "approved");
 
     let detail = app
-        .oneshot(authed(request("GET", &format!("/api/projects/{project}"), None)))
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}"),
+            None,
+        )))
         .await
         .unwrap();
     assert_eq!(body_json(detail).await["status"], "specced");
@@ -220,7 +234,9 @@ async fn the_preview_proxy_forwards_to_the_dev_server() {
     let project = create_project(&app).await;
 
     // A throwaway dev server on 127.0.0.1.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -291,7 +307,11 @@ async fn the_roles_route_lists_the_seeded_team() {
         .unwrap();
     let roles = body_json(response).await;
     assert_eq!(roles.as_array().unwrap().len(), 5);
-    assert!(roles.as_array().unwrap().iter().any(|r| r["id"] == "manager"));
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["id"] == "manager"));
 }
 
 /// The documented D9 exception: `?token=` works for preview paths only.
@@ -317,7 +337,11 @@ async fn the_query_token_only_opens_preview_paths() {
     // The data API refuses the query token: headers only.
     let data = app
         .clone()
-        .oneshot(request("GET", &format!("/api/projects?token={TOKEN}"), None))
+        .oneshot(request(
+            "GET",
+            &format!("/api/projects?token={TOKEN}"),
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(data.status(), StatusCode::UNAUTHORIZED);

@@ -109,7 +109,12 @@ impl Default for Supervisor {
 }
 
 impl PreviewSupervisor for Supervisor {
-    async fn ensure(&self, preview: &Preview, dev_command: &str) -> PortResult<(u32, u16)> {
+    async fn ensure(
+        &self,
+        preview: &Preview,
+        dev_command: &str,
+        working_dir: &str,
+    ) -> PortResult<(u32, u16)> {
         let project = preview.project_id.as_str().to_string();
         // Start-or-recycle: whatever ran for this project goes first.
         self.kill_project(&project).await;
@@ -123,13 +128,16 @@ impl PreviewSupervisor for Supervisor {
             .await?;
 
         let ring = LogRing::new(self.config.log_capacity);
-        let server = match DevServer::spawn(dev_command, port, ring, self.config.readiness).await {
-            Ok(server) => server,
-            Err(e) => {
-                self.allocator.lock().await.release(port);
-                return Err(e.into());
-            }
-        };
+        let server =
+            match DevServer::spawn(dev_command, working_dir, port, ring, self.config.readiness)
+                .await
+            {
+                Ok(server) => server,
+                Err(e) => {
+                    self.allocator.lock().await.release(port);
+                    return Err(e.into());
+                }
+            };
         let pid = server.pid;
         self.servers.lock().await.insert(
             project,

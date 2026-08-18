@@ -44,6 +44,7 @@ pub struct GitHub<S> {
 struct RepoJson {
     full_name: String,
     description: Option<String>,
+    private: bool,
 }
 
 /// The 422 body: `{"message": "...", "errors": [...]}`. The message is the
@@ -85,7 +86,10 @@ impl<S: SecretStore> GitHub<S> {
     }
 
     /// Map a response's status to an error, or hand it back for decoding.
-    async fn checked(response: reqwest::Response, what: &str) -> Result<reqwest::Response, GitHubError> {
+    async fn checked(
+        response: reqwest::Response,
+        what: &str,
+    ) -> Result<reqwest::Response, GitHubError> {
         let status = response.status();
         if status.is_success() {
             return Ok(response);
@@ -125,6 +129,7 @@ impl<S: SecretStore> GitHubClient for GitHub<S> {
             .map(|r| RepoInfo {
                 full_name: r.full_name,
                 description: r.description,
+                private: r.private,
             })
             .collect())
     }

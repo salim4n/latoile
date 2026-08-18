@@ -72,6 +72,7 @@ pub async fn state() -> (AppState, Store, StubAgents) {
         github: GitHubSlot::Stub(vec![RepoInfo {
             full_name: "salim4n/mon-app".into(),
             description: None,
+            private: true,
         }]),
         previews: Supervisor::new(SupervisorConfig {
             base_port: 26100,

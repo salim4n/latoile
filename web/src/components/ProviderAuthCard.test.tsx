@@ -40,6 +40,19 @@ function renderConnectedCard() {
   );
 }
 
+function renderCodexCard() {
+  return render(
+    <LangProvider>
+      <ProviderAuthCard
+        provider="codex"
+        label="Codex"
+        status={{ authenticated: false, detail: null }}
+        onChanged={() => {}}
+      />
+    </LangProvider>,
+  );
+}
+
 describe("ProviderAuthCard", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -83,5 +96,26 @@ describe("ProviderAuthCard", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Déconnecter" })[0]);
 
     expect(await screen.findByRole("button", { name: "Connecter Claude" })).toBeTruthy();
+  });
+
+  it("renders the Codex device code and official challenge link", async () => {
+    vi.spyOn(api, "agentAuthStart").mockResolvedValue({
+      session_id: "codex-session",
+      provider: "codex",
+      status: "waiting_for_input",
+      url: "https://auth.example.test/device",
+      input_required: false,
+      user_code: "BDQJ-M7QP",
+      hint: null,
+      error: null,
+    });
+    renderCodexCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Connecter Codex" }));
+
+    expect(await screen.findByText("BDQJ-M7QP")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Ouvrir la page de connexion ↗" });
+    expect(link.getAttribute("href")).toBe("https://auth.example.test/device");
+    expect(screen.getByText("En attente de confirmation…")).toBeTruthy();
   });
 });

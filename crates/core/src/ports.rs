@@ -119,7 +119,12 @@ pub trait AgentChannel {
 /// Dev-server supervision for live previews.
 pub trait PreviewSupervisor {
     /// Start (or recycle) the project's dev server; returns pid and port.
-    async fn ensure(&self, preview: &Preview, dev_command: &str) -> PortResult<(u32, u16)>;
+    async fn ensure(
+        &self,
+        preview: &Preview,
+        dev_command: &str,
+        working_dir: &str,
+    ) -> PortResult<(u32, u16)>;
     async fn stop(&self, preview: &Preview) -> PortResult<()>;
 }
 
@@ -128,6 +133,7 @@ pub trait PreviewSupervisor {
 pub struct RepoInfo {
     pub full_name: String,
     pub description: Option<String>,
+    pub private: bool,
 }
 
 pub trait GitHubClient {

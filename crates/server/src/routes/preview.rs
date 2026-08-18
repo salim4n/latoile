@@ -37,7 +37,8 @@ pub async fn status(
         .await?
         .ok_or_else(no_preview)?;
     let alive = state.previews.is_alive(&preview.id).await;
-    Ok(Json(PreviewDto::of(&preview, alive)))
+    let logs = state.previews.logs(&preview.id).await;
+    Ok(Json(PreviewDto::of(&preview, alive, logs)))
 }
 
 pub async fn ensure(
@@ -53,7 +54,8 @@ pub async fn ensure(
     )
     .execute(&id)
     .await?;
-    Ok(Json(PreviewDto::of(&ensured.preview, true)))
+    let logs = state.previews.logs(&ensured.preview.id).await;
+    Ok(Json(PreviewDto::of(&ensured.preview, true, logs)))
 }
 
 pub async fn stop(

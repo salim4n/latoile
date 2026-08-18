@@ -50,6 +50,7 @@ export function Shell({
   back,
   title,
   crumb,
+  action,
   wide,
   children,
 }: {
@@ -59,6 +60,8 @@ export function Shell({
   title: string;
   /// Desktop crumb (e.g. "Projets / LaToile").
   crumb?: ReactNode;
+  /// One screen-specific topbar action, after the shared language control.
+  action?: ReactNode;
   /// Wider measure for the project workspace (board + preview).
   wide?: boolean;
   children: ReactNode;
@@ -105,11 +108,12 @@ export function Shell({
           ) : (
             <span className="wordmark">LaToile</span>
           )}
-          <span className="title">{title}</span>
+          {back && <span className="title">{title}</span>}
           <span className="crumb">{crumb ?? title}</span>
           <div className="topbar-right">
             <Conn />
             <LangToggle />
+            {action}
           </div>
         </header>
 

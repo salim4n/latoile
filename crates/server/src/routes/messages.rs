@@ -10,7 +10,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use latoile_app::use_cases::{ManagerTurn, SendMessage, SendMessageInput};
 use latoile_core::ids::ProjectId;
-use latoile_core::ports::{AgentChannel, ConversationStore};
+use latoile_core::ports::AgentChannel;
 use serde::{Deserialize, Serialize};
 
 pub async fn list(
@@ -19,7 +19,10 @@ pub async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<MessageDto>>, ApiError> {
     let id = ProjectId::new(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let messages = state.store.recent(&id, params.limit.unwrap_or(50)).await?;
+    let messages = state
+        .store
+        .recent_message_rows(&id, params.limit.unwrap_or(50))
+        .await?;
     Ok(Json(messages.iter().map(MessageDto::from).collect()))
 }
 

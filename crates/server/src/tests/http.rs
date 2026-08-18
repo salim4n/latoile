@@ -28,6 +28,23 @@ async fn health_is_open_and_everything_else_needs_the_token() {
 }
 
 #[tokio::test]
+async fn repository_picker_exposes_visibility_without_exposing_credentials() {
+    let (state, _, _) = state().await;
+    let app = router(state);
+
+    let response = app
+        .oneshot(authed(request("GET", "/api/github/repos", None)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let repositories = body_json(response).await;
+    assert_eq!(repositories[0]["full_name"], "salim4n/mon-app");
+    assert_eq!(repositories[0]["private"], true);
+    assert!(repositories[0].get("token").is_none());
+}
+
+#[tokio::test]
 async fn a_project_is_created_and_listed() {
     let (state, _, _) = state().await;
     let app = router(state);
@@ -42,6 +59,10 @@ async fn a_project_is_created_and_listed() {
     let projects = body_json(list).await;
     assert_eq!(projects.as_array().unwrap().len(), 1);
     assert_eq!(projects[0]["slug"], "mon-app");
+    assert!(projects[0]["last_activity_at"]
+        .as_str()
+        .unwrap()
+        .ends_with('Z'));
 
     let detail = app
         .oneshot(authed(request("GET", &format!("/api/projects/{id}"), None)))
@@ -102,10 +123,18 @@ async fn a_message_is_stored_and_the_manager_answers() {
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(thread).await.as_array().unwrap().len(), 2);
+    let thread = body_json(thread).await;
+    assert_eq!(thread.as_array().unwrap().len(), 2);
+    assert!(thread
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|message| message["created_at"].as_str().unwrap().ends_with('Z')));
     let events = store.events_since(0).await.unwrap();
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|(_, e)| e.kind == EventKind::MessagePosted));
+    assert!(events
+        .iter()
+        .all(|(_, e)| e.kind == EventKind::MessagePosted));
 }
 
 #[tokio::test]
@@ -173,7 +202,9 @@ async fn dispatch_with_an_approved_spec_starts_a_run() {
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(tasks).await.as_array().unwrap().len(), 1);
+    let tasks = body_json(tasks).await;
+    assert_eq!(tasks.as_array().unwrap().len(), 1);
+    assert!(tasks[0]["latest_run_id"].is_string());
 
     let events = store.events_since(0).await.unwrap();
     let kinds: Vec<_> = events.iter().map(|(_, e)| e.kind).collect();
