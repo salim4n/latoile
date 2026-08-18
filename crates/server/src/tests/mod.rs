@@ -3,7 +3,7 @@
 //! no process, no network beyond loopback, no real token.
 
 use crate::router;
-use crate::state::{AgentSlot, AppState, GitHubSlot};
+use crate::state::{AgentSlot, AppState, BaselineSlot, GitHubSlot};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -11,18 +11,45 @@ use latoile_app::store::Store;
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
-    ArchitectureSessionStore, ManagerReply, PortResult, RepoInfo,
+    ArchitectureSessionStore, ManagerReply, PortResult, RepoInfo, SpecStore,
+    VisualBaselineRenderer, VisualBaselineStore,
 };
 use latoile_core::{
     ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
-    ArchitecturePackageValidation, ArchitectureValidationFinding, ArchitectureVisualScenario, Run,
-    SpecProvenance, SpecVersion,
+    ArchitecturePackageValidation, ArchitectureValidationFinding, ArchitectureVisualScenario,
+    CapturedVisualBaseline, Run, SpecProvenance, SpecVersion, VisualBaseline,
+    VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest, VisualBaselineStatus,
 };
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 pub const TOKEN: &str = "test-token";
+
+#[derive(Clone, Default)]
+pub struct StubBaselines;
+
+impl VisualBaselineRenderer for StubBaselines {
+    async fn capture(
+        &self,
+        _request: &VisualBaselineCaptureRequest,
+    ) -> PortResult<VisualBaselineCaptureOutcome> {
+        Ok(VisualBaselineCaptureOutcome::Ready(
+            CapturedVisualBaseline {
+                png_digest: "d".repeat(64),
+                geometry_digest: "e".repeat(64),
+                accessibility_digest: "f".repeat(64),
+                environment_digest: "a".repeat(64),
+                browser_version: "Chrome/151".into(),
+                font_fingerprint: "b".repeat(64),
+            },
+        ))
+    }
+
+    async fn read_png(&self, _baseline: &VisualBaseline) -> PortResult<Vec<u8>> {
+        Ok(b"\x89PNG\r\n\x1a\nSTUB".to_vec())
+    }
+}
 
 pub async fn attach_test_spec_provenance(store: &Store, spec: &mut SpecVersion) {
     let session_id =
@@ -62,6 +89,12 @@ pub async fn approve_test_spec(store: &Store, spec: &mut SpecVersion) {
             screen: "home".into(),
             state: "default".into(),
             locale: "fr-FR".into(),
+            theme: "light".into(),
+            route: "/".into(),
+            fixture: "synthetic-default".into(),
+            readiness_selector: "main".into(),
+            stable_selectors: vec!["main".into()],
+            allowed_masks: Vec::new(),
             viewport_width: 390,
             viewport_height: 844,
             device_scale_factor_milli: 1000,
@@ -69,7 +102,32 @@ pub async fn approve_test_spec(store: &Store, spec: &mut SpecVersion) {
         }],
         findings: Vec::new(),
     };
+    let manifest_digest = provenance.manifest_digest.clone();
+    let package_commit_sha = provenance.package_commit_sha.clone();
     spec.approve(&verification).unwrap();
+    SpecStore::save(store, spec).await.unwrap();
+    VisualBaselineStore::save(
+        store,
+        &VisualBaseline {
+            spec_version_id: spec.id.clone(),
+            project_id: spec.project_id.clone(),
+            comparison_id: "home-default-fr-mobile".into(),
+            manifest_digest,
+            package_commit_sha,
+            status: VisualBaselineStatus::Ready,
+            png_digest: Some("d".repeat(64)),
+            geometry_digest: Some("e".repeat(64)),
+            accessibility_digest: Some("f".repeat(64)),
+            environment_digest: Some("a".repeat(64)),
+            browser_version: Some("Chrome/151".into()),
+            font_fingerprint: Some("b".repeat(64)),
+            failure_code: None,
+            failure_message: None,
+            recovery_action: None,
+        },
+    )
+    .await
+    .unwrap();
 }
 
 /// The scripted agent channel: the Manager answers with a canned reply,
@@ -208,6 +266,12 @@ impl AgentChannel for StubAgents {
                 screen: "home".into(),
                 state: "default".into(),
                 locale: "fr-FR".into(),
+                theme: "light".into(),
+                route: "/".into(),
+                fixture: "synthetic-default".into(),
+                readiness_selector: "main".into(),
+                stable_selectors: vec!["main".into()],
+                allowed_masks: Vec::new(),
                 viewport_width: 390,
                 viewport_height: 844,
                 device_scale_factor_milli: 1000,
@@ -296,6 +360,7 @@ pub async fn state() -> (AppState, Store, StubAgents) {
             readiness: std::time::Duration::from_millis(200),
             ..SupervisorConfig::default()
         }),
+        baselines: BaselineSlot::Stub(StubBaselines),
         proxy_http: reqwest::Client::new(),
         agent_auth: {
             let cmd = |script: &str| latoile_agents::AgentCommand {

@@ -135,6 +135,12 @@ describe("ProjectScreen visual contract", () => {
           screen: "home",
           state: "default",
           locale: "fr-FR",
+          theme: "light",
+          route: "/",
+          fixture: "synthetic-default",
+          readiness_selector: "main",
+          stable_selectors: ["main"],
+          allowed_masks: [],
           viewport_width: 390,
           viewport_height: 844,
           device_scale_factor_milli: 1000,
@@ -148,6 +154,22 @@ describe("ProjectScreen visual contract", () => {
         },
       ],
     });
+    const capture = vi.spyOn(api, "captureBaselines").mockResolvedValue([
+      {
+        spec_version_id: draft.id,
+        comparison_id: "home-default-fr-mobile",
+        manifest_digest: draft.manifest_digest!,
+        package_commit_sha: draft.package_commit_sha!,
+        status: "ready",
+        png_digest: "d".repeat(64),
+        geometry_digest: "e".repeat(64),
+        accessibility_digest: "f".repeat(64),
+        environment_digest: "a".repeat(64),
+        browser_version: "Chrome/151.0.7922.138",
+        font_fingerprint: "b".repeat(64),
+      },
+    ]);
+    vi.spyOn(api, "baselinePng").mockResolvedValue("blob:real-baseline");
     const artifact = vi
       .spyOn(api, "specArtifact")
       .mockResolvedValue("<!doctype html><html><body>Galerie réelle</body></html>");
@@ -159,6 +181,11 @@ describe("ProjectScreen visual contract", () => {
     renderProject();
 
     expect(await screen.findByText("Complet et immuable")).toBeTruthy();
+    expect(await screen.findByText("Toutes les baselines sont prêtes")).toBeTruthy();
+    expect(capture).toHaveBeenCalledWith("spec-1");
+    expect(
+      await screen.findByAltText("Baseline réelle home-default-fr-mobile"),
+    ).toBeTruthy();
     expect(screen.getByText("git_commit_tree_verified")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Inspecter la galerie réelle" }));
     expect(await screen.findByTitle("Galerie statique réelle")).toBeTruthy();

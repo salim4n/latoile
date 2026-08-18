@@ -27,6 +27,7 @@ use crate::project::Project;
 use crate::run::Run;
 use crate::spec::SpecVersion;
 use crate::task::Task;
+use crate::visual::{VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest};
 
 /// What adapters report when they fail. Deliberately opaque: a message for
 /// logs, mapped to `{code, message}` at the HTTP edge — internal chains never
@@ -73,6 +74,21 @@ pub trait RunStore {
 pub trait SpecStore {
     async fn approved_for_project(&self, project: &ProjectId) -> PortResult<Option<SpecVersion>>;
     async fn save(&self, spec: &SpecVersion) -> PortResult<()>;
+}
+
+pub trait VisualBaselineStore {
+    async fn get(
+        &self,
+        spec: &crate::ids::SpecVersionId,
+        comparison_id: &str,
+    ) -> PortResult<Option<VisualBaseline>>;
+    async fn list_for_spec(
+        &self,
+        spec: &crate::ids::SpecVersionId,
+    ) -> PortResult<Vec<VisualBaseline>>;
+    /// A ready baseline is immutable. Failed attempts may be replaced only
+    /// by a retry for the same immutable spec/scenario contract.
+    async fn save(&self, baseline: &VisualBaseline) -> PortResult<()>;
 }
 
 pub trait ApprovalStore {
@@ -276,6 +292,19 @@ pub trait PreviewSupervisor {
         working_dir: &str,
     ) -> PortResult<(u32, u16)>;
     async fn stop(&self, preview: &Preview) -> PortResult<()>;
+}
+
+/// Real browser capture plus immutable artifact storage. Browser processes
+/// and artifact bytes stay behind this adapter boundary.
+pub trait VisualBaselineRenderer {
+    async fn capture(
+        &self,
+        request: &VisualBaselineCaptureRequest,
+    ) -> PortResult<VisualBaselineCaptureOutcome>;
+    async fn read_png(&self, baseline: &VisualBaseline) -> PortResult<Vec<u8>>;
+    async fn verify(&self, baseline: &VisualBaseline) -> PortResult<()> {
+        self.read_png(baseline).await.map(|_| ())
+    }
 }
 
 /// A repository as shown in the project picker.

@@ -7,7 +7,7 @@ use latoile_app::store::{
 };
 use latoile_core::{
     Approval, ArchitectureQuestion, ArchitectureSession, Delivery, Message, Preview, Project, Run,
-    SpecVersion, Task,
+    SpecVersion, Task, VisualBaseline,
 };
 use serde::Serialize;
 
@@ -227,6 +227,12 @@ pub struct ArchitectureVisualScenarioDto {
     pub screen: String,
     pub state: String,
     pub locale: String,
+    pub theme: String,
+    pub route: String,
+    pub fixture: String,
+    pub readiness_selector: String,
+    pub stable_selectors: Vec<String>,
+    pub allowed_masks: Vec<String>,
     pub viewport_width: u32,
     pub viewport_height: u32,
     pub device_scale_factor_milli: u32,
@@ -264,6 +270,12 @@ impl From<&latoile_core::ArchitecturePackageValidation> for ArchitecturePackageV
                     screen: scenario.screen.clone(),
                     state: scenario.state.clone(),
                     locale: scenario.locale.clone(),
+                    theme: scenario.theme.clone(),
+                    route: scenario.route.clone(),
+                    fixture: scenario.fixture.clone(),
+                    readiness_selector: scenario.readiness_selector.clone(),
+                    stable_selectors: scenario.stable_selectors.clone(),
+                    allowed_masks: scenario.allowed_masks.clone(),
                     viewport_width: scenario.viewport_width,
                     viewport_height: scenario.viewport_height,
                     device_scale_factor_milli: scenario.device_scale_factor_milli,
@@ -278,6 +290,54 @@ impl From<&latoile_core::ArchitecturePackageValidation> for ArchitecturePackageV
                     message: finding.message.clone(),
                 })
                 .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct VisualBaselineDto {
+    pub spec_version_id: String,
+    pub comparison_id: String,
+    pub manifest_digest: String,
+    pub package_commit_sha: String,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub png_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessibility_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_action: Option<String>,
+}
+
+impl From<&VisualBaseline> for VisualBaselineDto {
+    fn from(value: &VisualBaseline) -> Self {
+        Self {
+            spec_version_id: value.spec_version_id.as_str().to_string(),
+            comparison_id: value.comparison_id.clone(),
+            manifest_digest: value.manifest_digest.clone(),
+            package_commit_sha: value.package_commit_sha.clone(),
+            status: value.status.as_str(),
+            png_digest: value.png_digest.clone(),
+            geometry_digest: value.geometry_digest.clone(),
+            accessibility_digest: value.accessibility_digest.clone(),
+            environment_digest: value.environment_digest.clone(),
+            browser_version: value.browser_version.clone(),
+            font_fingerprint: value.font_fingerprint.clone(),
+            failure_code: value.failure_code.clone(),
+            failure_message: value.failure_message.clone(),
+            recovery_action: value.recovery_action.clone(),
         }
     }
 }

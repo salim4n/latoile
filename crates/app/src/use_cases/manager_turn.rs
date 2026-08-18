@@ -18,12 +18,14 @@ use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{MessageId, ProjectId, RoleId, SpecVersionId, TaskId};
 use latoile_core::ports::{
     AgentChannel, ConversationStore, EventLog, ManagerReply, SpecStore, TaskStore,
+    VisualBaselineRenderer,
 };
 use latoile_core::{Author, Message, SpecVersion, Task, TriggeredBy};
 
-pub struct ManagerTurn<A> {
+pub struct ManagerTurn<A, B> {
     store: Store,
     agents: A,
+    baselines: B,
 }
 
 /// The reply as persisted, plus the parse warnings (already surfaced as
@@ -33,9 +35,13 @@ pub struct ManagerOutcome {
     pub warnings: Vec<String>,
 }
 
-impl<A: AgentChannel + Clone> ManagerTurn<A> {
-    pub fn new(store: Store, agents: A) -> Self {
-        Self { store, agents }
+impl<A: AgentChannel + Clone, B: VisualBaselineRenderer + Clone> ManagerTurn<A, B> {
+    pub fn new(store: Store, agents: A, baselines: B) -> Self {
+        Self {
+            store,
+            agents,
+            baselines,
+        }
     }
 
     pub async fn record_reply(
@@ -147,6 +153,8 @@ impl<A: AgentChannel + Clone> ManagerTurn<A> {
                     self.store.clone(),
                     self.store.clone(),
                     self.store.clone(),
+                    self.store.clone(),
+                    self.baselines.clone(),
                     self.agents.clone(),
                     self.store.clone(),
                 )
@@ -213,6 +221,21 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeAgents;
+    #[derive(Clone)]
+    struct FakeBaselines;
+
+    impl VisualBaselineRenderer for FakeBaselines {
+        async fn capture(
+            &self,
+            _request: &latoile_core::VisualBaselineCaptureRequest,
+        ) -> PortResult<latoile_core::VisualBaselineCaptureOutcome> {
+            unimplemented!()
+        }
+
+        async fn read_png(&self, _baseline: &latoile_core::VisualBaseline) -> PortResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
 
     impl AgentChannel for FakeAgents {
         async fn tell_manager(&self, _p: &ProjectId, _m: &str) -> PortResult<ManagerReply> {
@@ -252,7 +275,7 @@ mod tests {
             content: "Je m'en occupe.\n\n```latoile-actions\n[{\"type\": \"create_tasks\", \"tasks\": [{\"title\": \"Login page\", \"role_id\": \"frontend\", \"description\": \"Form\"}]}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -284,7 +307,7 @@ mod tests {
             content: "```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Login page\", \"role_id\": \"frontend\", \"prompt\": \"Build it\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -315,7 +338,7 @@ mod tests {
             content: "Go.\n```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Login page\", \"role_id\": \"frontend\", \"prompt\": \"Build it\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -344,7 +367,7 @@ mod tests {
             content: "```latoile-actions\n[{\"type\": \"propose_spec\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -365,7 +388,7 @@ mod tests {
             content: "Réponse.\n```latoile-actions\n[oops]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();

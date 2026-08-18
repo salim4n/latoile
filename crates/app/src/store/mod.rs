@@ -25,6 +25,7 @@ mod setting;
 mod spec;
 mod spec_approval;
 mod task;
+mod visual_baseline;
 
 pub use approval::InboxApprovalRow;
 pub use conversation::ProjectMessageRow;
@@ -175,11 +176,13 @@ impl Store {
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::*;
-    use latoile_core::ports::{ArchitectureSessionStore, ProjectStore, RunStore, SpecStore, TaskStore};
+    use latoile_core::ports::{
+        ArchitectureSessionStore, ProjectStore, RunStore, SpecStore, TaskStore, VisualBaselineStore,
+    };
     use latoile_core::{
         ArchitectureOperatingMode, ArchitecturePackageValidation, ArchitectureVisualScenario,
         Project, ProjectId, RoleId, Run, RunId, SpecProvenance, SpecVersion, SpecVersionId, Task,
-        TaskId,
+        TaskId, VisualBaseline, VisualBaselineStatus,
     };
     use std::sync::LazyLock;
 
@@ -207,7 +210,9 @@ pub(crate) mod test_fixtures {
             latoile_core::ArchitectureSessionId::new("architecture-1").unwrap(),
             PROJECT.clone(),
         );
-        ArchitectureSessionStore::save(store, &session).await.unwrap();
+        ArchitectureSessionStore::save(store, &session)
+            .await
+            .unwrap();
     }
 
     pub(crate) fn test_verification(spec: &SpecVersion) -> ArchitecturePackageValidation {
@@ -225,6 +230,12 @@ pub(crate) mod test_fixtures {
                 screen: "home".into(),
                 state: "default".into(),
                 locale: "fr-FR".into(),
+                theme: "light".into(),
+                route: "/".into(),
+                fixture: "synthetic-default".into(),
+                readiness_selector: "main".into(),
+                stable_selectors: vec!["main".into()],
+                allowed_masks: Vec::new(),
                 viewport_width: 390,
                 viewport_height: 844,
                 device_scale_factor_milli: 1000,
@@ -250,7 +261,7 @@ pub(crate) mod test_fixtures {
         store
     }
 
-    pub(crate) async fn store_with_approved_spec() -> Store {
+    pub(crate) async fn store_with_approved_spec_without_baseline() -> Store {
         let store = store_with_project().await;
         seed_test_architecture_session(&store).await;
         let mut spec = SpecVersion::new(
@@ -264,6 +275,29 @@ pub(crate) mod test_fixtures {
         attach_test_provenance(&mut spec);
         spec.approve(&test_verification(&spec)).unwrap();
         SpecStore::save(&store, &spec).await.unwrap();
+        store
+    }
+
+    pub(crate) async fn store_with_approved_spec() -> Store {
+        let store = store_with_approved_spec_without_baseline().await;
+        let baseline = VisualBaseline {
+            spec_version_id: SpecVersionId::new(SPEC).unwrap(),
+            project_id: PROJECT.clone(),
+            comparison_id: "home-default".into(),
+            manifest_digest: "c".repeat(64),
+            package_commit_sha: "1".repeat(40),
+            status: VisualBaselineStatus::Ready,
+            png_digest: Some("d".repeat(64)),
+            geometry_digest: Some("e".repeat(64)),
+            accessibility_digest: Some("f".repeat(64)),
+            environment_digest: Some("a".repeat(64)),
+            browser_version: Some("Chrome/151".into()),
+            font_fingerprint: Some("b".repeat(64)),
+            failure_code: None,
+            failure_message: None,
+            recovery_action: None,
+        };
+        VisualBaselineStore::save(&store, &baseline).await.unwrap();
         store
     }
 

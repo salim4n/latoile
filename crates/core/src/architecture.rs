@@ -62,6 +62,16 @@ pub struct ArchitectureVisualScenario {
     pub screen: String,
     pub state: String,
     pub locale: String,
+    pub theme: String,
+    /// Live application route reused by run comparison. Baseline capture
+    /// reads `mockup`; both targets share every other scenario field.
+    pub route: String,
+    /// Stable synthetic data set name. Real customer data is never needed to
+    /// reproduce visual evidence.
+    pub fixture: String,
+    pub readiness_selector: String,
+    pub stable_selectors: Vec<String>,
+    pub allowed_masks: Vec<String>,
     pub viewport_width: u32,
     pub viewport_height: u32,
     pub device_scale_factor_milli: u32,

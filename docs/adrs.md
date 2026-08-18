@@ -323,8 +323,9 @@ can expose a partially approved system after a failure.
 
 The fenced manifest enumerates every package file exactly once and declares
 every P0 visual contract with a stable comparison id, screen, state, locale,
-viewport, device scale and mockup. Each mockup pins those fields plus the shared
-design-token digest in its HTML.
+theme, route, synthetic fixture, readiness/stable selectors, allowed masks,
+viewport, device scale and mockup. Each mockup pins the durable identity fields
+plus the shared design-token digest in its HTML.
 
 Before approval, LaToile proves the pinned commit exists, its full tree matches,
 it is an ancestor of HEAD, the versioned design path is unchanged and clean,
@@ -351,3 +352,54 @@ version unusable and requires a new draft.
 + Drift fails closed everywhere the approved package is consumed.
 + Approval is one auditable database fact with all provenance hashes.
 − Any intentional design edit requires generating and approving a new version.
+
+---
+
+# ADR-012 — Capture real deterministic visual baselines before approval
+
+- **Date**: 2026-08-18
+- **Status**: accepted, real local Chromium capture verified
+
+## Context
+
+An HTML mockup is inspectable but is not itself a browser-rendered fact. An
+ad-hoc screenshot omits readiness, viewport, font/browser provenance, DOM
+geometry and accessibility semantics. If the Reviewer can report those values
+itself, a plausible JSON answer can be mistaken for measured evidence.
+
+## Decision
+
+Manifest schema 2 makes each required P0 scenario executable: mockup file,
+live route, synthetic fixture, locale, light/dark theme, viewport/scale,
+readiness selector, unique stable selectors and the only selectors permitted
+to be masked.
+
+After immutable package validation, LaToile automatically launches a fresh
+headless Chromium profile through the capture adapter. HTTP, WebSocket, file
+and other external URL schemes are blocked; background services and animation
+are disabled. Capture waits for the declared selector and fonts, then records a
+real viewport PNG, canonical selector geometry and the browser's full
+accessibility tree. Environment evidence includes Chromium product/binary hash
+and a rendered font fingerprint. The artifact directory is content-addressed,
+written atomically and never overwritten. SQLite stores bounded hashes and an
+actionable ready/failed row against the exact spec manifest and commit.
+
+The approval route ensures every capture is ready, and executor dispatch checks
+the same complete set again before any ACP process starts. The authenticated UI
+shows progress, failures, recovery actions and the real PNG.
+
+## Rejected alternatives
+
+- Browser screenshots taken manually: neither reproducible nor gateable.
+- Render HTML to a synthetic canvas: not the browser layout/accessibility tree.
+- Store only PNG: hides geometry, accessibility and environment drift.
+- Let the Reviewer claim measurements: evidence must be produced by LaToile.
+- Silently mask dynamic regions: only approved scenario selectors may be masked.
+
+## Consequences
+
++ Owner approval is backed by browser-produced evidence, not a static preview alone.
++ Missing browsers, readiness timeouts and unstable selectors fail closed with recovery actions.
++ #16 can reuse the exact scenario/environment contract for live pixel comparison.
+− A supported Chromium installation is required for execution-ready visual specs.
+− Live-render comparison and heatmaps remain a separate step.

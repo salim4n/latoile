@@ -10,7 +10,7 @@ Verifiable rules. Any PR that violates one is rejected, regardless of functional
   confined to its explicit `app/src/store` persistence adapter.
 - `server` contains all of axum. Handlers extract, validate and delegate; task
   position reordering is the documented plain-data store exception.
-- Adapters (`agents`, `preview`, `github`, `vault`, persistence) implement the ports; the domain never names them.
+- Adapters (`agents`, `preview`, `github`, `capture`, `vault`, persistence) implement the ports; the domain never names them.
 
 Automated check: `scripts/guardian.sh`. Its boundary probes include:
 
@@ -33,8 +33,8 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 ## 3. Agents
 
 - Every agent process goes through `agents/`; preview dev servers go through
-  `preview/`; Git commands go through `github/`. These are the only process
-  spawning adapters.
+  `preview/`; Git commands go through `github/`; isolated Chromium capture
+  goes through `capture/`. These are the only process spawning adapters.
 - New runs receive explicit `ProjectId` context before persistence. A failed ACP
   handshake must not leave an active task/run row (ADR-007).
 - Permissions hard-reject `.env`, Docker and workspace escape. Read-only tools
@@ -68,6 +68,12 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   every pinned digest. Supersession, approval, project status, waiting-task
   binding and the audit event persist in one transaction. Later design-tree
   drift blocks artifact reads, dispatch and Reviewer context until a new draft.
+- Every P0 scenario pins route, synthetic fixture, theme, readiness selector,
+  measured selectors and allowed masks. Before approval, isolated Chromium
+  stores a real PNG, canonical DOM geometry and accessibility tree plus
+  browser/font/environment hashes under the LaToile home. SQLite stores only
+  bounded hashes/status; a ready baseline is immutable and missing or failed
+  required baselines block approval and executor dispatch.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked
@@ -102,6 +108,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   runtime-validated by `reviewPayload.ts` and degrades safely when malformed.
 - The owner sees structured package findings and the exact static gallery from
   the pinned commit before the approval action becomes available.
+- Baseline capture starts automatically after immutable validation. The owner
+  sees progress, actionable failures, the authenticated real PNG and its
+  browser/DOM/accessibility hashes before approval is enabled.
 - Mobile-first: every screen is designed at 390px viewport first.
 - No mock data outside a `fixtures/` directory clearly excluded from real routes (Firetower lesson V-M2).
 
@@ -115,6 +124,8 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - The real-provider V1 canary is opt-in and excluded from default suites. A
   completion claim needs bounded canary evidence: run ids, event cursor,
   local/remote SHA equality and Pull Request URL.
+- Browser-policy and immutable-repeat tests are hermetic. The installed-Chrome
+  capture test is explicit/opt-in and proves a real PNG plus DOM/AX evidence.
 
 ## 9. Recovery and operations
 

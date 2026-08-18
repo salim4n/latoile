@@ -44,9 +44,9 @@ fail_on_matches "SQL escaped persistence adapters" "$sql_outside_store"
 spawn_outside_adapters=$(
   "$LATOILE_RG_BIN" -l '(^|[^A-Za-z])Command::new|tokio::process::Command|std::process::Command' \
     crates --glob '*.rs' \
-    | "$LATOILE_RG_BIN" -v '^crates/(agents|preview|github)/' || true
+    | "$LATOILE_RG_BIN" -v '^crates/(agents|preview|github|capture)/' || true
 )
-fail_on_matches "process spawning escaped agents/preview/github" "$spawn_outside_adapters"
+fail_on_matches "process spawning escaped agents/preview/github/capture" "$spawn_outside_adapters"
 
 component_fetches=$(
   "$LATOILE_RG_BIN" -n 'fetch\(' web/src --glob '*.ts' --glob '*.tsx' \

@@ -17,14 +17,18 @@
 use crate::dirs::StoreDirs;
 use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector, SharedRouting};
 use latoile_app::store::Store;
+use latoile_capture::BaselineCapture;
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
     GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace,
-    PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, WorkBranchPublisher,
-    WorkspaceProvisioner,
+    PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, VisualBaselineRenderer,
+    WorkBranchPublisher, WorkspaceProvisioner,
 };
-use latoile_core::{ArchitecturePackageValidation, Run, SpecVersion};
+use latoile_core::{
+    ArchitecturePackageValidation, Run, SpecVersion, VisualBaseline, VisualBaselineCaptureOutcome,
+    VisualBaselineCaptureRequest,
+};
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
 use latoile_vault::Vault;
@@ -195,6 +199,34 @@ pub enum GitHubSlot {
     Stub(Vec<RepoInfo>),
 }
 
+#[derive(Clone)]
+pub enum BaselineSlot {
+    Real(BaselineCapture),
+    #[cfg(test)]
+    Stub(crate::tests::StubBaselines),
+}
+
+impl VisualBaselineRenderer for BaselineSlot {
+    async fn capture(
+        &self,
+        request: &VisualBaselineCaptureRequest,
+    ) -> PortResult<VisualBaselineCaptureOutcome> {
+        match self {
+            Self::Real(renderer) => renderer.capture(request).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.capture(request).await,
+        }
+    }
+
+    async fn read_png(&self, baseline: &VisualBaseline) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_png(baseline).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_png(baseline).await,
+        }
+    }
+}
+
 impl GitHubClient for GitHubSlot {
     async fn list_repos(&self) -> PortResult<Vec<RepoInfo>> {
         match self {
@@ -312,6 +344,7 @@ pub struct AppState {
     pub agents: AgentSlot,
     pub github: GitHubSlot,
     pub previews: Supervisor,
+    pub baselines: BaselineSlot,
     /// For the preview reverse proxy — separate from the GitHub client so a
     /// proxy failure never touches API state.
     pub proxy_http: reqwest::Client,
@@ -408,6 +441,7 @@ pub async fn build(
         agents: AgentSlot::Real(Arc::new(agents)),
         github: GitHubSlot::Real(github),
         previews: Supervisor::default(),
+        baselines: BaselineSlot::Real(BaselineCapture::new(config.config_home.join("baselines"))),
         proxy_http: reqwest::Client::new(),
         agent_auth: latoile_agents::AgentAuthManager::production(),
         routing,

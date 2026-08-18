@@ -69,6 +69,12 @@ struct P0Scenario {
     screen: String,
     state: String,
     locale: String,
+    theme: String,
+    route: String,
+    fixture: String,
+    readiness_selector: String,
+    stable_selectors: Vec<String>,
+    allowed_masks: Vec<String>,
     viewport: ManifestViewport,
     mockup: String,
 }
@@ -357,7 +363,7 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 1, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Comparison ids are stable and unique; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
+        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable and unique; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
         bundle.render(),
         request.operating_mode.as_str(),
         request.skill_digest,
@@ -442,7 +448,7 @@ fn validate_package(
     let manifest: PackageManifest = serde_json::from_str(manifest_raw).map_err(|error| {
         AgentError::Prompt(format!("invalid latoile-package manifest: {error}"))
     })?;
-    if manifest.schema_version != 1
+    if manifest.schema_version != 2
         || manifest.skill_digest != expected_skill_digest
         || manifest.operating_mode != expected_mode.as_str()
         || manifest.deliverables.is_empty()
@@ -498,6 +504,7 @@ fn validate_package(
     let mut scenarios = Vec::new();
     for scenario in &manifest.p0_scenarios {
         let mockup_path = Path::new(&scenario.mockup);
+        let stable_selectors = scenario.stable_selectors.iter().collect::<BTreeSet<_>>();
         if scenario.comparison_id.trim().is_empty()
             || scenario.comparison_id.len() > 128
             || !scenario.comparison_id.chars().all(|character| {
@@ -509,6 +516,28 @@ fn validate_package(
             || scenario.state.len() > 128
             || scenario.locale.trim().is_empty()
             || scenario.locale.len() > 35
+            || !matches!(scenario.theme.as_str(), "light" | "dark")
+            || !scenario.route.starts_with('/')
+            || scenario.route.starts_with("//")
+            || scenario.route.len() > 256
+            || scenario.route.chars().any(char::is_control)
+            || scenario.fixture.trim().is_empty()
+            || scenario.fixture.len() > 128
+            || !scenario.fixture.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+            || !selector_contract_safe(&scenario.readiness_selector)
+            || scenario.stable_selectors.is_empty()
+            || scenario.stable_selectors.len() > 32
+            || stable_selectors.len() != scenario.stable_selectors.len()
+            || scenario
+                .stable_selectors
+                .iter()
+                .any(|selector| !selector_contract_safe(selector))
+            || scenario.allowed_masks.len() > 16
+            || scenario.allowed_masks.iter().any(|selector| {
+                !selector_contract_safe(selector) || !stable_selectors.contains(selector)
+            })
             || scenario.viewport.width == 0
             || scenario.viewport.width > 4096
             || scenario.viewport.height == 0
@@ -541,6 +570,9 @@ fn validate_package(
             format!("data-latoile-screen=\"{}\"", scenario.screen),
             format!("data-latoile-state=\"{}\"", scenario.state),
             format!("data-latoile-locale=\"{}\"", scenario.locale),
+            format!("data-latoile-theme=\"{}\"", scenario.theme),
+            format!("data-latoile-route=\"{}\"", scenario.route),
+            format!("data-latoile-fixture=\"{}\"", scenario.fixture),
             format!(
                 "data-latoile-viewport=\"{}x{}@{}\"",
                 scenario.viewport.width,
@@ -559,6 +591,12 @@ fn validate_package(
             screen: scenario.screen.clone(),
             state: scenario.state.clone(),
             locale: scenario.locale.clone(),
+            theme: scenario.theme.clone(),
+            route: scenario.route.clone(),
+            fixture: scenario.fixture.clone(),
+            readiness_selector: scenario.readiness_selector.clone(),
+            stable_selectors: scenario.stable_selectors.clone(),
+            allowed_masks: scenario.allowed_masks.clone(),
             viewport_width: scenario.viewport.width,
             viewport_height: scenario.viewport.height,
             device_scale_factor_milli: scenario.viewport.device_scale_factor_milli,
@@ -608,6 +646,10 @@ fn validate_package(
             .map_err(|_| AgentError::Prompt("package file count overflowed".into()))?,
         scenarios,
     })
+}
+
+fn selector_contract_safe(selector: &str) -> bool {
+    !selector.trim().is_empty() && selector.len() <= 256 && !selector.chars().any(char::is_control)
 }
 
 fn html_is_self_contained(html: &str) -> bool {

@@ -6,14 +6,14 @@
 use super::dto::MessageDto;
 use crate::error::ApiError;
 use crate::state::AppState;
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use latoile_app::use_cases::{
     AnswerArchitecture, ManagerTurn, SendMessage, SendMessageInput, StartArchitecture,
 };
+use latoile_core::ArchitectureStatus;
 use latoile_core::ids::ProjectId;
 use latoile_core::ports::{AgentChannel, ArchitectureSessionStore};
-use latoile_core::ArchitectureStatus;
 use serde::{Deserialize, Serialize};
 
 pub async fn list(
@@ -94,9 +94,13 @@ pub async fn send(
             Ok(reply) if !reply.content.trim().is_empty() => {
                 // The Manager's actions execute here — tasks appear on the
                 // board, runs start, specs draft — before the reply renders.
-                let outcome = ManagerTurn::new(state.store.clone(), state.agents.clone())
-                    .record_reply(&project_id, reply)
-                    .await?;
+                let outcome = ManagerTurn::new(
+                    state.store.clone(),
+                    state.agents.clone(),
+                    state.baselines.clone(),
+                )
+                .record_reply(&project_id, reply)
+                .await?;
                 Some(MessageDto::from(&outcome.message))
             }
             Ok(_) => None,

@@ -20,7 +20,7 @@ use crate::auth;
 use crate::state::AppState;
 use axum::http::StatusCode;
 use axum::routing::{any, get, patch, post};
-use axum::{middleware, Json, Router};
+use axum::{Json, Router, middleware};
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
@@ -52,6 +52,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/spec-versions", get(specs::list))
         .route("/api/spec-versions/{id}/approve", post(specs::approve))
         .route("/api/spec-versions/{id}/validation", get(specs::validate))
+        .route(
+            "/api/spec-versions/{id}/baselines",
+            get(specs::baselines).post(specs::capture_baselines),
+        )
+        .route(
+            "/api/spec-versions/{id}/baselines/{comparison_id}/image",
+            get(specs::baseline_png),
+        )
         .route(
             "/api/spec-versions/{id}/artifacts/{*path}",
             get(specs::artifact),

@@ -457,6 +457,34 @@ async fn approving_a_spec_marks_the_project_specced() {
             .contains("stub artifact gallery.html")
     );
 
+    let captured = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/spec-versions/s1/baselines",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(captured.status(), StatusCode::OK);
+    let captured = body_json(captured).await;
+    assert_eq!(captured[0]["status"], "ready");
+    assert_eq!(captured[0]["browser_version"], "Chrome/151");
+    assert_eq!(captured[0]["png_digest"], "d".repeat(64));
+
+    let png = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/baselines/home-default-fr-mobile/image",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(png.status(), StatusCode::OK);
+    assert_eq!(png.headers()["content-type"], "image/png");
+    assert_eq!(png.headers()["etag"], format!("\"{}\"", "d".repeat(64)));
+
     let approved = app
         .clone()
         .oneshot(authed(request(

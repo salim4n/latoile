@@ -13,6 +13,7 @@ Install these commands for the account that runs the service:
 | `git` and `sh` | checkout, evidence, delivery and project dev commands |
 | `claude` + `claude-agent-acp` | Claude provider, when selected in Settings |
 | `codex` + `codex-acp` | Codex provider, when selected in Settings |
+| Google Chrome or Chromium | isolated deterministic P0 baseline capture |
 | project toolchains | only what each checkout's `dev_command` and tasks need |
 
 The maintained ACP adapter packages are
@@ -20,6 +21,14 @@ The maintained ACP adapter packages are
 `@agentclientprotocol/codex-acp`. At least one complete provider pair must be
 on the service account's `PATH`. Connect it through **Settings** after the
 server starts. Provider credentials remain owned by the provider CLI.
+
+LaToile discovers `google-chrome-stable`, `google-chrome`, `chromium` or
+`chromium-browser` in standard Linux locations (and Google Chrome on macOS).
+For a pinned operator-managed build, set
+`LATOILE_CAPTURE_BROWSER=/absolute/path/to/chromium`. Every successful baseline
+records the product version, executable SHA-256 and rendered font fingerprint;
+changing that environment makes a repeat mismatch explicit instead of silently
+replacing approved evidence.
 
 Store the GitHub token through stdin, never as an argument:
 

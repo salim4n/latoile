@@ -99,6 +99,32 @@ async function requestText(path: string): Promise<string> {
   return response.text();
 }
 
+async function requestObjectUrl(path: string): Promise<string> {
+  const token = getToken();
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    throw new ApiError(0, "unreachable", "network");
+  }
+  if (response.status === 401) {
+    setToken(null);
+    unauthorizedHandler();
+    throw new ApiError(401, "unauthorized", "token required");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status,
+      body?.code ?? "error",
+      body?.message ?? response.statusText,
+    );
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
 // ── DTOs (mirror crates/server/src/routes/dto.rs) ───────────────────────────
 
 export interface Project {
@@ -229,10 +255,33 @@ export interface ArchitectureVisualScenario {
   screen: string;
   state: string;
   locale: string;
+  theme: "light" | "dark";
+  route: string;
+  fixture: string;
+  readiness_selector: string;
+  stable_selectors: string[];
+  allowed_masks: string[];
   viewport_width: number;
   viewport_height: number;
   device_scale_factor_milli: number;
   mockup: string;
+}
+
+export interface VisualBaseline {
+  spec_version_id: string;
+  comparison_id: string;
+  manifest_digest: string;
+  package_commit_sha: string;
+  status: "ready" | "failed";
+  png_digest?: string;
+  geometry_digest?: string;
+  accessibility_digest?: string;
+  environment_digest?: string;
+  browser_version?: string;
+  font_fingerprint?: string;
+  failure_code?: string;
+  failure_message?: string;
+  recovery_action?: string;
 }
 
 export interface ArchitecturePackageValidation {
@@ -320,6 +369,12 @@ export const api = {
     request<ArchitecturePackageValidation>(`/api/spec-versions/${spec}/validation`),
   approveSpec: (spec: string) =>
     request<SpecVersion>(`/api/spec-versions/${spec}/approve`, { method: "POST" }),
+  baselines: (spec: string) =>
+    request<VisualBaseline[]>(`/api/spec-versions/${spec}/baselines`),
+  captureBaselines: (spec: string) =>
+    request<VisualBaseline[]>(`/api/spec-versions/${spec}/baselines`, { method: "POST" }),
+  baselinePng: (spec: string, comparisonId: string) =>
+    requestObjectUrl(`/api/spec-versions/${spec}/baselines/${comparisonId}/image`),
   specArtifact: (spec: string, path: string) =>
     requestText(`/api/spec-versions/${spec}/artifacts/${path}`),
   cancelArchitecture: (project: string) =>

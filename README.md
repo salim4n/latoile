@@ -90,6 +90,8 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Native provider login/status/logout and persisted role routing
 - [x] Project + persistent Manager chat + executable action blocks
 - [x] Dedicated Manager, Architect, Backend, Frontend and Reviewer skills
+- [x] Automated Architect discovery, confined architecture package and immutable owner validation
+- [x] Real deterministic Chromium baselines with PNG, DOM geometry and accessibility evidence
 - [x] Executor supervision with bounded Git evidence and fail-closed ACP permissions
 - [x] Supervised live preview with auto-reload
 - [x] Reviewer-before-human flow, corrective runs and audited decisions
@@ -98,7 +100,7 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Opt-in real-provider V1 vertical-slice canary
 - [x] Blocking startup recovery, preview health reconciliation, paired backup/restore and release smoke
 
-Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) also call out the unwired automatic Architect pass, fresh Manager context assembly, project status promotion and screenshot/pixel-diff review.
+Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) now distinguish the shipped real mockup baselines from the still-pending live-render pixel diff, alongside fresh Manager context assembly and project status promotion.
 
 ## Contributing
 

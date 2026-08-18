@@ -25,13 +25,14 @@ pub mod project;
 pub mod run;
 pub mod spec;
 pub mod task;
+pub mod visual;
 
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
 pub use architecture::{
-    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageStatus,
-    ArchitecturePackageValidation, ArchitecturePhase, ArchitectureQuestion,
-    ArchitectureQuestionStatus, ArchitectureSession, ArchitectureStatus,
-    ArchitectureValidationFinding, ArchitectureVisualScenario, ARCHITECT_SKILL_NAME,
+    ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
+    ArchitecturePackageStatus, ArchitecturePackageValidation, ArchitecturePhase,
+    ArchitectureQuestion, ArchitectureQuestionStatus, ArchitectureSession, ArchitectureStatus,
+    ArchitectureValidationFinding, ArchitectureVisualScenario,
 };
 pub use conversation::{Author, Conversation, Message};
 pub use delivery::{Delivery, DeliveryStatus};
@@ -46,3 +47,7 @@ pub use project::{Project, ProjectStatus};
 pub use run::{Run, RunStatus, TriggeredBy};
 pub use spec::{SpecProvenance, SpecStatus, SpecVersion};
 pub use task::{Task, TaskStatus};
+pub use visual::{
+    CapturedVisualBaseline, VisualBaseline, VisualBaselineCaptureOutcome,
+    VisualBaselineCaptureRequest, VisualBaselineStatus,
+};

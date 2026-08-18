@@ -30,6 +30,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D14 | Delivery is an explicit owner action: verify approved SHAs, push without force, verify the remote SHA, then find or create a PR; never merge | Push automatically when a run finishes or merge through the application |
 | D15 | A restart invalidates process-backed rows before HTTP readiness; the service cgroup reaps crash orphans, and backup always pairs SQLite with the external root key | Resume unknown processes, signal persisted PIDs, or back up the database alone |
 | D16 | Spec approval revalidates a complete machine-readable visual manifest and exact Git/content provenance; approval, supersession, task binding and event are one transaction | Trust validation performed only when the Architect originally generated the draft |
+| D17 | Every required P0 mockup is rendered by isolated Chromium before approval; immutable PNG, DOM geometry, accessibility and environment hashes gate approval and dispatch | Ad-hoc screenshots or Reviewer self-reported measurements |
 
 ## 3. Domain model
 
@@ -38,7 +39,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | Context | Responsibility | Entities |
 |---|---|---|
 | Project | lifecycle, repo link, state | `Project` |
-| Design | Socratic discovery, versioned spec, artifacts | `ArchitectureSession`, `ArchitectureQuestion`, `SpecVersion` |
+| Design | Socratic discovery, versioned spec, artifacts | `ArchitectureSession`, `ArchitectureQuestion`, `SpecVersion`, `VisualBaseline` |
 | Orchestration | roles, tasks, runs, approvals | `Role`, `Task`, `Run`, `Approval` |
 | Conversation | the Manager thread | `Conversation`, `Message` |
 | Preview | dev server, port, state | `Preview` |
@@ -94,6 +95,14 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     spec, approves the exact draft, marks the project specced, binds waiting
     tasks and journals every immutable digest. Drift blocks approval, artifact
     rendering, executor dispatch and Reviewer context; a new draft is required.
+18. Every P0 scenario also declares a live route, synthetic fixture, theme,
+    readiness selector, stable measured selectors and an explicit mask subset.
+    Capture rejects missing/ambiguous selectors and never invents a mask.
+19. Isolated Chromium blocks external URL schemes, disables motion and records
+    the exact browser binary/version plus a font fingerprint. PNG, canonical
+    DOM geometry and browser accessibility snapshots are content-addressed;
+    successful evidence is immutable. Approval and dispatch require one ready
+    baseline matching every scenario and the exact spec manifest/commit.
 
 ### 3.3 Domain events
 
@@ -183,6 +192,22 @@ erDiagram
         text prompt
         text status "open | answered"
         text answer
+    }
+    VISUAL_BASELINE {
+        text spec_version_id PK,FK
+        text project_id FK
+        text comparison_id PK
+        text manifest_digest
+        text package_commit_sha
+        text status "ready | failed"
+        text png_digest
+        text geometry_digest
+        text accessibility_digest
+        text environment_digest
+        text browser_version
+        text font_fingerprint
+        text failure_code
+        text recovery_action
     }
     ROLE {
         text id PK "manager | architect | backend | frontend | reviewer"
@@ -281,7 +306,7 @@ erDiagram
     }
 ```
 
-Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one delivery per project; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0005` at the V1 canary).
+Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one delivery per project; one immutable visual baseline per spec/comparison; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0009`).
 
 ## 5. Architecture
 
@@ -293,6 +318,7 @@ crates/
 ├── agents/    ACP channel + provider CLI auth: supervised spawn, sessions, permissions, usage
 ├── preview/   dev-server supervision, port allocation, reverse proxy
 ├── github/    checkout provisioning, Git verification/push, GitHub REST/PR client
+├── capture/   isolated Chromium, CDP capture, immutable PNG/DOM/AX artifact store
 ├── vault/     secrets (XChaCha20-Poly1305, root key outside the DB)
 ├── app/       use cases + supervision decisions: messages, dispatch, review, permissions, delivery
 ├── server/    axum HTTP, SSE, embedded assets, token auth — extract, validate, delegate
@@ -300,7 +326,7 @@ crates/
 web/           React + Vite + Tailwind, mobile-first, embedded via rust-embed
 ```
 
-Graph: `core` at the center; `app` depends on `core` and the ports; `agents/preview/github/vault` implement the ports; `server` only talks to `app`; `cli` assembles. No upward dependencies.
+Graph: `core` at the center; `app` depends on `core` and the ports; `agents/preview/github/capture/vault` implement the ports; `server` delegates to use cases and adapters; `cli` assembles. No upward dependencies.
 
 ### 5.2 Critical sequence
 
@@ -312,6 +338,7 @@ sequenceDiagram
     participant M as Manager (persistent ACP)
     participant F as Frontend agent (ephemeral ACP)
     participant R as Reviewer (ephemeral ACP)
+    participant C as capture (isolated Chromium)
     participant P as preview
     participant G as GitHub
     participant DB as SQLite
@@ -320,6 +347,10 @@ sequenceDiagram
     S->>A: SendMessage
     A->>M: skill preamble + message (persistent session history)
     M-->>A: reply + latoile-actions
+    A->>DB: immutable architecture draft + explicit P0 scenarios
+    A->>C: isolated Chromium baseline capture (network off)
+    C-->>A: PNG + DOM geometry + accessibility + environment hashes
+    A->>DB: immutable VISUAL_BASELINE rows; owner approval gate opens
     A->>F: ACP handshake (ProjectId + task + spec + skill)
     A->>DB: persist TASK + RUN + EVENT after handshake
     opt mutating ACP tool
@@ -364,7 +395,9 @@ sequenceDiagram
 | GET | `/api/projects/:id/spec-versions` | list draft, approved and superseded specs |
 | GET | `/api/spec-versions/:id/validation` | rerun and expose structured immutable package findings |
 | GET | `/api/spec-versions/:id/artifacts/*` | render a revalidated HTML artifact from the pinned commit with restrictive CSP |
-| POST | `/api/spec-versions/:id/approve` | revalidate and atomically approve the exact immutable spec |
+| GET/POST | `/api/spec-versions/:id/baselines` | list evidence / capture every required mockup scenario in isolated Chromium |
+| GET | `/api/spec-versions/:id/baselines/:comparison_id/image` | authenticated immutable real baseline PNG |
+| POST | `/api/spec-versions/:id/approve` | ensure required baselines, revalidate and atomically approve the exact immutable spec |
 | GET | `/api/runs/:id` | status, summary, base/head SHA and sanitized artifacts |
 | GET | `/api/approvals`, `/api/approvals/:id` | pending inbox / decision detail |
 | POST | `/api/approvals/:id` | `{granted: bool, comment?: string}` for review or permission |
@@ -399,6 +432,7 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 | Frontend | React + Vite + Tailwind, embedded (rust-embed) | single binary, zero Node server | Next.js, Electron |
 | Agent channel | `agent-client-protocol` crate + supervised spawn (aionui-process pattern) | structured status/permissions/cancel | tmux/PTY — documented debt |
 | Preview | dev-server subprocess + axum HTTP reverse proxy + supervised refresh | same-origin iframe and stable project URL; WebSocket upgrade is deferred | containers — reserved for multi-tenant |
+| Baseline capture | Chromium DevTools Protocol in an isolated profile; URL schemes blocked, animations disabled | real PNG, DOM and accessibility facts with reproducible environment provenance | synthetic canvas or Reviewer prose |
 | GitHub | REST + encrypted token (vault) | proven pattern | OAuth device flow — matters for other users |
 | Realtime | single SSE channel `/events` | sufficient for one user | bidirectional WebSocket |
 | Style | modular monolith, Cargo workspace | team of one | microservices |
@@ -432,8 +466,9 @@ package confinement. These current limits remain:
 - Preview proxying streams HTTP bodies but not WebSocket upgrades. Executor
   completion recycles the supervised preview; Vite-style WebSocket HMR through
   the proxy is outside V1.
-- The Review comparison is bounded structured Reviewer evidence, not a
-  screenshot or pixel-diff engine.
+- Architecture mockups now have real deterministic PNG/DOM/accessibility
+  baselines. Live preview replay, heatmap and pixel-diff gating remain pending,
+  so the current Review comparison still uses bounded Reviewer evidence.
 - Delivery publishes the complete clean work branch. It does not select tasks,
   merge, deploy or monitor production.
 
