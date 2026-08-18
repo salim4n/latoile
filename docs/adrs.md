@@ -745,3 +745,52 @@ normalization and no unbounded retry.
 + Owner input, skill identity and ACP context remain auditable and unchanged.
 + Regressing phases and malformed repairs still fail closed.
 − A repaired discovery may spend one additional provider turn.
+
+---
+
+# ADR-020 — Calibrate Reviewer verdicts without overriding code judgement
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+A greenfield canary proved an exact corrected render: zero changed pixels,
+zero geometry drift, zero accessibility changes and a render digest equal to
+the approved baseline. The Reviewer still returned `changes_requested`. The
+server correctly preserved that model judgement, but the prompt had no verdict
+rubric and the canary task description incorrectly presented the temporary
+regression as final task scope. Optional preferences and contradictory test
+setup were therefore hard to distinguish from true blockers.
+
+## Decision
+
+Reviewer prompts now define three explicit levels. `changes_requested` is only
+for a concrete blocking correctness, security, approved-spec or stated
+acceptance defect and must carry an actionable blocking finding.
+`approve_with_reservations` means deliverable with only non-blocking findings;
+`approve` means no finding. Optional enhancements, framework preferences and
+unstated scope cannot become hidden acceptance criteria.
+
+Passed visual evidence remains necessary but does not force approval: a real
+blocking code defect can still stop delivery. The server continues to bind and
+classify visual evidence independently of model judgement. The canary's task
+description now states the final exact visual contract; its deliberate initial
+regression is labeled intermediate test setup only.
+
+## Rejected alternatives
+
+- Auto-approve every pixel-identical run: would erase security and correctness
+  review outside the rendered frame.
+- Ignore every Reviewer `changes_requested`: would turn Reviewer V2 into a
+  decorative step.
+- Treat optional preferences as blockers: creates stochastic hidden scope and
+  makes the automated delivery path non-repeatable.
+
+## Consequences
+
++ Reviewer judgement remains meaningful beyond visual similarity.
++ Final task intent is no longer contradicted by canary setup.
++ Non-blocking advice can remain visible without preventing delivery.
+− Verdict quality still depends on provider reasoning, but its decision
+  boundary is now explicit and test-covered.

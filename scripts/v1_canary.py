@@ -178,6 +178,14 @@ def reviewer_observation(payload: dict[str, Any]) -> dict[str, Any]:
     )
     references = visual.get("references") if isinstance(visual, dict) else []
     references = references if isinstance(references, list) else []
+    findings = payload.get("findings") if isinstance(payload.get("findings"), list) else []
+    finding_severities: dict[str, int] = {}
+    for finding in findings[:100]:
+        if not isinstance(finding, dict):
+            continue
+        severity = finding.get("severity")
+        key = severity if severity in {"blocking", "reservation"} else "invalid"
+        finding_severities[key] = finding_severities.get(key, 0) + 1
     return {
         "schema_version": payload.get("schema_version"),
         "reviewed_run_id": payload.get("reviewed_run_id"),
@@ -188,6 +196,8 @@ def reviewer_observation(payload: dict[str, Any]) -> dict[str, Any]:
             "code": gate.get("code"),
         },
         "reference_count": len(references),
+        "finding_count": len(findings),
+        "finding_severities": finding_severities,
         "evidence_ids": [
             reference.get("evidence_id")
             for reference in references[:50]
@@ -671,8 +681,9 @@ class Canary:
                 "role_id": "frontend",
                 "title": title,
                 "description": (
-                    "Implement the approved visual contract, including the temporary "
-                    "canary-regression style described in the execution prompt."
+                    "Implement the approved P0 visual contract exactly. The deliberate "
+                    "canary regression in the first execution prompt is intermediate test "
+                    "setup and must not remain in the deliverable."
                 ),
                 "prompt": (
                     "This repository has no application source. Read the approved architecture "

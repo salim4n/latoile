@@ -126,6 +126,10 @@ class CanarySafetyTests(unittest.TestCase):
                 "reviewed_run_id": "run-2",
                 "verdict": "approve",
                 "summary": "provider prose omitted",
+                "findings": [
+                    {"severity": "blocking", "text": "omitted"},
+                    {"severity": "reservation", "text": "omitted"},
+                ],
                 "gate": {"trusted_v2": True, "approvable": True, "code": "trusted"},
                 "visual_evidence": {
                     "references": [{"evidence_id": "visual:run-2:home", "status": "passed"}]
@@ -135,7 +139,12 @@ class CanarySafetyTests(unittest.TestCase):
 
         self.assertEqual(observation["gate"]["code"], "trusted")
         self.assertEqual(observation["evidence_ids"], ["visual:run-2:home"])
+        self.assertEqual(observation["finding_count"], 2)
+        self.assertEqual(
+            observation["finding_severities"], {"blocking": 1, "reservation": 1}
+        )
         self.assertNotIn("summary", observation)
+        self.assertNotIn("text", json.dumps(observation))
 
     def test_architecture_diagnostic_is_bounded_and_excludes_owner_content(self):
         with tempfile.TemporaryDirectory() as artifact_root:

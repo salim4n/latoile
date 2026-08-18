@@ -462,6 +462,17 @@ async fn a_finished_run_drives_review_and_journals() {
     assert!(prompt.contains("latoile-review"), "{prompt}");
     assert!(prompt.contains("schema_version 2"), "{prompt}");
     assert!(prompt.contains("server binds the complete evidence set"), "{prompt}");
+    assert!(prompt.contains("VERDICT RUBRIC"), "{prompt}");
+    assert!(
+        prompt.contains("only for a concrete blocking correctness"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "Optional enhancements, framework preferences and unstated scope are never blocking"
+        ),
+        "{prompt}"
+    );
     let reviewer_result = serde_json::json!({
         "schema_version": 2,
         "verdict": "approve_with_reservations",

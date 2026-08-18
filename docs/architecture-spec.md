@@ -134,7 +134,10 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     complete set for that run, current project and approved task spec,
     reconstructs the payload from stored evidence and canonicalizes every failed gate to
     `changes_requested`. Only trusted approvable V2 payloads may be granted;
-    historic V1 approvals stay readable and non-grantable.
+    historic V1 approvals stay readable and non-grantable. The verdict rubric
+    reserves `changes_requested` for concrete blocking correctness, security,
+    approved-spec or stated acceptance defects; optional enhancements and
+    unstated scope are non-blocking reservations.
 22. The Review UI loads only evidence ids present in the trusted V2 envelope,
     resolves their current server rows and approved manifest scenarios, and
     fetches baseline, render and heatmap through bearer-authenticated routes.

@@ -101,6 +101,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   and metrics from SQLite, canonicalizes failed gates to
   `changes_requested`, and permits a grant only when `trusted_v2` and
   `approvable` are both true. Legacy V1 payloads remain readable but untrusted.
+  The Reviewer prompt carries an explicit verdict rubric: only concrete
+  blocking correctness, security, approved-spec or acceptance defects may
+  request changes; optional enhancements and unstated scope are reservations.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked
