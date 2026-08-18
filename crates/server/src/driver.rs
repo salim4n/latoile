@@ -14,7 +14,9 @@ use latoile_app::supervision::{self, Observed};
 use latoile_app::use_cases::EnsurePreview;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::RunId;
-use latoile_core::ports::{EventLog, PreviewStore, ProjectStore, RunStore, SpecStore, TaskStore};
+use latoile_core::ports::{
+    ArchitectureSessionStore, EventLog, PreviewStore, ProjectStore, RunStore, SpecStore, TaskStore,
+};
 use latoile_core::{PreviewStatus, Run};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,6 +29,7 @@ pub struct RecoverySummary {
     pub runs: usize,
     pub blocked_permissions: usize,
     pub previews: usize,
+    pub architecture_sessions: usize,
 }
 
 /// Reconcile process-backed rows before the HTTP listener can become ready.
@@ -46,17 +49,26 @@ pub async fn recover_startup(
     for run in &runs {
         supervision::apply(&state.store, &run.id, &Observed::Lost).await?;
     }
+    let mut architecture_sessions = state.store.active_architecture_sessions().await?;
+    for session in &mut architecture_sessions {
+        session.fail(
+            "live Architect session was lost to a server restart; restart discovery from the durable answers",
+        )?;
+        ArchitectureSessionStore::save(&state.store, session).await?;
+    }
     let previews = reconcile_previews(state, true).await?;
     let summary = RecoverySummary {
         runs: runs.len(),
         blocked_permissions,
         previews,
+        architecture_sessions: architecture_sessions.len(),
     };
-    if summary.runs + summary.previews > 0 {
+    if summary.runs + summary.previews + summary.architecture_sessions > 0 {
         tracing::warn!(
             runs = summary.runs,
             blocked_permissions = summary.blocked_permissions,
             previews = summary.previews,
+            architecture_sessions = summary.architecture_sessions,
             "startup recovery reconciled lost process state"
         );
     }

@@ -92,7 +92,9 @@ describe("NewProjectScreen visual contract", () => {
     expect(await screen.findByRole("button", { name: "Création en cours…" })).toBeTruthy();
     expect((brief as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByRole("radio", { name: /salim4n\/latoile/ }) as HTMLInputElement).disabled).toBe(true);
-    expect(screen.getByText("Le Manager prépare le dépôt et la première planification.")).toBeTruthy();
+    expect(
+      screen.getByText("L'Architecte ouvre la découverte et prépare sa première question."),
+    ).toBeTruthy();
   });
 
   it("preserves the form and makes a failed creation recoverable", async () => {
@@ -133,7 +135,11 @@ describe("NewProjectScreen visual contract", () => {
     }));
     expect(create.mock.calls[0][0]).not.toHaveProperty("local_path");
     expect(create.mock.calls[0][0]).not.toHaveProperty("dev_command");
-    expect(send).toHaveBeenCalledWith(project.id, "Construire le portail client.");
+    expect(send).toHaveBeenCalledWith(
+      project.id,
+      "Construire le portail client.",
+      "architecture_brief",
+    );
   });
 
   it("sends an explicit preview command only when the owner provides one", async () => {

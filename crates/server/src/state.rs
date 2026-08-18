@@ -17,9 +17,9 @@
 use crate::dirs::StoreDirs;
 use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector, SharedRouting};
 use latoile_app::store::Store;
-use latoile_core::ids::{ProjectId, RunId};
+use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
-    AgentChannel, GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput,
+    AgentChannel, ArchitectReply, GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput,
     ProvisionedWorkspace, PublishWorkBranchInput, PublishedWorkBranch, RepoInfo,
     WorkBranchPublisher, WorkspaceProvisioner,
 };
@@ -72,6 +72,41 @@ impl AgentChannel for AgentSlot {
             Self::Real(channel) => channel.tell_manager(project, message).await,
             #[cfg(test)]
             Self::Stub(stub) => stub.tell_manager(project, message).await,
+        }
+    }
+    async fn start_architecture(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        brief: &str,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => channel.start_architecture(project, session, brief).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.start_architecture(project, session, brief).await,
+        }
+    }
+    async fn continue_architecture(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        answer: &str,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .continue_architecture(project, session, answer)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => stub.continue_architecture(project, session, answer).await,
+        }
+    }
+    async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
+        match self {
+            Self::Real(channel) => channel.cancel_architecture(session).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.cancel_architecture(session).await,
         }
     }
     async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {

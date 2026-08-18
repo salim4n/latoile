@@ -4,7 +4,16 @@
 
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ApiError, api, getToken, type Delivery, type Message, type Preview, type Task } from "../api";
+import {
+  ApiError,
+  api,
+  getToken,
+  type ArchitectureSession,
+  type Delivery,
+  type Message,
+  type Preview,
+  type Task,
+} from "../api";
 import { useAsync, useEventReload, type Async } from "../hooks";
 import { useT, type Key, type Lang } from "../i18n";
 import { Shell } from "../components/Shell";
@@ -160,13 +169,138 @@ function messageTime(createdAt: string | undefined, lang: Lang): string {
   return new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
+const ARCHITECTURE_STATUS_KEYS: Record<ArchitectureSession["status"], Key> = {
+  discovering: "architecture.status.discovering",
+  awaiting_answer: "architecture.status.awaiting_answer",
+  ready_to_draft: "architecture.status.ready_to_draft",
+  failed: "architecture.status.failed",
+  cancelled: "architecture.status.cancelled",
+};
+
+const ARCHITECTURE_PHASE_KEYS: Record<ArchitectureSession["phase"], Key> = {
+  domain_discovery: "architecture.phase.domain_discovery",
+  requirements: "architecture.phase.requirements",
+  ux_discovery: "architecture.phase.ux_discovery",
+  ready_to_draft: "architecture.phase.ready_to_draft",
+};
+
+function ArchitecturePanel({
+  project,
+  architecture,
+}: {
+  project: string;
+  architecture: Async<ArchitectureSession | null>;
+}) {
+  const { t } = useT();
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
+  const session = architecture.data;
+
+  async function cancel() {
+    if (cancelling) return;
+    setCancelling(true);
+    setCancelError(false);
+    try {
+      await api.cancelArchitecture(project);
+      architecture.reload();
+    } catch {
+      setCancelError(true);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  if (architecture.loading && !session) {
+    return (
+      <div
+        className="skel architecture-skeleton"
+        role="status"
+        aria-label={t("architecture.loading")}
+      />
+    );
+  }
+  if (architecture.error && !session) {
+    return (
+      <section className="architecture-card architecture-card--error">
+        <p>{t("architecture.load.error")}</p>
+        <button className="btn btn--ghost btn--sm" type="button" onClick={architecture.reload}>
+          {t("inbox.error.retry")}
+        </button>
+      </section>
+    );
+  }
+  if (!session) return null;
+
+  const openQuestion = session.questions.find((question) => question.status === "open");
+  const active = !["failed", "cancelled"].includes(session.status);
+  return (
+    <section className="architecture-card" aria-label={t("architecture.aria")}>
+      <div className="architecture-heading">
+        <div>
+          <span className="architecture-eyebrow">{t("architecture.role")}</span>
+          <h3>{t("architecture.title")}</h3>
+        </div>
+        <span
+          className={`badge ${session.status === "failed" ? "badge--danger" : session.status === "ready_to_draft" ? "badge--success" : "badge--neutral"}`}
+        >
+          {t(ARCHITECTURE_STATUS_KEYS[session.status])}
+        </span>
+      </div>
+      <p className="architecture-phase">
+        {t("architecture.phase.label")} {t(ARCHITECTURE_PHASE_KEYS[session.phase])}
+      </p>
+      {openQuestion && (
+        <div className="architecture-current">
+          <strong>{t("architecture.current_question")}</strong>
+          <p>{openQuestion.prompt}</p>
+        </div>
+      )}
+      {session.questions.length > 0 && (
+        <ol className="architecture-history" aria-label={t("architecture.history")}>
+          {session.questions.map((question) => (
+            <li key={question.id}>
+              <span>{question.sequence}</span>
+              <div>
+                <strong>{question.prompt}</strong>
+                {question.answer && <p>{question.answer}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {session.failure_reason && (
+        <p className="architecture-failure" role="alert">
+          {session.failure_reason}
+        </p>
+      )}
+      {cancelError && (
+        <p className="decision-error" role="alert">
+          {t("architecture.cancel.error")}
+        </p>
+      )}
+      {active && (
+        <button
+          className="btn btn--ghost btn--sm architecture-cancel"
+          type="button"
+          onClick={cancel}
+          disabled={cancelling}
+        >
+          {cancelling ? t("architecture.cancelling") : t("architecture.cancel")}
+        </button>
+      )}
+    </section>
+  );
+}
+
 function ChatTab({ project }: { project: string }) {
   const { t, lang } = useT();
   const messages = useAsync(() => api.messages(project), [project]);
+  const architecture = useAsync(() => api.architecture(project), [project]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
   useEventReload(["message_posted"], messages.reload);
+  useEventReload(["message_posted"], architecture.reload);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -178,6 +312,7 @@ function ChatTab({ project }: { project: string }) {
       await api.sendMessage(project, content);
       setDraft("");
       messages.reload();
+      architecture.reload();
     } catch {
       setSendError(true);
     } finally {
@@ -186,8 +321,10 @@ function ChatTab({ project }: { project: string }) {
   }
 
   const list = messages.data ?? [];
+  const awaitingArchitect = architecture.data?.status === "awaiting_answer";
   return (
     <div className="chat-panel">
+      <ArchitecturePanel project={project} architecture={architecture} />
       <div className="chat-thread">
         {messages.loading && <ProjectLoading label={t("chat.loading")} />}
         {messages.error && (
@@ -216,12 +353,12 @@ function ChatTab({ project }: { project: string }) {
       <form className="composer" onSubmit={send} aria-label={t("chat.composer.aria")}>
         {sendError && <p className="composer-error" role="alert">{t("chat.send.error")}</p>}
         <label htmlFor="composer-input" className="sr-only">
-          {t("chat.placeholder")}
+          {t(awaitingArchitect ? "architecture.answer.placeholder" : "chat.placeholder")}
         </label>
         <input
           id="composer-input"
           type="text"
-          placeholder={t("chat.placeholder")}
+          placeholder={t(awaitingArchitect ? "architecture.answer.placeholder" : "chat.placeholder")}
           autoComplete="off"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}

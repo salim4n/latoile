@@ -6,12 +6,14 @@ use super::*;
 use crate::driver;
 use latoile_agents::{ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState};
 use latoile_core::event::EventKind;
-use latoile_core::ids::{PreviewId, RunId, SpecVersionId, TaskId};
+use latoile_core::ids::{ArchitectureSessionId, PreviewId, RunId, SpecVersionId, TaskId};
 use latoile_core::ports::PermissionRequest;
-use latoile_core::ports::{ApprovalStore, PreviewStore, RunStore, SpecStore, TaskStore};
+use latoile_core::ports::{
+    ApprovalStore, ArchitectureSessionStore, PreviewStore, RunStore, SpecStore, TaskStore,
+};
 use latoile_core::{
-    Approval, ApprovalId, ApprovalKind, ApprovalStatus, Preview, RoleId, Run, RunStatus,
-    SpecVersion, Task, TaskStatus, TriggeredBy,
+    Approval, ApprovalId, ApprovalKind, ApprovalStatus, ArchitectureSession, ArchitectureStatus,
+    Preview, RoleId, Run, RunStatus, SpecVersion, Task, TaskStatus, TriggeredBy,
 };
 use std::time::Duration;
 
@@ -220,10 +222,19 @@ async fn startup_recovery_closes_all_process_claims_before_serving() {
     preview.mark_ready(4242).unwrap();
     PreviewStore::save(&store, &preview).await.unwrap();
 
+    let architecture = ArchitectureSession::new(
+        ArchitectureSessionId::new("architecture-startup").unwrap(),
+        ProjectId::new(&project).unwrap(),
+    );
+    ArchitectureSessionStore::save(&store, &architecture)
+        .await
+        .unwrap();
+
     let recovered = driver::recover_startup(&state).await.unwrap();
     assert_eq!(recovered.runs, 1);
     assert_eq!(recovered.blocked_permissions, 1);
     assert_eq!(recovered.previews, 1);
+    assert_eq!(recovered.architecture_sessions, 1);
     assert_eq!(run_status(&store, &run_id).await, RunStatus::Error);
     assert_eq!(
         ApprovalStore::get(&store, &permission.id)
@@ -234,6 +245,15 @@ async fn startup_recovery_closes_all_process_claims_before_serving() {
         ApprovalStatus::Rejected
     );
     assert!(store.active_previews().await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .latest_for_project(&ProjectId::new(&project).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ArchitectureStatus::Failed
+    );
     assert_eq!(
         TaskStore::get(&store, &run.task_id)
             .await
@@ -256,6 +276,7 @@ async fn startup_recovery_closes_all_process_claims_before_serving() {
             runs: 0,
             blocked_permissions: 0,
             previews: 0,
+            architecture_sessions: 0,
         }
     );
 }

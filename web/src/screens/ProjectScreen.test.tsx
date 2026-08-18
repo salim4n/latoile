@@ -1,6 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { ApiError, api, type Message, type Preview, type Project, type Task } from "../api";
+import {
+  ApiError,
+  api,
+  type ArchitectureSession,
+  type Message,
+  type Preview,
+  type Project,
+  type Task,
+} from "../api";
 import { LangProvider } from "../i18n";
 import { ProjectScreen } from "./ProjectScreen";
 
@@ -39,6 +47,7 @@ function mockProject({
     work_branch: project.work_branch,
   });
   vi.spyOn(api, "messages").mockResolvedValue(messages);
+  vi.spyOn(api, "architecture").mockResolvedValue(null);
   if (preview) vi.spyOn(api, "preview").mockResolvedValue(preview);
   else vi.spyOn(api, "preview").mockRejectedValue(new ApiError(404, "not_found", "preview not found"));
 }
@@ -106,6 +115,54 @@ describe("ProjectScreen visual contract", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "Envoyer" }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+
+  it("shows the persistent Architect state and routes the owner's answer", async () => {
+    mockProject();
+    const architecture: ArchitectureSession = {
+      id: "architecture-1",
+      project_id: project.id,
+      status: "awaiting_answer",
+      phase: "requirements",
+      questions: [
+        {
+          id: "question-1",
+          sequence: 1,
+          prompt: "Quelle contrainte métier est non négociable ?",
+          status: "open",
+        },
+      ],
+    };
+    vi.spyOn(api, "architecture").mockResolvedValue(architecture);
+    const send = vi.spyOn(api, "sendMessage").mockResolvedValue({
+      message: {
+        id: "message-owner",
+        author: "user",
+        content: "Les données restent en Europe.",
+        actions: null,
+      },
+      reply: null,
+    });
+    const cancel = vi.spyOn(api, "cancelArchitecture").mockResolvedValue({
+      ...architecture,
+      status: "cancelled",
+    });
+    renderProject();
+
+    const panel = await screen.findByRole("region", { name: "Découverte avec l'Architecte" });
+    expect(within(panel).getByText("Architecte · app-architect-brainstorm")).toBeTruthy();
+    expect(within(panel).getByText("Phase : exigences et contraintes")).toBeTruthy();
+    expect(within(panel).getAllByText("Quelle contrainte métier est non négociable ?")).toHaveLength(2);
+
+    const answer = screen.getByRole("textbox", { name: "Répondre à l'Architecte…" });
+    fireEvent.change(answer, { target: { value: "Les données restent en Europe." } });
+    fireEvent.click(screen.getByRole("button", { name: "Envoyer" }));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith(project.id, "Les données restent en Europe."),
+    );
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Annuler la session" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(project.id));
   });
 
   it("renders the four board columns with translated roles and latest runs", async () => {
@@ -209,6 +266,7 @@ describe("ProjectScreen visual contract", () => {
       work_branch: project.work_branch,
     });
     vi.spyOn(api, "messages").mockResolvedValue([]);
+    vi.spyOn(api, "architecture").mockResolvedValue(null);
     vi.spyOn(api, "preview").mockRejectedValue(new ApiError(500, "internal_error", "failed"));
     renderProject();
 

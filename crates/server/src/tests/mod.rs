@@ -8,8 +8,8 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
 use latoile_app::store::Store;
-use latoile_core::ids::{ProjectId, RunId};
-use latoile_core::ports::{AgentChannel, ManagerReply, PortResult, RepoInfo};
+use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
+use latoile_core::ports::{AgentChannel, ArchitectReply, ManagerReply, PortResult, RepoInfo};
 use latoile_core::Run;
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
@@ -31,6 +31,8 @@ pub struct StubAgents {
     /// Live permission request ids keyed by run, plus forwarded decisions.
     pub live_permissions: Arc<Mutex<std::collections::HashMap<String, String>>>,
     pub permission_decisions: Arc<Mutex<Vec<(String, String, bool)>>>,
+    pub architecture_messages: Arc<Mutex<Vec<String>>>,
+    pub architecture_replies: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
 impl Default for StubAgents {
@@ -42,6 +44,11 @@ impl Default for StubAgents {
             run_prompts: Arc::new(Mutex::new(Vec::new())),
             live_permissions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             permission_decisions: Arc::new(Mutex::new(Vec::new())),
+            architecture_messages: Arc::new(Mutex::new(Vec::new())),
+            architecture_replies: Arc::new(Mutex::new(std::collections::VecDeque::from([
+                "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"question\",\"phase\":\"domain_discovery\",\"message\":\"Quel problème doit disparaître pour l'utilisateur ?\"}\n```".into(),
+                "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ready_to_draft\",\"message\":\"Les décisions sont suffisantes pour produire le paquet.\"}\n```".into(),
+            ]))),
         }
     }
 }
@@ -56,6 +63,53 @@ impl AgentChannel for StubAgents {
             content: self.manager_reply.lock().unwrap().clone(),
             actions: None,
         })
+    }
+    async fn start_architecture(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+        brief: &str,
+    ) -> PortResult<ArchitectReply> {
+        self.architecture_messages
+            .lock()
+            .unwrap()
+            .push(format!("brief:{brief}"));
+        Ok(ArchitectReply {
+            content: self
+                .architecture_replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| "missing scripted Architect reply".into()),
+            acp_session_id: format!("acp-architecture:{}", session.as_str()),
+        })
+    }
+    async fn continue_architecture(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+        answer: &str,
+    ) -> PortResult<ArchitectReply> {
+        self.architecture_messages
+            .lock()
+            .unwrap()
+            .push(format!("answer:{answer}"));
+        Ok(ArchitectReply {
+            content: self
+                .architecture_replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| "missing scripted Architect reply".into()),
+            acp_session_id: format!("acp-architecture:{}", session.as_str()),
+        })
+    }
+    async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
+        self.architecture_messages
+            .lock()
+            .unwrap()
+            .push(format!("cancel:{}", session.as_str()));
+        Ok(())
     }
     async fn start_run(&self, _project: &ProjectId, r: &Run, prompt: &str) -> PortResult<String> {
         // Registered as running so the supervision driver can be scripted:

@@ -3,6 +3,8 @@
 //! - **Manager**: one persistent ACP session per project, spawned on first
 //!   message, resumed after. The role's skill preamble heads the first
 //!   prompt only.
+//! - **Architect discovery**: one persistent ACP session per architecture
+//!   session. It is read-only and emits a strict question/ready contract.
 //! - **Runs**: one fresh process per run; the prompt turn runs on a
 //!   background task and the process dies with it. `cancel_run` aborts the
 //!   task, which drops the connection, which kills the process group.
@@ -22,8 +24,8 @@ use crate::permissions::PermissionBroker;
 use crate::preamble::Preambles;
 use crate::transport::{Connection, Connector, PermissionContext};
 use crate::updates::{AgentUpdate, RunOutcome};
-use latoile_core::ids::{ProjectId, RunId};
-use latoile_core::ports::{AgentChannel, ManagerReply, PortResult};
+use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
+use latoile_core::ports::{AgentChannel, ArchitectReply, ManagerReply, PortResult};
 use latoile_core::Run;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -196,6 +198,12 @@ struct ManagerEntry<C> {
 /// answer concurrently while prompts on one manager stay serial.
 type ManagerSlot<C> = Arc<Mutex<ManagerEntry<C>>>;
 
+struct ArchitectEntry<C> {
+    conn: C,
+}
+
+type ArchitectSlot<C> = Arc<Mutex<ArchitectEntry<C>>>;
+
 pub struct AcpChannel<C: Connector, D: ProjectDirs, R: RoutingSource> {
     config: ChannelConfig,
     connector: C,
@@ -203,6 +211,7 @@ pub struct AcpChannel<C: Connector, D: ProjectDirs, R: RoutingSource> {
     routing: R,
     preambles: Preambles,
     managers: Mutex<HashMap<String, ManagerSlot<C::Conn>>>,
+    architects: Mutex<HashMap<String, ArchitectSlot<C::Conn>>>,
     runs: Mutex<HashMap<String, RunEntry>>,
     permissions: PermissionBroker,
 }
@@ -217,6 +226,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
             routing,
             preambles,
             managers: Mutex::new(HashMap::new()),
+            architects: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
             permissions: PermissionBroker::default(),
         }
@@ -286,6 +296,36 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
         managers.insert(project.as_str().to_string(), entry.clone());
         Ok(entry)
     }
+
+    async fn architecture_prompt(
+        &self,
+        entry: &ArchitectSlot<C::Conn>,
+        session: &ArchitectureSessionId,
+        prompt: &str,
+    ) -> Result<ArchitectReply, AgentError> {
+        let mut guard = entry.lock().await;
+        let turn = match tokio::time::timeout(
+            self.config.timeouts.prompt,
+            guard.conn.prompt(prompt),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(AgentError::Timeout(format!(
+                "architecture discovery (session {})",
+                session.as_str()
+            ))),
+        }?;
+        if turn.outcome == RunOutcome::Failed {
+            return Err(AgentError::Prompt(
+                "the Architect ended discovery without a valid answer".into(),
+            ));
+        }
+        Ok(ArchitectReply {
+            content: turn.text,
+            acp_session_id: format!("acp-architecture:{}", session.as_str()),
+        })
+    }
 }
 
 impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel<C, D, R> {
@@ -335,6 +375,89 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
                 Err(e.into())
             }
         }
+    }
+
+    async fn start_architecture(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        brief: &str,
+    ) -> PortResult<ArchitectReply> {
+        if self.architects.lock().await.contains_key(session.as_str()) {
+            return Err(latoile_core::ports::PortError(
+                "architecture session is already active".into(),
+            ));
+        }
+        let dir = self
+            .dirs
+            .manager_dir(project)
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
+            .and_then(checked_dir)?;
+        let command = self.routing.command_for("architect");
+        let mut conn = self
+            .connector
+            .connect(
+                &command,
+                &dir,
+                PermissionContext {
+                    role_id: "architect".into(),
+                    run_id: None,
+                    broker: self.permissions.clone(),
+                    timeout: self.config.timeouts.permission,
+                },
+            )
+            .await?;
+        conn.new_session(&dir).await?;
+        let entry = Arc::new(Mutex::new(ArchitectEntry { conn }));
+        let preamble = self.preambles.for_role(
+            &latoile_core::ids::RoleId::new("architect").expect("a fixed role id is non-empty"),
+        );
+        let prompt = format!(
+            "{preamble}\n\n---\n\nDISCOVERY-ONLY CONTRACT\nDo not write files or execute commands yet. Ask one decision-rich question at a time. Return exactly one fenced `latoile-architecture` JSON object with schema_version 1, kind `question` or `ready_to_draft`, phase `domain_discovery`, `requirements`, `ux_discovery` or `ready_to_draft`, and message. Never invent an owner answer.\n\nINITIAL BRIEF\n{brief}"
+        );
+        let reply = self.architecture_prompt(&entry, session, &prompt).await?;
+        self.architects
+            .lock()
+            .await
+            .insert(session.as_str().to_string(), entry);
+        Ok(reply)
+    }
+
+    async fn continue_architecture(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+        answer: &str,
+    ) -> PortResult<ArchitectReply> {
+        let entry = self
+            .architects
+            .lock()
+            .await
+            .get(session.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                latoile_core::ports::PortError(
+                    "the live Architect session is unavailable; restart discovery".into(),
+                )
+            })?;
+        let prompt = format!(
+            "OWNER ANSWER\n{answer}\n\nContinue discovery. Ask exactly one next question or declare `ready_to_draft`. Return only the fenced `latoile-architecture` JSON contract."
+        );
+        match self.architecture_prompt(&entry, session, &prompt).await {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                self.architects.lock().await.remove(session.as_str());
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
+        if let Some(entry) = self.architects.lock().await.remove(session.as_str()) {
+            entry.lock().await.conn.cancel().await?;
+        }
+        Ok(())
     }
 
     async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {

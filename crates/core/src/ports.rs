@@ -12,10 +12,13 @@
 //! about HTTP, SQL, or ACP frames.
 
 use crate::approval::Approval;
+use crate::architecture::{ArchitectureQuestion, ArchitectureSession};
 use crate::conversation::{Conversation, Message};
 use crate::delivery::Delivery;
 use crate::event::NewEvent;
-use crate::ids::{ApprovalId, ProjectId, RunId, TaskId};
+use crate::ids::{
+    ApprovalId, ArchitectureQuestionId, ArchitectureSessionId, ProjectId, RunId, TaskId,
+};
 use crate::preview::Preview;
 use crate::project::Project;
 use crate::run::Run;
@@ -86,6 +89,41 @@ pub trait PreviewStore {
     async fn save(&self, preview: &Preview) -> PortResult<()>;
 }
 
+pub trait ArchitectureSessionStore {
+    async fn get(&self, id: &ArchitectureSessionId) -> PortResult<Option<ArchitectureSession>>;
+    async fn latest_for_project(
+        &self,
+        project: &ProjectId,
+    ) -> PortResult<Option<ArchitectureSession>>;
+    async fn active_for_project(
+        &self,
+        project: &ProjectId,
+    ) -> PortResult<Option<ArchitectureSession>>;
+    async fn save(&self, session: &ArchitectureSession) -> PortResult<()>;
+    async fn question(
+        &self,
+        id: &ArchitectureQuestionId,
+    ) -> PortResult<Option<ArchitectureQuestion>>;
+    async fn open_question(
+        &self,
+        session: &ArchitectureSessionId,
+    ) -> PortResult<Option<ArchitectureQuestion>>;
+    async fn questions_for_session(
+        &self,
+        session: &ArchitectureSessionId,
+    ) -> PortResult<Vec<ArchitectureQuestion>>;
+    async fn save_question(&self, question: &ArchitectureQuestion) -> PortResult<()>;
+    /// Persist one workflow transition and its question atomically. Both the
+    /// initial question and an answered+next-question turn use this guard so
+    /// the UI never observes `awaiting_answer` without the matching row.
+    async fn save_turn(
+        &self,
+        session: &ArchitectureSession,
+        changed_question: Option<&ArchitectureQuestion>,
+        next_question: Option<&ArchitectureQuestion>,
+    ) -> PortResult<()>;
+}
+
 pub trait ConversationStore {
     async fn for_project(&self, project: &ProjectId) -> PortResult<Option<Conversation>>;
     async fn append(&self, message: &Message) -> PortResult<()>;
@@ -111,6 +149,12 @@ pub struct ManagerReply {
     pub actions: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectReply {
+    pub content: String,
+    pub acp_session_id: String,
+}
+
 /// A sanitized ACP permission request. Raw tool input deliberately stays in
 /// the agent adapter; the application only receives an opaque request id and
 /// an owner-readable operation class.
@@ -125,6 +169,25 @@ pub struct PermissionRequest {
 pub trait AgentChannel {
     /// Resume the project's Manager session with a new user message.
     async fn tell_manager(&self, project: &ProjectId, message: &str) -> PortResult<ManagerReply>;
+    async fn start_architecture(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+        _brief: &str,
+    ) -> PortResult<ArchitectReply> {
+        Err(PortError("architecture sessions are not supported".into()))
+    }
+    async fn continue_architecture(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+        _answer: &str,
+    ) -> PortResult<ArchitectReply> {
+        Err(PortError("architecture sessions are not supported".into()))
+    }
+    async fn cancel_architecture(&self, _session: &ArchitectureSessionId) -> PortResult<()> {
+        Ok(())
+    }
     /// Spawn an executor run in its project's checkout. The project is
     /// explicit because a new task/run is intentionally not persisted until
     /// the ACP handshake succeeds.

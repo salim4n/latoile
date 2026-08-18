@@ -142,6 +142,32 @@ export interface Message {
   created_at?: string;
 }
 
+export interface ArchitectureQuestion {
+  id: string;
+  sequence: number;
+  prompt: string;
+  status: "open" | "answered";
+  answer?: string;
+}
+
+export interface ArchitectureSession {
+  id: string;
+  project_id: string;
+  status:
+    | "discovering"
+    | "awaiting_answer"
+    | "ready_to_draft"
+    | "failed"
+    | "cancelled";
+  phase:
+    | "domain_discovery"
+    | "requirements"
+    | "ux_discovery"
+    | "ready_to_draft";
+  failure_reason?: string;
+  questions: ArchitectureQuestion[];
+}
+
 export interface Preview {
   id: string;
   project_id: string;
@@ -202,11 +228,17 @@ export const api = {
       body: JSON.stringify({ granted, comment }),
     }),
   messages: (project: string) => request<Message[]>(`/api/projects/${project}/messages`),
-  sendMessage: (project: string, content: string) =>
+  sendMessage: (project: string, content: string, intent?: "architecture_brief") =>
     request<{ message: Message; reply: Message | null }>(
       `/api/projects/${project}/messages`,
-      { method: "POST", body: JSON.stringify({ content }) },
+      { method: "POST", body: JSON.stringify({ content, ...(intent ? { intent } : {}) }) },
     ),
+  architecture: (project: string) =>
+    request<ArchitectureSession | null>(`/api/projects/${project}/architecture`),
+  cancelArchitecture: (project: string) =>
+    request<ArchitectureSession>(`/api/projects/${project}/architecture`, {
+      method: "DELETE",
+    }),
   tasks: (project: string) => request<Task[]>(`/api/projects/${project}/tasks`),
   preview: (project: string) => request<Preview>(`/api/projects/${project}/preview`),
   ensurePreview: (project: string) =>

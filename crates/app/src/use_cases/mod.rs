@@ -6,7 +6,9 @@
 //! RPITIT) makes the traits non-dyn-compatible, so constructor injection uses
 //! type parameters instead of `Arc<dyn …>`.
 
+mod answer_architecture;
 mod approve_spec;
+mod cancel_architecture;
 mod create_project;
 mod decide_permission;
 mod deliver_project;
@@ -17,9 +19,12 @@ mod manager_turn;
 mod reject_approval;
 mod routing;
 mod send_message;
+mod start_architecture;
 mod stop_preview;
 
+pub use answer_architecture::AnswerArchitecture;
 pub use approve_spec::ApproveSpec;
+pub use cancel_architecture::CancelArchitecture;
 pub use create_project::{CreateProject, CreateProjectInput};
 pub use decide_permission::DecidePermission;
 pub use deliver_project::DeliverProject;
@@ -30,6 +35,7 @@ pub use manager_turn::{ManagerOutcome, ManagerTurn};
 pub use reject_approval::RejectApproval;
 pub use routing::{RoleRouting, Routing, PROVIDERS, ROLES};
 pub use send_message::{PostedMessage, SendMessage, SendMessageInput};
+pub use start_architecture::{ArchitectureOutcome, StartArchitecture};
 pub use stop_preview::StopPreview;
 
 use latoile_core::error::DomainError;

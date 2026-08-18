@@ -1,6 +1,6 @@
 // New project — GitHub repo picker, multi-line brief, and bottom-sticky
 // primary action. The repository name becomes the project name; the brief is
-// posted as the first durable Manager message after creation.
+// posted as the first durable Architect brief after creation.
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -81,7 +81,7 @@ export function NewProjectScreen() {
       };
       if (devCommand.trim()) body.dev_command = devCommand.trim();
       const project = await api.createProject(body);
-      await api.sendMessage(project.id, brief.trim());
+      await api.sendMessage(project.id, brief.trim(), "architecture_brief");
       navigate(`/projects/${project.id}`);
     } catch {
       setFailed(true);

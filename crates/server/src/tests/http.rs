@@ -140,6 +140,193 @@ async fn a_message_is_stored_and_the_manager_answers() {
 }
 
 #[tokio::test]
+async fn an_architecture_brief_starts_a_persistent_socratic_session() {
+    let (state, _, agents) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let started = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un portail de facturation pour cabinets.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let started = body_json(started).await;
+    assert_eq!(started["message"]["author"], "user");
+    assert_eq!(started["reply"]["author"], "manager");
+    assert!(started["reply"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Architecte"));
+
+    assert!(agents.manager_messages.lock().unwrap().is_empty());
+    assert_eq!(
+        agents.architecture_messages.lock().unwrap().as_slice(),
+        ["brief:Construire un portail de facturation pour cabinets."]
+    );
+
+    let architecture = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(architecture.status(), StatusCode::OK);
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "awaiting_answer");
+    assert_eq!(architecture["phase"], "domain_discovery");
+    assert_eq!(architecture["questions"].as_array().unwrap().len(), 1);
+    assert_eq!(architecture["questions"][0]["status"], "open");
+    assert_eq!(
+        architecture["questions"][0]["prompt"],
+        "Quel problème doit disparaître pour l'utilisateur ?"
+    );
+
+    let answered = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Les relances manuelles et les erreurs de suivi."
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(answered.status(), StatusCode::OK);
+    let answered = body_json(answered).await;
+    assert!(answered["reply"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("découverte est complète"));
+    assert!(agents.manager_messages.lock().unwrap().is_empty());
+    assert_eq!(
+        agents.architecture_messages.lock().unwrap().as_slice(),
+        [
+            "brief:Construire un portail de facturation pour cabinets.",
+            "answer:Les relances manuelles et les erreurs de suivi."
+        ]
+    );
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "ready_to_draft");
+    assert_eq!(architecture["phase"], "ready_to_draft");
+    assert_eq!(architecture["questions"][0]["status"], "answered");
+    assert_eq!(
+        architecture["questions"][0]["answer"],
+        "Les relances manuelles et les erreurs de suivi."
+    );
+}
+
+#[tokio::test]
+async fn architecture_discovery_can_be_cancelled_and_stays_observable() {
+    let (state, _, agents) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+    app.clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un portail client.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+
+    let cancelled = app
+        .clone()
+        .oneshot(authed(request(
+            "DELETE",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled = body_json(cancelled).await;
+    assert_eq!(cancelled["status"], "cancelled");
+    assert!(agents
+        .architecture_messages
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .starts_with("cancel:"));
+
+    let retry = app
+        .oneshot(authed(request(
+            "DELETE",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn malformed_architect_output_fails_closed_without_waking_the_manager() {
+    let (state, _, agents) = state().await;
+    agents
+        .architecture_replies
+        .lock()
+        .unwrap()
+        .push_front("Je vais directement coder le produit.".into());
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let refused = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire une marketplace.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(agents.manager_messages.lock().unwrap().is_empty());
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "failed");
+    assert!(architecture["failure_reason"]
+        .as_str()
+        .unwrap()
+        .contains("latoile-architecture"));
+}
+
+#[tokio::test]
 async fn dispatch_without_a_spec_is_refused_with_a_domain_error() {
     let (state, _, _) = state().await;
     let app = router(state);

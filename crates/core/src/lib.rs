@@ -12,6 +12,7 @@
 //! granted review approval, the Manager never executes.
 
 pub mod approval;
+pub mod architecture;
 pub mod conversation;
 pub mod delivery;
 pub mod error;
@@ -26,13 +27,17 @@ pub mod spec;
 pub mod task;
 
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
+pub use architecture::{
+    ArchitecturePhase, ArchitectureQuestion, ArchitectureQuestionStatus, ArchitectureSession,
+    ArchitectureStatus,
+};
 pub use conversation::{Author, Conversation, Message};
 pub use delivery::{Delivery, DeliveryStatus};
 pub use error::{DomainError, TransitionError};
 pub use event::{EventKind, NewEvent};
 pub use ids::{
-    ApprovalId, ConversationId, MessageId, PreviewId, ProjectId, RoleId, RunId, SpecVersionId,
-    TaskId,
+    ApprovalId, ArchitectureQuestionId, ArchitectureSessionId, ConversationId, MessageId,
+    PreviewId, ProjectId, RoleId, RunId, SpecVersionId, TaskId,
 };
 pub use preview::{Preview, PreviewStatus};
 pub use project::{Project, ProjectStatus};

@@ -12,6 +12,7 @@
 //! maintained by SQLite (ISO-8601 TEXT) and never read back.
 
 mod approval;
+mod architecture;
 mod conversation;
 mod delivery;
 mod event;

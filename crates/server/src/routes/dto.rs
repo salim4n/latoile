@@ -5,7 +5,10 @@
 use latoile_app::store::{
     InboxApprovalRow, ProjectListRow, ProjectMessageRow, ProjectTaskRow, RoleRow,
 };
-use latoile_core::{Approval, Delivery, Message, Preview, Project, Run, SpecVersion, Task};
+use latoile_core::{
+    Approval, ArchitectureQuestion, ArchitectureSession, Delivery, Message, Preview, Project, Run,
+    SpecVersion, Task,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -45,6 +48,49 @@ impl From<&ProjectListRow> for ProjectDto {
         let mut dto = Self::from(&row.project);
         dto.last_activity_at = Some(row.last_activity_at.clone());
         dto
+    }
+}
+
+#[derive(Serialize)]
+pub struct ArchitectureQuestionDto {
+    pub id: String,
+    pub sequence: u32,
+    pub prompt: String,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ArchitectureSessionDto {
+    pub id: String,
+    pub project_id: String,
+    pub status: &'static str,
+    pub phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    pub questions: Vec<ArchitectureQuestionDto>,
+}
+
+impl ArchitectureSessionDto {
+    pub fn new(session: &ArchitectureSession, questions: &[ArchitectureQuestion]) -> Self {
+        Self {
+            id: session.id.as_str().to_string(),
+            project_id: session.project_id.as_str().to_string(),
+            status: session.status.as_str(),
+            phase: session.phase.as_str(),
+            failure_reason: session.failure_reason.clone(),
+            questions: questions
+                .iter()
+                .map(|question| ArchitectureQuestionDto {
+                    id: question.id.as_str().to_string(),
+                    sequence: question.sequence,
+                    prompt: question.prompt.clone(),
+                    status: question.status.as_str(),
+                    answer: question.answer.clone(),
+                })
+                .collect(),
+        }
     }
 }
 

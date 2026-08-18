@@ -102,11 +102,18 @@ fn fixture() -> (tempfile::TempDir, ChannelConfig) {
     let skill = dir.path().join("project-manager");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(skill.join("SKILL.md"), "SKILL MANAGER").unwrap();
+    let architect = dir.path().join("app-architect-brainstorm");
+    std::fs::create_dir_all(&architect).unwrap();
+    std::fs::write(architect.join("SKILL.md"), "SKILL ARCHITECT").unwrap();
     let config = ChannelConfig {
         skills_dir: dir.path().to_path_buf(),
         ..ChannelConfig::default()
     };
     (dir, config)
+}
+
+fn architecture_session() -> ArchitectureSessionId {
+    ArchitectureSessionId::new("as1").unwrap()
 }
 
 fn channel(
@@ -174,6 +181,44 @@ async fn the_manager_answers_and_the_preamble_heads_the_first_prompt_only() {
     let prompts = log.lock().unwrap();
     assert!(prompts[0].starts_with("SKILL MANAGER\n\n---\n\n"));
     assert_eq!(prompts[1], "et le formulaire ?", "no preamble twice");
+}
+
+#[tokio::test]
+async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
+    let (dir, config) = fixture();
+    let connector = FakeConnector::default();
+    let log = Arc::new(StdMutex::new(Vec::new()));
+    connector.push(FakeConn {
+        log: log.clone(),
+        queued: VecDeque::from([
+            Ok(TurnResult {
+                outcome: RunOutcome::Finished,
+                text: "question".into(),
+                updates: vec![],
+            }),
+            Ok(TurnResult {
+                outcome: RunOutcome::Finished,
+                text: "question suivante".into(),
+                updates: vec![],
+            }),
+        ]),
+        pend: false,
+        dropped: Arc::new(AtomicBool::new(false)),
+    });
+    let ch = channel(config, connector, dir.path());
+
+    ch.start_architecture(&project(), &architecture_session(), "Un outil agentique")
+        .await
+        .unwrap();
+    ch.continue_architecture(&project(), &architecture_session(), "Une équipe produit")
+        .await
+        .unwrap();
+
+    let prompts = log.lock().unwrap();
+    assert!(prompts[0].starts_with("SKILL ARCHITECT\n\n---\n\n"));
+    assert!(prompts[0].contains("DISCOVERY-ONLY CONTRACT"));
+    assert!(prompts[1].starts_with("OWNER ANSWER\n"));
+    assert_eq!(ch.connector.spawned.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -4,6 +4,7 @@
 
 mod agent_auth;
 mod approvals;
+mod architecture;
 pub mod dto;
 mod events;
 mod github;
@@ -25,6 +26,10 @@ pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/projects", get(projects::list).post(projects::create))
         .route("/api/projects/{id}", get(projects::get))
+        .route(
+            "/api/projects/{id}/architecture",
+            get(architecture::get).delete(architecture::cancel),
+        )
         .route(
             "/api/projects/{id}/delivery",
             get(projects::delivery).post(projects::deliver),
