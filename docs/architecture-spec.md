@@ -1,7 +1,7 @@
 # LaToile — Architecture Specification
 
 > **Date**: 2026-08-15
-> **Status**: V1 implemented; full Codex ACP vertical slice verified on 2026-08-18
+> **Status**: V1 implemented; full Codex ACP greenfield visual-contract journey verified on 2026-08-18
 > **Origin**: app-architect-brainstorm session, Mode A (greenfield) informed by audits of Firetower, AionCore/AionUi, and IgnitionRAG.
 
 ## 1. Vision
@@ -505,17 +505,19 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 
 ### 7.1 Verified V1 limits
 
-The real-provider canary proves the documented vertical slice. The default
-hermetic suites additionally prove persistent Architect discovery and isolated
-package confinement. These current limits remain:
+The real-provider canary proves the documented vertical slice, including the
+pinned Architect discovery/package and a real blocking-to-passed visual
+correction against one immutable baseline. The default hermetic suites cover
+the same contracts and failure paths deterministically. These current limits
+remain:
 
 - The Manager receives its persistent conversation plus the current user
   message, not a freshly assembled task/run/approval context payload on every
   turn.
-- Initial briefs now drive the content-addressed Architect discovery and a
-  committed `design/v…/` draft automatically. A live paid-provider canary for
-  the full mismatch/correction journey remains the release proof; hermetic ACP
-  adapter tests are not provider evidence.
+- Initial briefs drive the content-addressed Architect discovery and a
+  committed `design/v…/` draft automatically. The retained live-provider
+  mismatch/correction canary is the release proof; hermetic ACP adapter tests
+  remain contract evidence rather than provider evidence.
 - Project status reaches `specced`; automatic promotion to `building` and
   `live` is not yet connected to orchestration/deployment events.
 - Preview proxying streams HTTP bodies but not WebSocket upgrades. Executor
@@ -523,9 +525,9 @@ package confinement. These current limits remain:
   the proxy is outside V1.
 - Architecture mockups and finished frontend routes have deterministic
   PNG/DOM/accessibility capture, server-thresholded pixel/geometry/AX evidence
-  and a decision-grade authenticated Review UI. The installed-Chrome path is
-  opt-in in default development, so release evidence must still record the
-  browser/font environment and run the explicit browser canary.
+  and a decision-grade authenticated Review UI. Installed-Chrome/provider
+  runs remain opt-in in default development, so future releases must record
+  their browser/font environment and rerun the explicit canary.
 - Delivery publishes the complete clean work branch. It does not select tasks,
   merge, deploy or monitor production.
 

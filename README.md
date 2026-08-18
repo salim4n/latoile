@@ -81,7 +81,7 @@ The web UI is embedded via rust-embed: **release builds bake `web/dist` into the
 
 **V1 vertical slice implemented and canary-verified.** The product provisions a real GitHub checkout, runs the Manager and executor team through authenticated Claude or Codex ACP adapters, blocks for sanitized permission decisions, records bounded Git evidence, refreshes the live preview, runs the Reviewer before asking the owner, and delivers an approved work branch through an idempotent Pull Request. The web UI implements the five design-contract screens in French and English.
 
-The default Rust, web and Python safety suites are hermetic. The separate opt-in [real-provider canary](docs/v1-canary.md) proved the complete journey with Codex ACP, including an exact local/remote SHA and a live Pull Request. This is evidence for the V1 path, not a claim that the deferred V2 scope below exists.
+The default Rust, web and Python safety suites are hermetic. The separate opt-in [real-provider canary](docs/v1-canary.md) proved the complete journey with Codex ACP, including pinned `app-architect-brainstorm` provenance, an empty-repository architecture package, a real blocking-to-passed Chromium pixel comparison against one immutable baseline, Reviewer-before-human ordering, an exact local/remote SHA and a live Pull Request. This is evidence for the V1 path, not a claim that the deferred V2 scope below exists.
 
 ### Roadmap
 
@@ -100,10 +100,10 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Decision-grade review with authenticated baseline/render/heatmap, overlay, metrics, provenance and gated correction
 - [x] Owner-controlled push, remote SHA verification and idempotent Pull Request
 - [x] Opt-in real-provider V1 vertical-slice canary
-- [ ] Opt-in real-provider greenfield mismatch-and-correction canary
+- [x] Opt-in real-provider greenfield mismatch-and-correction canary
 - [x] Blocking startup recovery, preview health reconciliation, paired backup/restore and release smoke
 
-Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) distinguish the shipped trusted capture, Reviewer V2 gate and decision-grade artifact UI from remaining Manager context, project-status and live provider-canary work.
+Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) distinguish the shipped trusted capture, Reviewer V2 gate and decision-grade artifact UI from remaining Manager-context, project-status and preview-transport work.
 
 ## Contributing
 

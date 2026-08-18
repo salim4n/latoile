@@ -119,5 +119,36 @@ with the printed cleanup command after recording the bounded evidence below.
 
 ## Greenfield visual-contract evidence
 
-No completion claim is made here until a successful schema-v2 evidence artifact
-from the exact implementation commit has been archived and summarized.
+The full greenfield claim is backed by this retained, bounded schema-v2 run
+from the exact implementation commit:
+
+| Field | Evidence |
+|---|---|
+| Date | 2026-08-18 UTC |
+| LaToile commit | `fca8a6e625b3cbf282e52dcd78a34cdbf4d67556` |
+| Provider | Codex through `codex-acp` |
+| Empty initial repository | `true` |
+| Architect discovery | 6 durable owner answers; `app-architect-brainstorm`; `greenfield` |
+| Pinned skill SHA-256 | `19befb2a28f9f2d513c7dd056b63f83a545349aceed4452cccd25d35ccb60727` |
+| Architecture package | 16 files; package `c8c1bb44a7474eb8b9d8368b1c66f6ab15d833c645d683009cf4d0d5790fc101` |
+| Immutable spec | commit `21d9810ebc9303de8f113d3d43b9c05e0f3576d0`; tree `68d579ba3eb92c2f49d49f4f85dbf9a6d9251855` |
+| Browser/baseline | `Chrome/151.0.7922.138`; baseline `890222bb69bd9a32c75e8ee31a8a1373c00ffd21a2c1235e6b6ce76e30d35ffa` |
+| Initial comparison | `blocking`; 18,563 changed pixels; 56,395 ppm; geometry delta 16,000; AX changes 0 |
+| Initial review | `changes_requested`; gate `visual_evidence_blocking`; 1 blocking finding |
+| Corrected comparison | `passed`; 0 changed pixels; 0 ppm; geometry delta 0; AX changes 0 |
+| Corrected review | `approve`; trusted/approvable; 0 findings |
+| Baseline reuse | `true`; corrected render PNG digest equals the immutable baseline digest |
+| Reviewer ordering | reviewer finished at events 44/55, before approval requests 45/56 |
+| Owner control | initial review rejected; corrected trusted review explicitly granted |
+| Additional review cycles | 0 needed; the bounded two-cycle repair path remained available |
+| Delivery | preview `ready`; Pull Request `open` |
+| Local/remote SHA | `5b54ab7e90c6fa0eda23eeab5ec476f868a42a4f` = `5b54ab7e90c6fa0eda23eeab5ec476f868a42a4f` |
+| Pull Request | [greenfield canary PR #1](https://github.com/salim4n/latoile-v1-canary-20260818-232044-3f862b/pull/1) |
+| Cleanup | disposable private repository archived; PR and local bounded evidence retained |
+
+The initial and corrected comparisons have distinct run/evidence ids but the
+same comparison id and baseline digest. The owner could not approve the first
+review, and the final approval was requested only after the corrected Reviewer
+run finished. This proves the automated brief-to-architecture-to-mockups-to-
+validation path and the real capture/pixel-diff correction path together; it
+does not assert deferred V2 features or production deployment.
