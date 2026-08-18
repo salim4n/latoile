@@ -33,6 +33,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D17 | Every required P0 mockup is rendered by isolated Chromium before approval; immutable PNG, DOM geometry, accessibility and environment hashes gate approval and dispatch | Ad-hoc screenshots or Reviewer self-reported measurements |
 | D18 | A finished frontend run is captured from the exact supervised loopback route and compared to its immutable baseline; fixed server thresholds classify real pixel, geometry and accessibility evidence | Reviewer prose, manual screenshots or an unrestricted browser session |
 | D19 | Reviewer V2 is immutably bound to one executor run; only exact server evidence ids/hashes for the current project/spec can produce an approvable gate | Self-reported frames, stale evidence reuse or trusting a model-supplied status |
+| D20 | The owner decides from authenticated immutable artifacts: baseline/render side-by-side, overlay and heatmap with scenario metadata, server metrics and provenance; failed gates disable approval | A model-authored visual summary or unauthenticated image links |
 
 ## 3. Domain model
 
@@ -119,6 +120,12 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     payload from stored evidence and canonicalizes every failed gate to
     `changes_requested`. Only trusted approvable V2 payloads may be granted;
     historic V1 approvals stay readable and non-grantable.
+22. The Review UI loads only evidence ids present in the trusted V2 envelope,
+    resolves their current server rows and approved manifest scenarios, and
+    fetches baseline, render and heatmap through bearer-authenticated routes.
+    Missing, mismatched, invalid or blocking evidence remains visible and can
+    never enable approval. A rejection requires a comment and links exactly one
+    corrective run whose new evidence ids retain the original baseline digest.
 
 ### 3.3 Domain events
 
@@ -442,7 +449,7 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 
 1. **Inbox** — pending approvals + blocked runs
 2. **Project** — Manager chat / task board / preview (mobile viewport default, desktop toggle)
-3. **Review** (P0) — verdict, findings, diff excerpt and immutable spec/render evidence supplied and gated by the server
+3. **Review** (P0) — verdict, findings and diff plus real baseline/render/heatmap in side-by-side, overlay and diff modes; scenario, viewport, locale, metrics, provenance and invalid reasons are inspectable, and only the server V2 gate enables approval
 4. **New project** — pick repo → initial brief to the persistent Architect discovery
 5. **Settings** — provider connections + fixed-role provider routing
 
@@ -490,9 +497,11 @@ package confinement. These current limits remain:
 - Preview proxying streams HTTP bodies but not WebSocket upgrades. Executor
   completion recycles the supervised preview; Vite-style WebSocket HMR through
   the proxy is outside V1.
-- Architecture mockups now have real deterministic PNG/DOM/accessibility
-  baselines. Live preview replay, heatmap and pixel-diff gating remain pending,
-  so the current Review comparison still uses bounded Reviewer evidence.
+- Architecture mockups and finished frontend routes have deterministic
+  PNG/DOM/accessibility capture, server-thresholded pixel/geometry/AX evidence
+  and a decision-grade authenticated Review UI. The installed-Chrome path is
+  opt-in in default development, so release evidence must still record the
+  browser/font environment and run the explicit browser canary.
 - Delivery publishes the complete clean work branch. It does not select tasks,
   merge, deploy or monitor production.
 

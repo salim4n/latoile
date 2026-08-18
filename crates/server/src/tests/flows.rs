@@ -9,9 +9,43 @@ use latoile_core::ids::{ApprovalId, RunId, SpecVersionId, TaskId};
 use latoile_core::ports::{
     ApprovalStore, EventLog, RunStore, SpecStore, TaskStore, VisualComparisonStore,
 };
-use latoile_core::{Approval, ApprovalKind, Preview, PreviewId, SpecVersion, Task};
+use latoile_core::{
+    Approval, ApprovalKind, Preview, PreviewId, SpecVersion, Task, VisualComparison,
+    VisualComparisonStatus,
+};
 use latoile_core::{RoleId, TriggeredBy};
 use tower::ServiceExt;
+
+fn original_visual_evidence(project: &str) -> VisualComparison {
+    VisualComparison {
+        id: latoile_core::VisualComparisonId::new("visual:executor-1:home-default-fr-mobile")
+            .unwrap(),
+        spec_version_id: SpecVersionId::new("s1").unwrap(),
+        project_id: ProjectId::new(project).unwrap(),
+        run_id: RunId::new("executor-1").unwrap(),
+        comparison_id: "home-default-fr-mobile".into(),
+        manifest_digest: "c".repeat(64),
+        package_commit_sha: "1".repeat(40),
+        baseline_png_digest: "d".repeat(64),
+        status: VisualComparisonStatus::Reservation,
+        changed_pixels: 2_633,
+        total_pixels: 390 * 844,
+        pixel_ratio_micros: 8_000,
+        max_geometry_delta_milli: 4_000,
+        accessibility_changes: 1,
+        render_png_digest: Some("7".repeat(64)),
+        pixel_diff_digest: Some("8".repeat(64)),
+        heatmap_png_digest: Some("9".repeat(64)),
+        geometry_diff_digest: Some("4".repeat(64)),
+        accessibility_diff_digest: Some("5".repeat(64)),
+        environment_digest: Some("6".repeat(64)),
+        browser_version: Some("Chrome/151".into()),
+        font_fingerprint: Some("b".repeat(64)),
+        failure_code: None,
+        failure_message: None,
+        recovery_action: None,
+    }
+}
 
 /// Seed the fixture chain project → approved spec → task → run, with the
 /// task driven to `review`.
@@ -57,6 +91,10 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
         )
         .unwrap();
     RunStore::save(store, &executor).await.unwrap();
+    let visual_evidence = original_visual_evidence(project);
+    VisualComparisonStore::save(store, &visual_evidence)
+        .await
+        .unwrap();
 
     let mut reviewer = Run::new(
         RunId::new("r1").unwrap(),
@@ -86,7 +124,24 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
             "suggested_follow_ups": ["Corriger le focus clavier."],
             "visual_evidence": {
                 "applicability": "required",
-                "references": []
+                "references": [{
+                    "evidence_id": visual_evidence.id.as_str(),
+                    "comparison_id": visual_evidence.comparison_id,
+                    "status": visual_evidence.status.as_str(),
+                    "manifest_digest": visual_evidence.manifest_digest,
+                    "baseline_png_digest": visual_evidence.baseline_png_digest,
+                    "render_png_digest": visual_evidence.render_png_digest,
+                    "pixel_diff_digest": visual_evidence.pixel_diff_digest,
+                    "heatmap_png_digest": visual_evidence.heatmap_png_digest,
+                    "geometry_diff_digest": visual_evidence.geometry_diff_digest,
+                    "accessibility_diff_digest": visual_evidence.accessibility_diff_digest,
+                    "environment_digest": visual_evidence.environment_digest,
+                    "changed_pixels": visual_evidence.changed_pixels,
+                    "total_pixels": visual_evidence.total_pixels,
+                    "pixel_ratio_micros": visual_evidence.pixel_ratio_micros,
+                    "max_geometry_delta_milli": visual_evidence.max_geometry_delta_milli,
+                    "accessibility_changes": visual_evidence.accessibility_changes
+                }]
             },
             "gate": {
                 "trusted_v2": true,
@@ -250,6 +305,11 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     let app = router(state.clone());
     let project = create_project(&app).await;
     seed_review_pending(&store, &project).await;
+    let original_evidence =
+        VisualComparisonStore::list_for_run(&store, &RunId::new("executor-1").unwrap())
+            .await
+            .unwrap();
+    assert_eq!(original_evidence.len(), 1);
 
     let decided = app
         .clone()
@@ -375,6 +435,13 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     .unwrap();
     assert_eq!(comparisons.len(), 1);
     let evidence = &comparisons[0];
+    assert_ne!(evidence.id, original_evidence[0].id);
+    assert_ne!(evidence.run_id, original_evidence[0].run_id);
+    assert_eq!(evidence.comparison_id, original_evidence[0].comparison_id);
+    assert_eq!(
+        evidence.baseline_png_digest,
+        original_evidence[0].baseline_png_digest
+    );
 
     let corrected_review = serde_json::json!({
         "schema_version": 2,
@@ -416,6 +483,15 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     assert_eq!(fresh[0].run_id, second_reviewer.id);
     let fresh_payload: serde_json::Value = serde_json::from_str(&fresh[0].payload).unwrap();
     assert_eq!(fresh_payload["verdict"], "approve");
+    assert_eq!(fresh_payload["reviewed_run_id"], corrective);
+    assert_eq!(
+        fresh_payload["visual_evidence"]["references"][0]["evidence_id"],
+        evidence.id.as_str()
+    );
+    assert_eq!(
+        fresh_payload["visual_evidence"]["references"][0]["baseline_png_digest"],
+        original_evidence[0].baseline_png_digest
+    );
     assert_eq!(
         TaskStore::get(&store, &task_id)
             .await

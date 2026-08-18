@@ -504,3 +504,46 @@ V1 rows are not rewritten and never pass that check.
 + Backend and other non-visual work remains reviewable through an explicit applicability branch.
 + Migration preserves audit history without presenting legacy frames as trusted capture.
 − Legacy pending reviews must be rerun before they can be granted.
+
+---
+
+# ADR-015 — Make immutable visual evidence the owner decision surface
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+Server-owned capture and Reviewer V2 prevent invented evidence, but a trusted
+JSON envelope alone still forces the owner to decide from prose. Static or
+unauthenticated image links also lose token enforcement, provenance and the
+relationship between a failed scenario and its corrective run.
+
+## Decision
+
+The Review screen resolves only evidence ids from the trusted V2 envelope,
+reloads their immutable server rows and the approved manifest scenarios, and
+fetches baseline, live render and heatmap through bearer-authenticated routes.
+It supports scenario, viewport and locale selection plus side-by-side, overlay
+and heatmap modes. Pixel, geometry and accessibility metrics, capture status,
+browser/font environment and content hashes stay server-owned and inspectable.
+
+Invalid captures show their failure code, message and recovery action without
+fabricating images. Missing, legacy or non-approvable V2 gates disable approval.
+A rejection requires the owner's comment and starts exactly one corrective run;
+that run creates distinct evidence ids against the same immutable baseline, so
+the original decision and correction history remain auditable.
+
+## Rejected alternatives
+
+- Render the Reviewer narrative as the comparison: prose is not an artifact.
+- Put bearer tokens in image URLs: URLs leak through history and logs.
+- Show only a percentage: it hides location, provenance and accessibility drift.
+- Replace the original evidence after correction: destroys decision history.
+
+## Consequences
+
++ The owner can inspect the actual browser output that controls the gate.
++ Mobile/desktop and FR/EN scenarios use the same manifest-backed interaction.
++ Correction history proves new output against an unchanged approved target.
+− The UI must manage authenticated object URLs and release them after use.

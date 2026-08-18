@@ -37,6 +37,7 @@ run the paid, stateful real-provider canary.
 | 23 | Visual baselines are real and deterministic | Capture/app/server/UI tests prove network-blocked Chromium capture, explicit readiness/selectors/masks, PNG + DOM + AX hashes, immutable repeat, actionable failure and pre-approval/pre-dispatch gates |
 | 24 | Live visual evidence is measured, not narrated | Capture/app/server tests prove exact loopback-only navigation, cleared browser environment, approved masks, real render/diff/heatmap artifacts, immutable hashes, fixed thresholds, invalid capture and a known 16 px regression |
 | 25 | Reviewer V2 cannot replay or invent evidence | App/server tests bind one immutable reviewed run, match the full current project/spec evidence set and hashes, canonicalize failed gates, and refuse grants for V1 or non-approvable V2 payloads |
+| 26 | Owner decisions use real visual artifacts | Web API/UI tests prove bearer-authenticated baseline/render/heatmap loading, scenario/viewport/locale switching, side-by-side/overlay/diff modes, metrics/provenance, invalid recovery and disabled failed gates; flow tests prove one correction creates distinct evidence against the same baseline |
 
 ## Anti-drift rules
 

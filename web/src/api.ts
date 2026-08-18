@@ -284,6 +284,34 @@ export interface VisualBaseline {
   recovery_action?: string;
 }
 
+export interface VisualComparison {
+  id: string;
+  spec_version_id: string;
+  project_id: string;
+  run_id: string;
+  comparison_id: string;
+  manifest_digest: string;
+  package_commit_sha: string;
+  baseline_png_digest: string;
+  status: "invalid" | "blocking" | "reservation" | "passed";
+  changed_pixels: number;
+  total_pixels: number;
+  pixel_ratio_micros: number;
+  max_geometry_delta_milli: number;
+  accessibility_changes: number;
+  render_png_digest?: string;
+  pixel_diff_digest?: string;
+  heatmap_png_digest?: string;
+  geometry_diff_digest?: string;
+  accessibility_diff_digest?: string;
+  environment_digest?: string;
+  browser_version?: string;
+  font_fingerprint?: string;
+  failure_code?: string;
+  failure_message?: string;
+  recovery_action?: string;
+}
+
 export interface ArchitecturePackageValidation {
   valid: boolean;
   package_digest: string;
@@ -374,7 +402,15 @@ export const api = {
   captureBaselines: (spec: string) =>
     request<VisualBaseline[]>(`/api/spec-versions/${spec}/baselines`, { method: "POST" }),
   baselinePng: (spec: string, comparisonId: string) =>
-    requestObjectUrl(`/api/spec-versions/${spec}/baselines/${comparisonId}/image`),
+    requestObjectUrl(
+      `/api/spec-versions/${encodeURIComponent(spec)}/baselines/${encodeURIComponent(comparisonId)}/image`,
+    ),
+  visualComparisons: (run: string) =>
+    request<VisualComparison[]>(`/api/runs/${encodeURIComponent(run)}/visual-comparisons`),
+  visualRender: (evidence: string) =>
+    requestObjectUrl(`/api/visual-comparisons/${encodeURIComponent(evidence)}/render`),
+  visualHeatmap: (evidence: string) =>
+    requestObjectUrl(`/api/visual-comparisons/${encodeURIComponent(evidence)}/heatmap`),
   specArtifact: (spec: string, path: string) =>
     requestText(`/api/spec-versions/${spec}/artifacts/${path}`),
   cancelArchitecture: (project: string) =>

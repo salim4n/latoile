@@ -17,6 +17,7 @@ import {
   VerdictCard,
 } from "./ReviewBlocks";
 import { parseReviewPayload } from "./reviewPayload";
+import { VisualEvidencePanel } from "./VisualEvidencePanel";
 
 export function ReviewScreen() {
   const { t } = useT();
@@ -45,6 +46,7 @@ export function ReviewScreen() {
 
   async function decide(granted: boolean) {
     if (busy || !approval) return;
+    if (granted && !canApprove) return;
     if (!granted && !comment.trim()) return;
     setBusy(true);
     setDecisionError(false);
@@ -64,6 +66,8 @@ export function ReviewScreen() {
   }
 
   const decided = effectiveDecision !== null;
+  const canApprove = payload?.schema_version === 2 &&
+    payload.gate?.trusted_v2 === true && payload.gate.approvable === true;
   const notFound = review.error instanceof ApiError && review.error.status === 404;
 
   return (
@@ -96,11 +100,33 @@ export function ReviewScreen() {
                 : "review.state.pending")}
           </span>
           <VerdictCard approval={approval} payload={payload} decision={effectiveDecision} />
+          {payload.gate && (
+            <section
+              className={canApprove ? "review-gate review-gate--open" : "review-gate review-gate--closed"}
+              aria-label={t("review.gate.title")}
+            >
+              <div>
+                <strong>{canApprove ? t("review.gate.open") : t("review.gate.closed")}</strong>
+                <span>{payload.gate.message}</span>
+              </div>
+              <code>{payload.gate.code}</code>
+            </section>
+          )}
+          {!payload.gate && (
+            <section className="review-gate review-gate--closed" aria-label={t("review.gate.title")}>
+              <div>
+                <strong>{t("review.gate.legacy")}</strong>
+                <span>{t("review.gate.legacy.body")}</span>
+              </div>
+              <code>legacy_untrusted</code>
+            </section>
+          )}
           {payload.diff && <DiffBlock diff={payload.diff} runId={approval.run_id} />}
-          {payload.comparison && (
+          {payload.visual_evidence && <VisualEvidencePanel payload={payload} />}
+          {!payload.visual_evidence && payload.comparison && (
             <CompareBlock comparison={payload.comparison} runId={approval.run_id} />
           )}
-          {!payload.diff && !payload.comparison && (
+          {!payload.diff && !payload.comparison && !payload.visual_evidence && (
             <p className="review-details-note">{t("review.details.missing")}</p>
           )}
 
@@ -141,12 +167,18 @@ export function ReviewScreen() {
             <button
               className="btn btn--primary btn--block"
               type="button"
-              disabled={busy || decided}
+              disabled={busy || decided || !canApprove}
+              aria-describedby={!canApprove && !decided ? "review-approval-blocked" : undefined}
               onClick={() => decide(true)}
             >
               {busy && <span className="spin" aria-hidden="true" />}
               {busy ? t("review.deciding") : t("review.approve")}
             </button>
+            {!canApprove && !decided && (
+              <p id="review-approval-blocked" className="approval-blocked-note">
+                {payload.gate?.message ?? t("review.gate.legacy.body")}
+              </p>
+            )}
             <div className="divider" aria-hidden="true" />
             <button
               className="btn btn--danger btn--block"

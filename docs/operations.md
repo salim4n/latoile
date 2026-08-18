@@ -44,6 +44,14 @@ set yields `changes_requested` and the grant endpoint refuses it. Historic V1
 approval records remain visible after migration but cannot be granted as
 trusted evidence; relaunch the Reviewer to obtain V2.
 
+On the Review screen, inspect every declared scenario before deciding. Switch
+locale and viewport, compare baseline/render side by side, use the keyboard-
+operable overlay, then inspect the heatmap, pixel/geometry/accessibility metrics
+and provenance hashes. An invalid capture shows its failure and recovery action;
+missing or blocking V2 evidence keeps **Approve** disabled. Rejecting requires a
+comment and starts one linked corrective run. Its new evidence ids are compared
+to the same approved baseline, while the original decision remains immutable.
+
 Store the GitHub token through stdin, never as an argument:
 
 ```sh

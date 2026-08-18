@@ -31,6 +31,37 @@ export interface ComparisonPayload {
   gap?: string;
 }
 
+export interface TrustedEvidenceReference {
+  evidence_id: string;
+  comparison_id: string;
+  status: "invalid" | "blocking" | "reservation" | "passed";
+  manifest_digest: string;
+  baseline_png_digest: string;
+  render_png_digest?: string;
+  pixel_diff_digest?: string;
+  heatmap_png_digest?: string;
+  geometry_diff_digest?: string;
+  accessibility_diff_digest?: string;
+  environment_digest?: string;
+  changed_pixels: number;
+  total_pixels: number;
+  pixel_ratio_micros: number;
+  max_geometry_delta_milli: number;
+  accessibility_changes: number;
+}
+
+export interface TrustedVisualEvidence {
+  applicability: "required" | "not_applicable";
+  references: TrustedEvidenceReference[];
+}
+
+export interface ReviewGate {
+  trusted_v2: boolean;
+  approvable: boolean;
+  code: string;
+  message: string;
+}
+
 export interface VerdictPayload {
   schema_version?: number;
   verdict?: string;
@@ -39,6 +70,9 @@ export interface VerdictPayload {
   suggested_follow_ups: string[];
   diff?: DiffPayload;
   comparison?: ComparisonPayload;
+  reviewed_run_id?: string;
+  visual_evidence?: TrustedVisualEvidence;
+  gate?: ReviewGate;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -53,6 +87,38 @@ function text(value: unknown): string | undefined {
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseEvidenceReference(value: unknown): TrustedEvidenceReference | undefined {
+  const reference = record(value);
+  if (!reference) return undefined;
+  const evidenceId = text(reference.evidence_id);
+  const comparisonId = text(reference.comparison_id);
+  const manifestDigest = text(reference.manifest_digest);
+  const baselineDigest = text(reference.baseline_png_digest);
+  const status = reference.status;
+  if (
+    !evidenceId || !comparisonId || !manifestDigest || !baselineDigest ||
+    !["invalid", "blocking", "reservation", "passed"].includes(String(status))
+  ) return undefined;
+  return {
+    evidence_id: evidenceId,
+    comparison_id: comparisonId,
+    status: status as TrustedEvidenceReference["status"],
+    manifest_digest: manifestDigest,
+    baseline_png_digest: baselineDigest,
+    render_png_digest: text(reference.render_png_digest),
+    pixel_diff_digest: text(reference.pixel_diff_digest),
+    heatmap_png_digest: text(reference.heatmap_png_digest),
+    geometry_diff_digest: text(reference.geometry_diff_digest),
+    accessibility_diff_digest: text(reference.accessibility_diff_digest),
+    environment_digest: text(reference.environment_digest),
+    changed_pixels: finiteNumber(reference.changed_pixels) ?? 0,
+    total_pixels: finiteNumber(reference.total_pixels) ?? 0,
+    pixel_ratio_micros: finiteNumber(reference.pixel_ratio_micros) ?? 0,
+    max_geometry_delta_milli: finiteNumber(reference.max_geometry_delta_milli) ?? 0,
+    accessibility_changes: finiteNumber(reference.accessibility_changes) ?? 0,
+  };
 }
 
 function parseFrame(value: unknown): ReviewFramePayload | undefined {
@@ -121,6 +187,32 @@ export function parseReviewPayload(raw: string): VerdictPayload {
         }
       : undefined;
 
+    const rawEvidence = record(payload.visual_evidence);
+    const applicability = rawEvidence?.applicability;
+    const evidenceReferences = rawEvidence && Array.isArray(rawEvidence.references)
+      ? rawEvidence.references.flatMap((item) => {
+          const parsed = parseEvidenceReference(item);
+          return parsed ? [parsed] : [];
+        })
+      : [];
+    const visualEvidence: TrustedVisualEvidence | undefined =
+      applicability === "required" || applicability === "not_applicable"
+      ? { applicability, references: evidenceReferences }
+      : undefined;
+
+    const rawGate = record(payload.gate);
+    const gateCode = rawGate && text(rawGate.code);
+    const gateMessage = rawGate && text(rawGate.message);
+    const gate = rawGate && gateCode && gateMessage &&
+      typeof rawGate.trusted_v2 === "boolean" && typeof rawGate.approvable === "boolean"
+      ? {
+          trusted_v2: rawGate.trusted_v2,
+          approvable: rawGate.approvable,
+          code: gateCode,
+          message: gateMessage,
+        }
+      : undefined;
+
     return {
       schema_version: finiteNumber(payload.schema_version),
       verdict: text(payload.verdict),
@@ -133,6 +225,9 @@ export function parseReviewPayload(raw: string): VerdictPayload {
         : [],
       diff,
       comparison,
+      reviewed_run_id: text(payload.reviewed_run_id),
+      visual_evidence: visualEvidence,
+      gate,
     };
   } catch {
     return { findings: [], suggested_follow_ups: [] };

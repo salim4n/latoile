@@ -89,7 +89,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked
-  corrective run. The Reviewer completes before a human review approval exists.
+  corrective run. That run produces a distinct evidence set against the same
+  approved baseline, so original decision and correction remain auditable. The
+  Reviewer completes before a human review approval exists.
 - `DELIVERY.local_sha = DELIVERY.remote_sha`; URL presence must agree with
   `pushed` versus `pull_request_open` status.
 
@@ -124,6 +126,11 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Baseline capture starts automatically after immutable validation. The owner
   sees progress, actionable failures, the authenticated real PNG and its
   browser/DOM/accessibility hashes before approval is enabled.
+- Review renders only authenticated server artifacts tied to the V2 envelope.
+  It exposes scenario, viewport and locale selection; side-by-side, keyboard-
+  operable overlay and heatmap modes; server metrics; immutable provenance; and
+  actionable invalid-capture reasons. A missing or non-approvable V2 gate keeps
+  approval disabled at 390px and desktop widths.
 - Mobile-first: every screen is designed at 390px viewport first.
 - No mock data outside a `fixtures/` directory clearly excluded from real routes (Firetower lesson V-M2).
 
