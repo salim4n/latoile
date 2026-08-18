@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::driver;
-use latoile_agents::{RunOutcome, RunState};
+use latoile_agents::{
+    ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState,
+};
 use latoile_core::event::EventKind;
 use latoile_core::ids::{RunId, SpecVersionId, TaskId};
 use latoile_core::ports::{ApprovalStore, RunStore, SpecStore, TaskStore};
@@ -77,9 +79,35 @@ async fn a_finished_run_drives_review_and_journals() {
         .run_states
         .lock()
         .unwrap()
-        .insert("r-fin".into(), RunState::Done(RunOutcome::Finished));
+        .insert(
+            "r-fin".into(),
+            RunState::Done(RunReport {
+                outcome: RunOutcome::Finished,
+                summary: "endpoint implemented".into(),
+                activity: vec!["finished: cargo test".into()],
+                base_sha: Some("1111111".into()),
+                head_sha: Some("2222222".into()),
+                commits: vec![CommitEvidence {
+                    sha: "2222222".into(),
+                    subject: "feat: implement endpoint".into(),
+                }],
+                changed_files: vec![ChangedFileEvidence {
+                    status: "M".into(),
+                    path: "src/endpoint.rs".into(),
+                }],
+                diff_stat: "1 file changed, 12 insertions(+)".into(),
+            }),
+        );
 
     assert_eq!(wait_terminal(&store, &run).await, RunStatus::Finished);
+    let stored_run = RunStore::get(&store, &run).await.unwrap().unwrap();
+    assert_eq!(stored_run.summary.as_deref(), Some("endpoint implemented"));
+    assert_eq!(stored_run.base_sha.as_deref(), Some("1111111"));
+    assert_eq!(stored_run.head_sha.as_deref(), Some("2222222"));
+    let artifacts: serde_json::Value =
+        serde_json::from_str(stored_run.artifacts.as_deref().unwrap()).unwrap();
+    assert_eq!(artifacts["changed_files"][0]["path"], "src/endpoint.rs");
+    assert_eq!(artifacts["activity"][0], "finished: cargo test");
     let task = TaskStore::get(&store, &TaskId::new("t-r-fin").unwrap())
         .await
         .unwrap()

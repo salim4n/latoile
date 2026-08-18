@@ -114,6 +114,9 @@ pub struct RunDto {
     pub role_id: String,
     pub status: &'static str,
     pub summary: Option<String>,
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub artifacts: Option<serde_json::Value>,
 }
 
 impl From<&Run> for RunDto {
@@ -124,6 +127,12 @@ impl From<&Run> for RunDto {
             role_id: r.role_id.as_str().to_string(),
             status: r.status.as_str(),
             summary: r.summary.clone(),
+            base_sha: r.base_sha.clone(),
+            head_sha: r.head_sha.clone(),
+            artifacts: r
+                .artifacts
+                .as_deref()
+                .and_then(|value| serde_json::from_str(value).ok()),
         }
     }
 }

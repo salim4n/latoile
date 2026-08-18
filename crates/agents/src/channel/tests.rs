@@ -215,7 +215,10 @@ async fn a_run_completes_in_the_background() {
     assert_eq!(handle, "acp:r1");
 
     let state = wait_for(&ch, &r.id, |s| !matches!(s, RunState::Running)).await;
-    assert_eq!(state, RunState::Done(RunOutcome::Finished));
+    assert_eq!(
+        state,
+        RunState::Done(RunReport::terminal(RunOutcome::Finished, "réponse"))
+    );
 }
 
 #[tokio::test]

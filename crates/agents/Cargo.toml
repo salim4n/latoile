@@ -16,12 +16,14 @@ tokio = { version = "1", features = ["rt", "sync", "time", "process", "io-util",
 thiserror = "2"
 # Auth session ids.
 ulid = "1"
+# Structured run evidence is persisted by the application layer.
+serde = { version = "1", features = ["derive"] }
+# Permission decisions inspect a tool call's raw JSON input.
+serde_json = "1"
 # Login CLIs re-exec (codex's npm wrapper → vendored binary): the whole
 # process group must die, not just the direct child.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# Permission decisions inspect a tool call's raw JSON input.
-serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

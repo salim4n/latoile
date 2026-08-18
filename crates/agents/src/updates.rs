@@ -83,7 +83,8 @@ pub fn classify(update: &SessionUpdate) -> AgentUpdate {
 }
 
 /// How a prompt turn ended, in run terms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
     /// `stop_reason: end_turn` — the agent finished its work.
     Finished,

@@ -1487,6 +1487,7 @@ dependencies = [
  "agent-client-protocol",
  "latoile-core",
  "libc",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",

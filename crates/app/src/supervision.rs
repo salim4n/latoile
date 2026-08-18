@@ -20,7 +20,12 @@ use latoile_core::{Approval, ApprovalKind, Run, RunStatus, Task, TaskStatus, Tri
 pub enum Observed {
     /// Still going — nothing to do.
     Running,
-    Finished { summary: String },
+    Finished {
+        summary: String,
+        base_sha: Option<String>,
+        head_sha: Option<String>,
+        artifacts: String,
+    },
     Cancelled,
     Failed { reason: String },
     /// Active in the store but unknown to the channel: the process died
@@ -28,12 +33,30 @@ pub enum Observed {
     Lost,
 }
 
+impl Observed {
+    /// Terminal observation without repository evidence. Useful for
+    /// adapters that cannot inspect Git and for focused domain tests.
+    pub fn finished(summary: impl Into<String>) -> Self {
+        Self::Finished {
+            summary: summary.into(),
+            base_sha: None,
+            head_sha: None,
+            artifacts: "{}".into(),
+        }
+    }
+}
+
 /// One step, in domain-legal order, computed from the stored statuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     BeginRun,
     ResumeRun,
-    FinishRun(String),
+    FinishRun {
+        summary: String,
+        base_sha: Option<String>,
+        head_sha: Option<String>,
+        artifacts: String,
+    },
     FailRun,
     CancelRun,
     SubmitForReview,
@@ -57,7 +80,17 @@ fn wind_down(run: &Run, terminal: Terminal) -> Vec<Step> {
         _ => {}
     }
     steps.push(match terminal {
-        Terminal::Finish(summary) => Step::FinishRun(summary),
+        Terminal::Finish {
+            summary,
+            base_sha,
+            head_sha,
+            artifacts,
+        } => Step::FinishRun {
+            summary,
+            base_sha,
+            head_sha,
+            artifacts,
+        },
         Terminal::Fail => Step::FailRun,
         Terminal::Cancel => Step::CancelRun,
     });
@@ -65,7 +98,12 @@ fn wind_down(run: &Run, terminal: Terminal) -> Vec<Step> {
 }
 
 enum Terminal {
-    Finish(String),
+    Finish {
+        summary: String,
+        base_sha: Option<String>,
+        head_sha: Option<String>,
+        artifacts: String,
+    },
     Fail,
     Cancel,
 }
@@ -75,8 +113,21 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
     let run_payload = format!("{{\"run_id\":\"{}\",\"outcome\":\"", run.id.as_str());
     match observed {
         Observed::Running => vec![],
-        Observed::Finished { summary } => {
-            let mut steps = wind_down(run, Terminal::Finish(summary.clone()));
+        Observed::Finished {
+            summary,
+            base_sha,
+            head_sha,
+            artifacts,
+        } => {
+            let mut steps = wind_down(
+                run,
+                Terminal::Finish {
+                    summary: summary.clone(),
+                    base_sha: base_sha.clone(),
+                    head_sha: head_sha.clone(),
+                    artifacts: artifacts.clone(),
+                },
+            );
             if steps.is_empty() {
                 return vec![]; // already recorded
             }
@@ -180,7 +231,15 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
         match step {
             Step::BeginRun => run.begin()?,
             Step::ResumeRun => run.resume()?,
-            Step::FinishRun(summary) => run.finish(summary)?,
+            Step::FinishRun {
+                summary,
+                base_sha,
+                head_sha,
+                artifacts,
+            } => {
+                run.finish(summary)?;
+                run.attach_evidence(base_sha, head_sha, artifacts)?;
+            }
             Step::FailRun => run.fail()?,
             Step::CancelRun => run.cancel()?,
             Step::SubmitForReview => task.submit_for_review()?,

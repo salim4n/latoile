@@ -63,13 +63,19 @@ fn a_blocked_run_is_resumed_before_it_finishes() {
     let steps = plan(
         &run,
         &task,
-        &Observed::Finished {
-            summary: "done".into(),
-        },
+        &Observed::finished("done"),
     );
     // ResumeRun must precede FinishRun or the domain refuses.
     assert_eq!(steps[0], Step::ResumeRun);
-    assert_eq!(steps[1], Step::FinishRun("done".into()));
+    assert_eq!(
+        steps[1],
+        Step::FinishRun {
+            summary: "done".into(),
+            base_sha: None,
+            head_sha: None,
+            artifacts: "{}".into(),
+        }
+    );
     assert!(steps.contains(&Step::SubmitForReview));
     assert!(steps.contains(&Step::RequestReviewApproval));
 }
@@ -91,9 +97,7 @@ fn a_task_already_past_in_progress_gets_no_second_review() {
     let steps = plan(
         &run,
         &task,
-        &Observed::Finished {
-            summary: "s".into(),
-        },
+        &Observed::finished("s"),
     );
     assert!(!steps.contains(&Step::SubmitForReview));
     assert!(!steps.contains(&Step::RequestReviewApproval));
@@ -109,9 +113,7 @@ async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
     let applied = apply(
         &store,
         &run.id,
-        &Observed::Finished {
-            summary: "endpoint implemented".into(),
-        },
+        &Observed::finished("endpoint implemented"),
     )
     .await
     .unwrap();
@@ -139,9 +141,7 @@ async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
     let again = apply(
         &store,
         &run.id,
-        &Observed::Finished {
-            summary: "endpoint implemented".into(),
-        },
+        &Observed::finished("endpoint implemented"),
     )
     .await
     .unwrap();
@@ -219,9 +219,7 @@ async fn the_reviewer_is_dispatched_on_a_task_in_review() {
     apply(
         &store,
         &run.id,
-        &Observed::Finished {
-            summary: "endpoint implemented".into(),
-        },
+        &Observed::finished("endpoint implemented"),
     )
     .await
     .unwrap();

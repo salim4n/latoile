@@ -87,13 +87,17 @@ async fn observe(state: &AppState, run: &RunId) -> Observed {
         // The channel knows no such run: its process died with a restart.
         None => Observed::Lost,
         Some(RunState::Running) => Observed::Running,
-        Some(RunState::Done(outcome)) => match outcome {
+        Some(RunState::Done(report)) => match report.outcome {
             latoile_agents::RunOutcome::Finished => {
-                // The summary lives on the run row only after the domain's
-                // finish(); the channel doesn't carry it back. Journaled as
-                // empty — the diff and the review carry the substance.
+                let artifacts = serde_json::to_string(&report).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "run evidence serialization failed");
+                    "{}".into()
+                });
                 Observed::Finished {
-                    summary: String::new(),
+                    summary: report.summary,
+                    base_sha: report.base_sha,
+                    head_sha: report.head_sha,
+                    artifacts,
                 }
             }
             latoile_agents::RunOutcome::Cancelled => Observed::Cancelled,

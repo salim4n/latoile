@@ -31,7 +31,10 @@ pub use auth::{
     AgentAuthManager, AuthError, AuthProvider, AuthSessionView, AuthStatus, ProviderCommands,
     ProviderStatus, DEFAULT_TTL,
 };
-pub use channel::{AcpChannel, ProjectDirs, RootDirs, RoutingSource, RunState, SharedRouting};
+pub use channel::{
+    AcpChannel, ChangedFileEvidence, CommitEvidence, ProjectDirs, RootDirs, RoutingSource,
+    RunReport, RunState, SharedRouting,
+};
 pub use config::{AgentCommand, AgentTimeouts, ChannelConfig};
 pub use error::AgentError;
 pub use updates::{AgentUpdate, RunOutcome};

@@ -21,7 +21,7 @@ use crate::config::{AgentCommand, ChannelConfig};
 use crate::error::AgentError;
 use crate::preamble::Preambles;
 use crate::transport::{Connection, Connector};
-use crate::updates::RunOutcome;
+use crate::updates::{AgentUpdate, RunOutcome};
 use latoile_core::ids::{ProjectId, RunId};
 use latoile_core::ports::{AgentChannel, ManagerReply, PortResult};
 use latoile_core::Run;
@@ -127,9 +127,52 @@ fn checked_dir(dir: PathBuf) -> Result<PathBuf, AgentError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
     Running,
-    Done(RunOutcome),
+    Done(RunReport),
     /// Transport or timeout failure; the message is for logs, not clients.
     Failed(String),
+}
+
+/// Sanitized terminal evidence retained for orchestration and review. Raw
+/// prompts, thought chunks and tool inputs never enter this structure.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RunReport {
+    pub outcome: RunOutcome,
+    pub summary: String,
+    pub activity: Vec<String>,
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub commits: Vec<CommitEvidence>,
+    pub changed_files: Vec<ChangedFileEvidence>,
+    pub diff_stat: String,
+}
+
+impl RunReport {
+    /// Minimal report for adapters and tests that have no repository
+    /// evidence to attach. Production ACP runs use the richer collector.
+    pub fn terminal(outcome: RunOutcome, summary: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            summary: summary.into(),
+            activity: Vec::new(),
+            base_sha: None,
+            head_sha: None,
+            commits: Vec::new(),
+            changed_files: Vec::new(),
+            diff_stat: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CommitEvidence {
+    pub sha: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ChangedFileEvidence {
+    pub status: String,
+    pub path: String,
 }
 
 struct RunEntry {
@@ -271,12 +314,32 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
         let preamble = self.preambles.for_role(&run.role_id);
         let full_prompt = format!("{preamble}\n\n---\n\n{prompt}");
         let timeout = self.config.timeouts.prompt;
+        let base_sha = git_output(&dir, &["rev-parse", "HEAD"]).await;
+        let evidence_dir = dir.clone();
 
         let state = Arc::new(StdMutex::new(RunState::Running));
         let task_state = state.clone();
         let task = tokio::spawn(async move {
             let recorded = match tokio::time::timeout(timeout, conn.prompt(&full_prompt)).await {
-                Ok(Ok(turn)) => RunState::Done(turn.outcome),
+                Ok(Ok(turn)) => {
+                    let activity = turn
+                        .updates
+                        .iter()
+                        .filter_map(activity_summary)
+                        .take(200)
+                        .collect();
+                    let git = collect_git_evidence(&evidence_dir, base_sha).await;
+                    RunState::Done(RunReport {
+                        outcome: turn.outcome,
+                        summary: truncate(turn.text.trim().to_string(), 64 * 1024),
+                        activity,
+                        base_sha: git.base_sha,
+                        head_sha: git.head_sha,
+                        commits: git.commits,
+                        changed_files: git.changed_files,
+                        diff_stat: git.diff_stat,
+                    })
+                }
                 Ok(Err(e)) => RunState::Failed(e.to_string()),
                 Err(_) => RunState::Failed("timed out".into()),
             };
@@ -300,10 +363,138 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
         if let Some(entry) = self.runs.lock().await.remove(run.as_str()) {
             entry.abort.abort(); // the connection — and the process — die
             *entry.state.lock().expect("run state poisoned") =
-                RunState::Done(RunOutcome::Cancelled);
+                RunState::Done(RunReport::terminal(RunOutcome::Cancelled, ""));
         }
         Ok(())
     }
+}
+
+fn activity_summary(update: &AgentUpdate) -> Option<String> {
+    match update {
+        // ACP titles and permission summaries can contain raw command
+        // arguments, so persist only the lifecycle signal.
+        AgentUpdate::ToolCallStarted { .. } => Some("tool call started".into()),
+        AgentUpdate::ToolCallFinished { .. } => Some("tool call finished".into()),
+        AgentUpdate::PermissionRequested { .. } => Some("permission requested".into()),
+        AgentUpdate::PlanUpdated => Some("plan updated".into()),
+        AgentUpdate::TextChunk(_)
+        | AgentUpdate::ThoughtChunk(_)
+        | AgentUpdate::Ignored(_) => None,
+    }
+}
+
+#[derive(Default)]
+struct GitEvidence {
+    base_sha: Option<String>,
+    head_sha: Option<String>,
+    commits: Vec<CommitEvidence>,
+    changed_files: Vec<ChangedFileEvidence>,
+    diff_stat: String,
+}
+
+async fn collect_git_evidence(dir: &std::path::Path, base_sha: Option<String>) -> GitEvidence {
+    let head_sha = git_output(dir, &["rev-parse", "HEAD"]).await;
+    let range = match (&base_sha, &head_sha) {
+        (Some(base), Some(head)) if base != head => Some(format!("{base}..{head}")),
+        _ => None,
+    };
+
+    let commits = match range.as_deref() {
+        Some(range) => git_output(dir, &["log", "--format=%H%x09%s", range])
+            .await
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(sha, subject)| CommitEvidence {
+                sha: sha.to_string(),
+                subject: truncate(subject.to_string(), 512),
+            })
+            .take(100)
+            .collect(),
+        None => Vec::new(),
+    };
+
+    let mut changed_files = Vec::new();
+    if let Some(range) = range.as_deref() {
+        parse_name_status(
+            &git_output(dir, &["diff", "--name-status", range])
+                .await
+                .unwrap_or_default(),
+            &mut changed_files,
+        );
+    }
+    parse_porcelain(
+        &git_output(dir, &["status", "--porcelain=v1"])
+            .await
+            .unwrap_or_default(),
+        &mut changed_files,
+    );
+    changed_files.sort_by(|a, b| a.path.cmp(&b.path));
+    changed_files.dedup_by(|a, b| a.path == b.path);
+    changed_files.truncate(500);
+
+    let diff_stat = match range.as_deref() {
+        Some(range) => git_output(dir, &["diff", "--stat", range])
+            .await
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+
+    GitEvidence {
+        base_sha,
+        head_sha,
+        commits,
+        changed_files,
+        diff_stat: truncate(diff_stat, 32 * 1024),
+    }
+}
+
+fn parse_name_status(raw: &str, out: &mut Vec<ChangedFileEvidence>) {
+    for line in raw.lines() {
+        if let Some((status, path)) = line.split_once('\t') {
+            out.push(ChangedFileEvidence {
+                status: truncate(status.to_string(), 16),
+                path: truncate(path.to_string(), 2048),
+            });
+        }
+    }
+}
+
+fn parse_porcelain(raw: &str, out: &mut Vec<ChangedFileEvidence>) {
+    for line in raw.lines() {
+        if line.len() >= 4 {
+            out.push(ChangedFileEvidence {
+                status: truncate(line[..2].trim().to_string(), 16),
+                path: truncate(line[3..].to_string(), 2048),
+            });
+        }
+    }
+}
+
+async fn git_output(dir: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn truncate(mut value: String, limit: usize) -> String {
+    if value.len() > limit {
+        let mut boundary = limit;
+        while !value.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        value.truncate(boundary);
+        value.push_str("\n… truncated");
+    }
+    value
 }
 
 #[cfg(test)]

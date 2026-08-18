@@ -36,10 +36,14 @@ fn row_to_run(row: &SqliteRow) -> Result<Run, StoreError> {
         acp_session_id: row.try_get("acp_session_id")?,
         status: parse_status(&row.try_get::<String, _>("status")?)?,
         summary: row.try_get("summary")?,
+        base_sha: row.try_get("base_sha")?,
+        head_sha: row.try_get("head_sha")?,
+        artifacts: row.try_get("artifacts")?,
     })
 }
 
-const COLUMNS: &str = "id, task_id, role_id, triggered_by, acp_session_id, status, summary";
+const COLUMNS: &str = "id, task_id, role_id, triggered_by, acp_session_id, status, summary, \
+                       base_sha, head_sha, artifacts";
 
 impl RunStore for Store {
     async fn get(&self, id: &RunId) -> PortResult<Option<Run>> {
@@ -79,12 +83,16 @@ impl RunStore for Store {
 
     async fn save(&self, run: &Run) -> PortResult<()> {
         sqlx::query(
-            "INSERT INTO run (id, task_id, role_id, triggered_by, acp_session_id, status, summary)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO run (id, task_id, role_id, triggered_by, acp_session_id, status, summary,
+                              base_sha, head_sha, artifacts)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                acp_session_id = excluded.acp_session_id,
                status = excluded.status,
                summary = excluded.summary,
+               base_sha = excluded.base_sha,
+               head_sha = excluded.head_sha,
+               artifacts = excluded.artifacts,
                ended_at = CASE
                    WHEN excluded.status IN ('finished', 'error', 'cancelled')
                    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -100,6 +108,9 @@ impl RunStore for Store {
         .bind(&run.acp_session_id)
         .bind(run.status.as_str())
         .bind(&run.summary)
+        .bind(&run.base_sha)
+        .bind(&run.head_sha)
+        .bind(&run.artifacts)
         .execute(self.pool())
         .await
         .map_err(StoreError::from)?;
@@ -148,6 +159,13 @@ mod tests {
         let mut r = run("r1", &task);
         r.begin().unwrap();
         r.acp_session_id = Some("acp-1".into());
+        r.finish("implemented and tested").unwrap();
+        r.attach_evidence(
+            Some("1111111".into()),
+            Some("2222222".into()),
+            r#"{"commits":[{"sha":"2222222","subject":"feat: ship"}]}"#.into(),
+        )
+        .unwrap();
         s.save(&r).await.unwrap();
 
         let back = s.get(&r.id).await.unwrap().unwrap();

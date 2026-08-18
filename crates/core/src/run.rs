@@ -48,6 +48,12 @@ pub struct Run {
     pub acp_session_id: Option<String>,
     pub status: RunStatus,
     pub summary: Option<String>,
+    /// Git evidence captured by the agent adapter. Artifacts are sanitized
+    /// JSON (activity, commits, changed files and diff statistics), never
+    /// hidden reasoning or raw tool inputs.
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub artifacts: Option<String>,
 }
 
 impl Run {
@@ -65,6 +71,9 @@ impl Run {
             acp_session_id: None,
             status: RunStatus::Starting,
             summary: None,
+            base_sha: None,
+            head_sha: None,
+            artifacts: None,
         }
     }
 
@@ -109,6 +118,23 @@ impl Run {
         Ok(())
     }
 
+    pub fn attach_evidence(
+        &mut self,
+        base_sha: Option<String>,
+        head_sha: Option<String>,
+        artifacts: String,
+    ) -> Result<(), DomainError> {
+        if self.status != RunStatus::Finished {
+            return Err(DomainError::Invariant(
+                "run evidence can only be attached to a finished run",
+            ));
+        }
+        self.base_sha = base_sha;
+        self.head_sha = head_sha;
+        self.artifacts = Some(artifacts);
+        Ok(())
+    }
+
     pub fn fail(&mut self) -> Result<(), DomainError> {
         self.go(RunStatus::Error)
     }
@@ -141,6 +167,13 @@ mod tests {
         r.finish("done: endpoint implemented").unwrap();
         assert_eq!(r.status, RunStatus::Finished);
         assert_eq!(r.summary.as_deref(), Some("done: endpoint implemented"));
+        r.attach_evidence(
+            Some("base".into()),
+            Some("head".into()),
+            "{}".into(),
+        )
+        .unwrap();
+        assert_eq!(r.head_sha.as_deref(), Some("head"));
         assert!(!r.status.is_active());
     }
 
@@ -148,6 +181,9 @@ mod tests {
     fn refused_transitions_are_errors() {
         let mut r = run();
         assert!(r.finish("too early").is_err()); // Starting → Finished
+        assert!(r
+            .attach_evidence(None, None, "{}".into())
+            .is_err());
         assert!(r.block().is_err()); // Starting → Blocked
         r.begin().unwrap();
         r.finish("ok").unwrap();
