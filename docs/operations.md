@@ -41,7 +41,11 @@ rather than calculating a misleading similarity score.
 Baseline installation uses `Page.setDocumentContent`, while live evidence uses
 loopback navigation. Chrome therefore exposes `about:blank` versus the preview
 URL on the AX `RootWebArea`. LaToile removes only that transport property before
-comparison; URL properties on links remain part of the immutable evidence.
+comparison. Capture V3 also injects the same non-routable synthetic document
+base while measuring baseline and live pages, so unchanged relative links
+resolve identically. URL properties on links remain part of the immutable
+evidence; a destination change still produces AX drift. A V2 baseline is not
+silently reused under V3: recapture and approve a new architecture version.
 
 The subsequent Reviewer run is permanently bound to that executor run. Its V2
 response must echo the exact evidence ids and hashes shown in the prompt; the

@@ -39,7 +39,7 @@ run the paid, stateful real-provider canary.
 | 25 | Reviewer V2 cannot replay or invent evidence | App/server tests bind one immutable reviewed run, match the full current project/spec evidence set and hashes, canonicalize failed gates, and refuse grants for V1 or non-approvable V2 payloads |
 | 26 | Owner decisions use real visual artifacts | Web API/UI tests prove bearer-authenticated baseline/render/heatmap loading, scenario/viewport/locale switching, side-by-side/overlay/diff modes, metrics/provenance, invalid recovery and disabled failed gates; flow tests prove one correction creates distinct evidence against the same baseline |
 | 27 | Corrective capture cannot reuse an old preview process | App and driver tests prove frontend completion emits `PreviewStale`, recycles the supervised process before capture and does so idempotently; the real-provider canary must prove `blocking → passed` |
-| 28 | Transport metadata cannot create a false visual reservation | Unit tests preserve semantic link URLs while excluding only the AX root transport URL; installed-Chromium tests prove exact HTTP bytes pass and the deliberate 16 px regression still blocks |
+| 28 | Transport metadata cannot create a false visual reservation | Unit tests preserve semantic link URLs while excluding only the AX root transport URL; installed-Chromium tests prove exact HTTP bytes with relative links pass, changed link destinations reserve, and the deliberate 16 px regression still blocks under capture V3 |
 
 ## Anti-drift rules
 

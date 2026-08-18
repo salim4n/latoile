@@ -605,10 +605,17 @@ records were the entire difference.
 
 Canonical accessibility evidence omits the `url` property only when the node
 role is `RootWebArea`. Every other root property and every URL on semantic
-nodes such as links remains in the snapshot. An installed-Chromium contract
-test requires identical HTML served over HTTP to classify `passed` with zero
-pixel, geometry and accessibility drift; the real 16 px regression test must
-continue to classify `blocking`.
+nodes such as links remains in the snapshot. Capture installs the same
+non-routable synthetic document base, including route and fixture fields, in
+both baseline and live documents so a relative link resolves independently of
+the transport origin. An installed-Chromium contract test requires identical
+HTML with a relative link served over HTTP to classify `passed` with zero
+pixel, geometry and accessibility drift. A destination-only change must remain
+an AX `reservation`, and the real 16 px regression must remain `blocking`.
+
+This evidence semantic is capture protocol V3. V2 environments do not compare
+under V3; the existing environment mismatch path requires a new architecture
+version and approved baseline.
 
 The opt-in canary also writes a bounded observation of decision metrics before
 asserting the expected state, so a failed run retains its measured seam without
@@ -619,6 +626,8 @@ storing provider prose or unbounded payloads.
 - Treat two AX changes as passing: weakens the global accessibility gate and
   could hide a real semantic change.
 - Remove every AX `url` property: would stop detecting changed link targets.
+- Strip origins from every URL after capture: relative fragments and paths
+  still resolve differently under `about:blank` and would remain ambiguous.
 - Capture the baseline through a temporary HTTP server: adds another mutable
   process and origin to approval when the mockup is already bounded bytes.
 - Accept `reservation` in the canary: would not prove exact mockup fidelity.
@@ -630,3 +639,4 @@ storing provider prose or unbounded payloads.
 + Link destination regressions remain measurable.
 + Failed canaries retain bounded comparison metrics for diagnosis.
 − Canonicalization carries one explicit Chrome transport normalization rule.
+− Existing V2 baselines require recapture before live comparison under V3.

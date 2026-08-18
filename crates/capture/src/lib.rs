@@ -30,7 +30,7 @@ use page::{
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-const CAPTURE_PROTOCOL_VERSION: &str = "latoile-capture-v2";
+const CAPTURE_PROTOCOL_VERSION: &str = "latoile-capture-v3";
 
 #[derive(Debug, thiserror::Error)]
 enum CaptureError {
@@ -192,7 +192,7 @@ impl BaselineCapture {
         let mut cdp = CdpClient::connect(&page_ws).await?;
         let live_url = configure_live_page(&mut cdp, request).await?;
         wait_until_ready(&mut cdp, &request.scenario).await?;
-        settle_page(&mut cdp).await?;
+        settle_page(&mut cdp, &request.scenario).await?;
         apply_allowed_masks(&mut cdp, &request.scenario).await?;
         let geometry = capture_geometry(&mut cdp, &request.scenario).await?;
         let accessibility = capture_accessibility(&mut cdp).await?;
@@ -438,6 +438,24 @@ mod tests {
         }
     }
 
+    async fn serve_html(html: impl Into<String>) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let html = html.into();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        );
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        (port, server)
+    }
+
     #[tokio::test]
     async fn unsafe_html_is_refused_before_browser_discovery() {
         let root = tempfile::tempdir().unwrap();
@@ -511,7 +529,7 @@ mod tests {
     async fn installed_chromium_passes_the_exact_mockup_served_over_http() {
         let root = tempfile::tempdir().unwrap();
         let capture = BaselineCapture::new(root.path().into());
-        let html = "<!doctype html><html><head><style>html,body{margin:0}main{box-sizing:border-box;width:390px;height:844px;padding:24px;background:#fff;color:#111}</style></head><body><main data-latoile-ready='true'>Stable baseline</main></body></html>";
+        let html = "<!doctype html><html><head><style>html,body{margin:0}main{box-sizing:border-box;width:390px;height:844px;padding:24px;background:#fff;color:#111}</style></head><body><main data-latoile-ready='true'><a href='#details'>Stable baseline</a><section id='details'>Details</section></main></body></html>";
         let mut baseline_request = request(html);
         baseline_request.scenario.readiness_selector =
             "[data-latoile-ready='true']".into();
@@ -521,19 +539,7 @@ mod tests {
         };
         let baseline = VisualBaseline::ready(&baseline_request, &baseline_captured).unwrap();
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            html.len(),
-            html
-        );
-        let server = tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                let _ = stream.write_all(response.as_bytes()).await;
-                let _ = stream.shutdown().await;
-            }
-        });
+        let (port, server) = serve_html(html).await;
         let comparison_request = VisualComparisonCaptureRequest {
             id: VisualComparisonId::new("visual:run-exact:home-default").unwrap(),
             spec_version_id: baseline_request.spec_version_id.clone(),
@@ -559,6 +565,45 @@ mod tests {
             comparison.max_geometry_delta_milli,
             comparison.accessibility_changes
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an installed Chromium browser"]
+    async fn installed_chromium_detects_a_relative_link_destination_regression() {
+        let root = tempfile::tempdir().unwrap();
+        let capture = BaselineCapture::new(root.path().into());
+        let baseline_html = "<!doctype html><html><head><style>html,body{margin:0}main{box-sizing:border-box;width:390px;height:844px;padding:24px;background:#fff;color:#111}</style></head><body><main data-latoile-ready='true'><a href='#details'>Stable baseline</a><section id='details'>Details</section><section id='alternate'>Alternate</section></main></body></html>";
+        let live_html = baseline_html.replace("href='#details'", "href='#alternate'");
+        let mut baseline_request = request(baseline_html);
+        baseline_request.scenario.readiness_selector =
+            "[data-latoile-ready='true']".into();
+        let baseline_captured = match capture.capture(&baseline_request).await.unwrap() {
+            VisualBaselineCaptureOutcome::Ready(captured) => captured,
+            failure => panic!("baseline capture failed: {failure:?}"),
+        };
+        let baseline = VisualBaseline::ready(&baseline_request, &baseline_captured).unwrap();
+        let (port, server) = serve_html(live_html).await;
+        let comparison_request = VisualComparisonCaptureRequest {
+            id: VisualComparisonId::new("visual:run-link:home-default").unwrap(),
+            spec_version_id: baseline_request.spec_version_id.clone(),
+            project_id: baseline_request.project_id.clone(),
+            run_id: RunId::new("run-link").unwrap(),
+            manifest_digest: baseline_request.manifest_digest.clone(),
+            package_commit_sha: baseline_request.package_commit_sha.clone(),
+            baseline,
+            scenario: baseline_request.scenario,
+            live_base_url: format!("http://127.0.0.1:{port}"),
+        };
+        let captured = match capture.compare(&comparison_request).await.unwrap() {
+            VisualComparisonCaptureOutcome::Ready(captured) => captured,
+            failure => panic!("live comparison failed: {failure:?}"),
+        };
+        let comparison = VisualComparison::ready(&comparison_request, &captured).unwrap();
+        assert_eq!(comparison.status, VisualComparisonStatus::Reservation);
+        assert_eq!(comparison.changed_pixels, 0);
+        assert_eq!(comparison.max_geometry_delta_milli, 0);
+        assert!(comparison.accessibility_changes > 0);
         server.abort();
     }
 

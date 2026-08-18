@@ -76,7 +76,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   required baselines block approval and executor dispatch.
 - Accessibility canonicalization removes only the `RootWebArea` transport URL
   that necessarily changes from `about:blank` baseline installation to the
-  loopback live route; semantic link URLs remain measured evidence.
+  loopback live route. Capture V3 installs the same synthetic document base in
+  both contexts so relative links resolve identically; semantic destination
+  changes remain measured evidence.
 - After a finished frontend run, the live route is replayed with that exact
   scenario contract. Any ready preview is first marked stale and its process is
   recycled, including after corrective runs, so capture cannot observe code

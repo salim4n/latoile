@@ -62,7 +62,7 @@ pub(super) async fn configure_page(
         json!({"frameId": frame_id, "html": request.html}),
     )
     .await?;
-    settle_page(cdp).await
+    settle_page(cdp, &request.scenario).await
 }
 
 pub(super) async fn configure_live_page(
@@ -122,7 +122,30 @@ async fn configure_environment(
     Ok(())
 }
 
-pub(super) async fn settle_page(cdp: &mut CdpClient) -> Result<(), CaptureError> {
+pub(super) async fn settle_page(
+    cdp: &mut CdpClient,
+    scenario: &ArchitectureVisualScenario,
+) -> Result<(), CaptureError> {
+    let document_base = deterministic_document_base(scenario)?;
+    let document_base = serde_json::to_string(&document_base)
+        .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+    evaluate(
+        cdp,
+        &format!(
+            r#"(() => {{
+              const existing = document.querySelector('base[data-latoile-capture="document-base"]');
+              if (!existing) {{
+                const base = document.createElement('base');
+                base.setAttribute('data-latoile-capture', 'document-base');
+                base.href = {document_base};
+                document.head.prepend(base);
+              }}
+              return true;
+            }})()"#
+        ),
+        false,
+    )
+    .await?;
     evaluate(
         cdp,
         r#"(() => {
@@ -136,6 +159,28 @@ pub(super) async fn settle_page(cdp: &mut CdpClient) -> Result<(), CaptureError>
     )
     .await?;
     Ok(())
+}
+
+fn deterministic_document_base(
+    scenario: &ArchitectureVisualScenario,
+) -> Result<String, CaptureError> {
+    let origin = reqwest::Url::parse("http://latoile.invalid/")
+        .map_err(|_| CaptureError::UnsafeInput)?;
+    let mut target = origin
+        .join(&scenario.route)
+        .map_err(|_| CaptureError::UnsafeInput)?;
+    if target.scheme() != origin.scheme()
+        || target.host_str() != origin.host_str()
+        || target.port() != origin.port()
+    {
+        return Err(CaptureError::UnsafeInput);
+    }
+    target
+        .query_pairs_mut()
+        .append_pair("__latoile_fixture", &scenario.fixture)
+        .append_pair("__latoile_locale", &scenario.locale)
+        .append_pair("__latoile_theme", &scenario.theme);
+    Ok(target.into())
 }
 
 fn live_url(request: &VisualComparisonCaptureRequest) -> Result<(String, String), CaptureError> {
@@ -408,6 +453,25 @@ mod tests {
         })
     }
 
+    fn scenario(route: &str) -> ArchitectureVisualScenario {
+        ArchitectureVisualScenario {
+            comparison_id: "home-default".into(),
+            screen: "home".into(),
+            state: "default".into(),
+            locale: "fr-FR".into(),
+            theme: "light".into(),
+            route: route.into(),
+            fixture: "synthetic-default".into(),
+            readiness_selector: "main".into(),
+            stable_selectors: vec!["main".into()],
+            allowed_masks: Vec::new(),
+            viewport_width: 390,
+            viewport_height: 844,
+            device_scale_factor_milli: 1000,
+            mockup: "mockups/home.html".into(),
+        }
+    }
+
     #[test]
     fn the_root_transport_url_is_not_accessibility_content() {
         let baseline = canonical_accessibility_node(&ax_node("RootWebArea", "about:blank"));
@@ -427,5 +491,14 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(first["properties"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_document_base_is_deterministic_and_cannot_escape_its_synthetic_origin() {
+        assert_eq!(
+            deterministic_document_base(&scenario("/welcome")).unwrap(),
+            "http://latoile.invalid/welcome?__latoile_fixture=synthetic-default&__latoile_locale=fr-FR&__latoile_theme=light"
+        );
+        assert!(deterministic_document_base(&scenario("//example.com/escape")).is_err());
     }
 }

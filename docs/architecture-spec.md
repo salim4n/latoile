@@ -107,8 +107,11 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     successful evidence is immutable. Approval and dispatch require one ready
     baseline matching every scenario and the exact spec manifest/commit.
     Accessibility canonicalization excludes only the root document transport
-    URL (`about:blank` versus the supervised loopback URL); link destinations
-    and every other semantic AX property remain compared.
+    URL (`about:blank` versus the supervised loopback URL). Capture V3 installs
+    one deterministic synthetic document base in both contexts so relative
+    links resolve identically; changed link destinations and every other
+    semantic AX property remain compared. Older protocol baselines fail with an
+    environment mismatch and require a new approved version.
 20. A finished frontend run replays the same route, fixture, locale, theme,
     viewport, readiness, selector and approved-mask contract. The fresh browser
     runs only after a ready preview has transitioned to `stale` and its dev
