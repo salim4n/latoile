@@ -12,14 +12,56 @@ use crate::state::AppState;
 use latoile_agents::RunState;
 use latoile_app::supervision::{self, Observed};
 use latoile_app::use_cases::EnsurePreview;
+use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::RunId;
-use latoile_core::ports::{ProjectStore, RunStore, SpecStore, TaskStore};
-use latoile_core::Run;
+use latoile_core::ports::{EventLog, PreviewStore, ProjectStore, RunStore, SpecStore, TaskStore};
+use latoile_core::{PreviewStatus, Run};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 pub const DEFAULT_POLL: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoverySummary {
+    pub runs: usize,
+    pub blocked_permissions: usize,
+    pub previews: usize,
+}
+
+/// Reconcile process-backed rows before the HTTP listener can become ready.
+/// A fresh process owns no previous ACP connection or preview registry, so
+/// every active row is lost. Domain transitions make the next action clear:
+/// executor tasks return to `ready`, lost Reviewer runs produce a bounded
+/// changes-requested decision, pending permissions are rejected, and preview
+/// rows become `error` with no pid.
+pub async fn recover_startup(
+    state: &AppState,
+) -> Result<RecoverySummary, latoile_app::use_cases::UseCaseError> {
+    let runs = state.store.active_runs().await?;
+    let blocked_permissions = runs
+        .iter()
+        .filter(|run| run.status == latoile_core::RunStatus::Blocked)
+        .count();
+    for run in &runs {
+        supervision::apply(&state.store, &run.id, &Observed::Lost).await?;
+    }
+    let previews = reconcile_previews(state, true).await?;
+    let summary = RecoverySummary {
+        runs: runs.len(),
+        blocked_permissions,
+        previews,
+    };
+    if summary.runs + summary.previews > 0 {
+        tracing::warn!(
+            runs = summary.runs,
+            blocked_permissions = summary.blocked_permissions,
+            previews = summary.previews,
+            "startup recovery reconciled lost process state"
+        );
+    }
+    Ok(summary)
+}
 
 pub fn spawn(state: AppState) -> JoinHandle<()> {
     spawn_every(state, DEFAULT_POLL)
@@ -94,7 +136,46 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
             }
         }
     }
+    reconcile_previews(state, false).await?;
     Ok(())
+}
+
+/// Runtime health reconciliation checks only `ready` previews. A persisted
+/// `stale` row may legitimately be between process recycle and readiness;
+/// startup passes `all_active = true` because a new registry cannot own any
+/// pre-restart process.
+async fn reconcile_previews(
+    state: &AppState,
+    all_active: bool,
+) -> Result<usize, latoile_app::use_cases::UseCaseError> {
+    let previews = state.store.active_previews().await?;
+    let mut reconciled = 0;
+    for mut preview in previews {
+        if !all_active && preview.status != PreviewStatus::Ready {
+            continue;
+        }
+        if state.previews.is_alive(&preview.id).await {
+            continue;
+        }
+        preview.fail()?;
+        PreviewStore::save(&state.store, &preview).await?;
+        EventLog::append(
+            &state.store,
+            &NewEvent {
+                project_id: preview.project_id.clone(),
+                kind: EventKind::PreviewError,
+                payload: serde_json::json!({
+                    "preview_id": preview.id.as_str(),
+                    "reason": if all_active { "server_restart" } else { "process_exited" },
+                    "next_action": "restart_preview",
+                })
+                .to_string(),
+            },
+        )
+        .await?;
+        reconciled += 1;
+    }
+    Ok(reconciled)
 }
 
 async fn review_context(

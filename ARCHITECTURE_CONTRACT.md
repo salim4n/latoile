@@ -95,3 +95,18 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - The real-provider V1 canary is opt-in and excluded from default suites. A
   completion claim needs bounded canary evidence: run ids, event cursor,
   local/remote SHA equality and Pull Request URL.
+
+## 9. Recovery and operations
+
+- Startup reconciliation finishes before the HTTP listener opens. Every
+  active pre-restart run becomes lost through the domain state machine;
+  pending permissions close fail-safe and executor tasks become re-dispatchable.
+- A fresh preview registry invalidates every active preview row and clears its
+  PID. Runtime health polling does the same for an owned process that exits.
+  LaToile never signals a PID loaded from SQLite; service-level cgroups reap
+  crash orphans without risking PID reuse.
+- A state backup is a consistent SQLite snapshot plus its matching external
+  root key. Restore validates a disposable copy, verifies all encrypted rows,
+  never overwrites live files and never removes project repositories.
+- `scripts/release-smoke.sh` starts the release binary on disposable state and
+  proves embedded assets, migrations, database health and backup/restore.

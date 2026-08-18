@@ -80,6 +80,20 @@ impl Vault {
         Ok(rows.iter().map(|r| r.get("name")).collect())
     }
 
+    /// Prove that this root key opens every encrypted row without returning
+    /// or logging any value. Backup restore uses this to reject a mismatched
+    /// database/key pair before installing it.
+    pub async fn verify_all(&self) -> Result<usize, VaultError> {
+        let names = self.names().await?;
+        for name in &names {
+            let value = self.get_plain(name).await?;
+            if value.is_none() {
+                return Err(VaultError::NotFound(name.clone()));
+            }
+        }
+        Ok(names.len())
+    }
+
     /// Store a value, replacing whatever was there. The replacement re-seals
     /// under a fresh per-secret key and stamps `rotated_at` — an overwrite IS
     /// a rotation.
@@ -269,5 +283,16 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn verification_checks_the_database_key_pair_without_values() {
+        let root = RootKey::generate();
+        let v = Vault::open_ephemeral(root.clone()).await.unwrap();
+        v.put("github_token", "gho_x").await.unwrap();
+        assert_eq!(v.verify_all().await.unwrap(), 1);
+
+        let wrong = Vault::new(v.pool.clone(), RootKey::generate());
+        assert!(wrong.verify_all().await.is_err());
     }
 }

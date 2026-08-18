@@ -1513,6 +1513,7 @@ name = "latoile-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "latoile-app",
  "latoile-core",
  "latoile-server",
  "latoile-vault",

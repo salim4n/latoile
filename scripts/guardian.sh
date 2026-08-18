@@ -78,5 +78,6 @@ fi
 
 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 python3 -m py_compile scripts/v1_canary.py
+bash -n scripts/release-smoke.sh
 
 echo "guardian: all hermetic boundaries and tests passed"

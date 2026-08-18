@@ -28,6 +28,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D12 | An executor is reviewed by the dedicated Reviewer before the owner sees a review decision | Ask the owner to inspect every executor result directly |
 | D13 | Mutating ACP requests block the run and require an exact, one-shot owner decision; hard denials are never grantable | Trust the agent prompt or auto-allow all workspace tools |
 | D14 | Delivery is an explicit owner action: verify approved SHAs, push without force, verify the remote SHA, then find or create a PR; never merge | Push automatically when a run finishes or merge through the application |
+| D15 | A restart invalidates process-backed rows before HTTP readiness; the service cgroup reaps crash orphans, and backup always pairs SQLite with the external root key | Resume unknown processes, signal persisted PIDs, or back up the database alone |
 
 ## 3. Domain model
 
@@ -376,6 +377,26 @@ pre-existing `design/` contract. It does not erase these current limits:
   screenshot or pixel-diff engine.
 - Delivery publishes the complete clean work branch. It does not select tasks,
   merge, deploy or monitor production.
+
+### 7.2 Operational recovery
+
+`build` opens and migrates SQLite, wires a fresh process registry, then blocks
+on startup reconciliation before it returns the router. Active runs are
+failed as lost through the domain state machines; pending permissions are
+rejected; executor tasks return to `ready`; lost Reviewer runs create a
+bounded changes-requested fallback; active previews become `error` and lose
+their untrusted PID. The periodic driver also reconciles a ready preview whose
+owned process exits.
+
+The supported systemd unit uses `KillMode=control-group`, so ACP and dev-server
+trees cannot outlive a crashed service. LaToile deliberately does not signal a
+PID reloaded from SQLite because operating systems reuse numeric PIDs.
+
+Operational state is backed up as a consistent `VACUUM INTO` snapshot plus
+the matching vault root key. Restore validates and migrates a disposable
+copy, verifies every encrypted row, refuses overwrite, uses an in-progress
+marker and preserves `workspace/`. Release sign-off uses the production
+binary itself; see [operations](operations.md).
 
 ## 8. Out of scope (written down, so it is not re-debated)
 

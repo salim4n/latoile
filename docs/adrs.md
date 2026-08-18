@@ -179,3 +179,85 @@ The initial implementation resolved an executor directory by loading its run, ta
 + Adapter startup has the context it needs without weakening persistence atomicity.
 + The project path remains server-owned and is checked before any process spawn.
 − The agent port carries one extra identifier that is derivable after persistence but necessary before it.
+
+---
+
+# ADR-008 — Invalidate process-backed state before startup readiness
+
+- **Date**: 2026-08-18
+- **Status**: accepted
+
+## Context
+
+Agent connections and preview registries are process-local. After a restart,
+SQLite may still contain `starting`, `running`, `blocked`, `ready` or `stale`
+rows, but the new process cannot own the corresponding callback, child handle
+or permission responder. A persisted numeric PID is not proof of identity;
+the operating system may have reused it.
+
+## Decision
+
+Server assembly performs recovery before returning the HTTP router. Every
+active run is observed as `Lost` and follows the existing domain wind-down:
+pending permissions reject fail-safe, executor tasks requeue, and a lost
+Reviewer produces an owner-visible fallback decision. Every active preview is
+marked `error` and its PID is cleared. The periodic driver performs the same
+preview reconciliation when an owned ready process exits.
+
+LaToile never kills a PID loaded from SQLite. The supported systemd service
+uses `KillMode=control-group` to reap child trees on parent failure; graceful
+shutdown still kills adapter-owned process groups directly.
+
+## Rejected alternatives
+
+- Resume an ACP session from its stored id: the responder and transport are
+  gone, so this would display false progress and leave permissions unanswerable.
+- Signal the stored PID: PID reuse can kill an unrelated process.
+- Reconcile on the first timer tick: health could briefly advertise a state
+  the new process does not own.
+
+## Consequences
+
++ HTTP readiness never races stale active state.
++ Lost work has a deterministic next action and an audit event.
++ Crash orphans are reaped by an identity-safe service cgroup.
+− A running task does not resume across process restart; it must be dispatched again.
+
+---
+
+# ADR-009 — Backup SQLite and the external vault key as one restore unit
+
+- **Date**: 2026-08-18
+- **Status**: accepted
+
+## Context
+
+SQLite is in WAL mode and can be written while a backup runs. Secret rows are
+useless without the root key deliberately stored outside the database. A raw
+file copy can miss WAL pages; a database-only backup can permanently orphan
+credentials; an in-place restore can destroy the last recoverable pair.
+
+## Decision
+
+`latoile backup create` uses SQLite `VACUUM INTO`, checks integrity, opens every
+encrypted row with the current root key, and writes the snapshot, root key and
+versioned manifest into a private directory. `backup restore` refuses to
+overwrite live state. It validates and migrates a disposable copy, verifies
+the database/key pair, builds a standalone install database and uses a
+`.restore-in-progress` marker while installing both files. It never touches
+project checkouts.
+
+## Rejected alternatives
+
+- Copy `latoile.db` directly: unsafe while WAL contains committed pages.
+- Back up the database without `master.key`: encrypted secrets would not be recoverable.
+- Include checkouts in the state archive: repositories have a separate Git
+  durability model and can make the operational backup unbounded.
+- Add an overwrite flag: a typo could destroy the only live database/key pair.
+
+## Consequences
+
++ Backup creation can run against the live SQLite database.
++ Restore failure is non-destructive and wrong-key backups fail validation.
++ Existing repositories survive restore drills unchanged.
+− Unpushed repository work needs delivery to GitHub or a separate workspace snapshot.

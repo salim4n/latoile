@@ -54,6 +54,8 @@ pub enum BuildError {
     Store(#[from] latoile_app::store::StoreError),
     #[error("vault: {0}")]
     Vault(#[from] latoile_vault::VaultError),
+    #[error("startup recovery: {0}")]
+    Recovery(#[from] latoile_app::use_cases::UseCaseError),
 }
 
 /// The agent channel, concrete. `Stub` exists only in tests.
@@ -327,6 +329,7 @@ pub async fn build(
         decision_lock: Arc::new(tokio::sync::Mutex::new(())),
         token: Arc::from(token.as_str()),
     };
+    crate::driver::recover_startup(&state).await?;
     let driver = crate::driver::spawn(state.clone());
     Ok((crate::routes::router(state), token, token_source, driver))
 }

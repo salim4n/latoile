@@ -44,9 +44,9 @@ The full design — decisions D1–D10, the ER model, the API contract, the risk
 
 ## Running
 
-Requirements: Rust 1.85+, Node 22+ with pnpm, the provider CLIs (`claude`
-and/or `codex`), and their ACP adapters on PATH (`claude-agent-acp` and/or
-`codex-acp`).
+Requirements: Rust 1.85+, Node 22+ with pnpm, Git, the provider CLIs (`claude`
+and/or `codex`), and at least one complete ACP pair on PATH
+(`claude` + `claude-agent-acp` or `codex` + `codex-acp`).
 
 ```sh
 cd web && pnpm install && pnpm build   # build the embedded web UI (repeat per change)
@@ -63,6 +63,7 @@ GitHub token through the encrypted vault (interactive input is hidden):
 ```sh
 cargo run -p latoile-cli -- secret set github_token
 cargo run -p latoile-cli -- secret list       # names only, never values
+cargo run -p latoile-cli -- backup create --output /safe/private/latoile-backup
 ```
 
 The web UI is embedded via rust-embed: **release builds bake `web/dist` into the binary; debug builds read it live from disk**, so `pnpm build` + refresh suffices while developing — or `pnpm dev` for the Vite server, which proxies `/api` to port 7700. A placeholder `index.html` committed in `web/dist` keeps a fresh clone compiling before the first web build. Web checks: `pnpm lint`, `pnpm test` (vitest), `pnpm build` (typecheck + bundle).
@@ -70,10 +71,11 @@ The web UI is embedded via rust-embed: **release builds bake `web/dist` into the
 ## Documentation
 
 - [`docs/architecture-spec.md`](docs/architecture-spec.md) — complete architecture specification
-- [`docs/adrs.md`](docs/adrs.md) — the four founding decisions and their rejected alternatives
+- [`docs/adrs.md`](docs/adrs.md) — accepted decisions and their rejected alternatives
 - [`ARCHITECTURE_CONTRACT.md`](ARCHITECTURE_CONTRACT.md) — verifiable rules (layers, secrets, errors, tests)
 - [`docs/guardian-checklist.md`](docs/guardian-checklist.md) — anti-drift checks to run before merging
 - [`docs/v1-canary.md`](docs/v1-canary.md) — opt-in real-provider vertical-slice proof and cleanup
+- [`docs/operations.md`](docs/operations.md) — release smoke, systemd, restart recovery and backup/restore
 
 ## Status
 
@@ -94,6 +96,7 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Review screen with verdict, findings, diff and spec/render comparison
 - [x] Owner-controlled push, remote SHA verification and idempotent Pull Request
 - [x] Opt-in real-provider V1 vertical-slice canary
+- [x] Blocking startup recovery, preview health reconciliation, paired backup/restore and release smoke
 
 Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) also call out the unwired automatic Architect pass, fresh Manager context assembly, project status promotion and screenshot/pixel-diff review.
 

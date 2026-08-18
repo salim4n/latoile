@@ -14,6 +14,7 @@ path = "main.rs"
 latoile-server = { path = "../server" }
 latoile-vault = { path = "../vault" }
 latoile-core = { path = "../core" }
+latoile-app = { path = "../app" }
 # Same idiom as Firetower's CLI: derive + env-backed flags.
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }

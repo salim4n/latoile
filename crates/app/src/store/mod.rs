@@ -32,7 +32,7 @@ pub use task::ProjectTaskRow;
 use latoile_core::error::DomainError;
 use latoile_core::ports::PortError;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -114,6 +114,58 @@ impl Store {
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Cheap readiness proof used by the open health endpoint. Migrations
+    /// have already completed when this can be called, so a failed read means
+    /// the process must not advertise a healthy database.
+    pub async fn health(&self) -> Result<(), StoreError> {
+        let value: i64 = sqlx::query_scalar("SELECT 1").fetch_one(&self.pool).await?;
+        if value != 1 {
+            return Err(StoreError::CorruptRow(
+                "database readiness query returned an unexpected value".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Produce a transactionally consistent, standalone SQLite file while
+    /// the source uses WAL. `VACUUM INTO` never copies a half-checkpointed
+    /// database and refuses to overwrite the destination.
+    pub async fn backup_to(&self, destination: &Path) -> Result<(), StoreError> {
+        if destination.exists() {
+            return Err(StoreError::CorruptRow(format!(
+                "backup destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let destination = destination.to_str().ok_or_else(|| {
+            StoreError::CorruptRow("backup destination is not valid UTF-8".into())
+        })?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(destination)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Full SQLite structural check. Restore runs this on a disposable copy
+    /// before any file is installed into the deployment home.
+    pub async fn integrity_check(&self) -> Result<(), StoreError> {
+        let rows = sqlx::query("PRAGMA integrity_check")
+            .fetch_all(&self.pool)
+            .await?;
+        let findings = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>(0))
+            .collect::<Result<Vec<_>, _>>()?;
+        if findings.as_slice() != ["ok"] {
+            return Err(StoreError::CorruptRow(format!(
+                "SQLite integrity check failed: {}",
+                findings.join("; ")
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Shared fixtures so each aggregate's tests stay focused on its own table.
@@ -189,5 +241,56 @@ pub(crate) mod test_fixtures {
         );
         RunStore::save(&store, &run).await.unwrap();
         (store, run.id)
+    }
+}
+
+#[cfg(test)]
+mod operational_tests {
+    use super::*;
+    use latoile_core::ports::ProjectStore;
+
+    #[tokio::test]
+    async fn vacuum_backup_is_consistent_and_refuses_overwrite() {
+        let root = std::env::temp_dir().join(format!(
+            "latoile-store-backup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source_path = root.join("source.db");
+        let backup_path = root.join("backup.db");
+        let source = Store::open(&source_path).await.unwrap();
+        let project = latoile_core::Project::new(
+            latoile_core::ProjectId::new("p-backup").unwrap(),
+            "Backup",
+            "backup",
+            "owner/backup",
+            "work",
+            "/srv/backup",
+            "npm run dev -- --port $PORT",
+        )
+        .unwrap();
+        ProjectStore::save(&source, &project).await.unwrap();
+
+        source.health().await.unwrap();
+        source.backup_to(&backup_path).await.unwrap();
+        assert!(source.backup_to(&backup_path).await.is_err());
+
+        let restored = Store::open(&backup_path).await.unwrap();
+        restored.integrity_check().await.unwrap();
+        assert_eq!(
+            ProjectStore::get(&restored, &project.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            project
+        );
+
+        drop(restored);
+        drop(source);
+        std::fs::remove_dir_all(root).ok();
     }
 }

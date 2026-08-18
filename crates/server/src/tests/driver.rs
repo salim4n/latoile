@@ -6,12 +6,12 @@ use super::*;
 use crate::driver;
 use latoile_agents::{ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState};
 use latoile_core::event::EventKind;
-use latoile_core::ids::{RunId, SpecVersionId, TaskId};
+use latoile_core::ids::{PreviewId, RunId, SpecVersionId, TaskId};
 use latoile_core::ports::PermissionRequest;
-use latoile_core::ports::{ApprovalStore, RunStore, SpecStore, TaskStore};
+use latoile_core::ports::{ApprovalStore, PreviewStore, RunStore, SpecStore, TaskStore};
 use latoile_core::{
-    Approval, ApprovalId, ApprovalKind, ApprovalStatus, RoleId, Run, RunStatus, SpecVersion, Task,
-    TaskStatus, TriggeredBy,
+    Approval, ApprovalId, ApprovalKind, ApprovalStatus, Preview, RoleId, Run, RunStatus,
+    SpecVersion, Task, TaskStatus, TriggeredBy,
 };
 use std::time::Duration;
 
@@ -186,6 +186,109 @@ async fn a_restart_rejects_an_orphan_permission_and_fails_the_run() {
         .unwrap()
         .contains("server restart"));
     assert!(store.list_pending().await.unwrap().is_empty());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn startup_recovery_closes_all_process_claims_before_serving() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let run_id = seed_running_run(&store, &project, "r-startup").await;
+    let mut run = RunStore::get(&store, &run_id).await.unwrap().unwrap();
+    run.block().unwrap();
+    RunStore::save(&store, &run).await.unwrap();
+    let permission = Approval::new(
+        ApprovalId::new("permission-startup").unwrap(),
+        run_id.clone(),
+        ApprovalKind::Permission,
+        serde_json::json!({
+            "schema_version": 1,
+            "request_id": "startup",
+            "summary": "Modify files inside the project workspace",
+        })
+        .to_string(),
+    );
+    ApprovalStore::save(&store, &permission).await.unwrap();
+
+    let mut preview = Preview::new(
+        PreviewId::new("preview-startup").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        4100,
+        "work",
+    );
+    preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &preview).await.unwrap();
+
+    let recovered = driver::recover_startup(&state).await.unwrap();
+    assert_eq!(recovered.runs, 1);
+    assert_eq!(recovered.blocked_permissions, 1);
+    assert_eq!(recovered.previews, 1);
+    assert_eq!(run_status(&store, &run_id).await, RunStatus::Error);
+    assert_eq!(
+        ApprovalStore::get(&store, &permission.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ApprovalStatus::Rejected
+    );
+    assert!(store.active_previews().await.unwrap().is_empty());
+    assert_eq!(
+        TaskStore::get(&store, &run.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::Ready
+    );
+    assert!(store
+        .events_since(0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|(_, event)| event.kind == EventKind::PreviewError
+            && event.payload.contains("restart_preview")));
+
+    assert_eq!(
+        driver::recover_startup(&state).await.unwrap(),
+        driver::RecoverySummary {
+            runs: 0,
+            blocked_permissions: 0,
+            previews: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn the_health_loop_marks_a_dead_preview_as_error() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let mut preview = Preview::new(
+        PreviewId::new("preview-dead").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        4100,
+        "work",
+    );
+    preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &preview).await.unwrap();
+
+    let handle = driver::spawn_every(state, Duration::from_millis(20));
+    for _ in 0..100 {
+        if store.active_previews().await.unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(store.active_previews().await.unwrap().is_empty());
+    assert!(store
+        .events_since(0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|(_, event)| event.kind == EventKind::PreviewError
+            && event.payload.contains("process_exited")));
     handle.abort();
 }
 

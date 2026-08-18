@@ -5,6 +5,7 @@
 //! `master.key`, the agent workspace. `/api/health` is the only open route;
 //! everything else needs the bearer token printed at startup (D9).
 
+mod backup;
 mod secret;
 
 use clap::{Parser, Subcommand};
@@ -41,6 +42,9 @@ enum Command {
 
     /// Manage vault secrets (the GitHub token lives here).
     Secret(secret::SecretArgs),
+
+    /// Create or restore a paired SQLite + vault-key backup.
+    Backup(backup::BackupArgs),
 }
 
 #[derive(clap::Args, Clone)]
@@ -152,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 secret::secret_list(&home, args.db, &mut stdout).await
             }
         },
+        Some(Command::Backup(args)) => backup::run(&home, args).await,
         None => serve(home, ServeArgs::default()).await,
     }
 }
@@ -173,6 +178,14 @@ fn token() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn serve(home: PathBuf, args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let restore_marker = home.join(backup::RESTORE_MARKER);
+    if restore_marker.exists() {
+        return Err(format!(
+            "restore is incomplete ({} exists); keep the service stopped and finish or inspect the restore before removing the marker",
+            restore_marker.display()
+        )
+        .into());
+    }
     let db = args.db.unwrap_or_else(|| home.join("latoile.db"));
     let config = ServerConfig {
         token: args.token,
@@ -356,5 +369,30 @@ mod tests {
         }
         let cli = Cli::try_parse_from(["latoile", "--home", "/tmp/lt", "secret", "list"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Secret(_))));
+    }
+
+    #[test]
+    fn backup_subcommands_parse() {
+        let create = Cli::try_parse_from([
+            "latoile",
+            "backup",
+            "create",
+            "--output",
+            "/srv/backups/latoile-1",
+        ])
+        .unwrap();
+        assert!(matches!(create.command, Some(Command::Backup(_))));
+
+        let restore = Cli::try_parse_from([
+            "latoile",
+            "--home",
+            "/srv/latoile",
+            "backup",
+            "restore",
+            "--input",
+            "/srv/backups/latoile-1",
+        ])
+        .unwrap();
+        assert!(matches!(restore.command, Some(Command::Backup(_))));
     }
 }

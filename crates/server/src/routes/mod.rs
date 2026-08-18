@@ -17,6 +17,7 @@ mod tasks;
 
 use crate::auth;
 use crate::state::AppState;
+use axum::http::StatusCode;
 use axum::routing::{any, get, patch, post};
 use axum::{middleware, Json, Router};
 
@@ -78,8 +79,25 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok"}))
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.health().await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok", "database": "ok"})),
+        ),
+        Err(error) => {
+            tracing::error!(error = %error, "health database probe failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "status": "unavailable",
+                    "database": "unavailable"
+                })),
+            )
+        }
+    }
 }
 
 /// The fixed team plus each role's skill path (spec §5.3 `/api/roles`).

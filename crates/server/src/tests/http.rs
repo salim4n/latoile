@@ -17,6 +17,9 @@ async fn health_is_open_and_everything_else_needs_the_token() {
         .await
         .unwrap();
     assert_eq!(health.status(), StatusCode::OK);
+    let health = body_json(health).await;
+    assert_eq!(health["status"], "ok");
+    assert_eq!(health["database"], "ok");
 
     let refused = app
         .oneshot(request("GET", "/api/projects", None))
