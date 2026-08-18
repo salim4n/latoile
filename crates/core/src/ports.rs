@@ -107,6 +107,15 @@ pub struct ManagerReply {
     pub actions: Option<String>,
 }
 
+/// A sanitized ACP permission request. Raw tool input deliberately stays in
+/// the agent adapter; the application only receives an opaque request id and
+/// an owner-readable operation class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRequest {
+    pub id: String,
+    pub summary: String,
+}
+
 /// The agent channel. Two lifecycles: the persistent per-project Manager
 /// session, and ephemeral executor runs.
 pub trait AgentChannel {
@@ -114,6 +123,16 @@ pub trait AgentChannel {
     async fn tell_manager(&self, project: &ProjectId, message: &str) -> PortResult<ManagerReply>;
     /// Spawn an executor run. Returns the ACP session handle.
     async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String>;
+    /// Resolve the exact pending ACP permission request. Implementations must
+    /// consume it at most once; a missing/lost request is an error.
+    async fn resolve_permission(
+        &self,
+        _run: &RunId,
+        _request_id: &str,
+        _granted: bool,
+    ) -> PortResult<()> {
+        Err(PortError("permission resolution is not supported".into()))
+    }
     async fn cancel_run(&self, run: &RunId) -> PortResult<()>;
 }
 

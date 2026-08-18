@@ -3,6 +3,7 @@
 use super::*;
 use crate::store::test_fixtures;
 use latoile_core::ids::{RoleId, TaskId};
+use latoile_core::ports::PermissionRequest;
 use latoile_core::{Run, TriggeredBy};
 
 /// A run mid-flight (Running) on the fixture task, which is InProgress.
@@ -20,6 +21,135 @@ async fn store_with_running_run() -> (Store, Run, Task) {
     run.begin().unwrap();
     RunStore::save(&store, &run).await.unwrap();
     (store, run, task)
+}
+
+fn permission() -> PermissionRequest {
+    PermissionRequest {
+        id: "perm-1".into(),
+        summary: "Execute a command inside the project workspace".into(),
+    }
+}
+
+#[tokio::test]
+async fn an_ask_blocks_the_run_and_creates_one_sanitized_inbox_item() {
+    let (store, run, _) = store_with_running_run().await;
+    apply(
+        &store,
+        &run.id,
+        &Observed::PermissionRequested(permission()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        RunStore::get(&store, &run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        RunStatus::Blocked
+    );
+    let pending = ApprovalStore::list_pending(&store).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, ApprovalKind::Permission);
+    let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
+    assert_eq!(payload["request_id"], "perm-1");
+    assert_eq!(
+        payload["summary"],
+        "Execute a command inside the project workspace"
+    );
+    let kinds = store
+        .events_since(0)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, event)| event.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, [EventKind::RunBlocked, EventKind::ApprovalRequested]);
+
+    // Polling the same parked callback is an upsert, not another card/event.
+    apply(
+        &store,
+        &run.id,
+        &Observed::PermissionRequested(permission()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ApprovalStore::list_pending(&store).await.unwrap().len(), 1);
+    assert_eq!(store.events_since(0).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_permission_timeout_refuses_the_card_and_resumes_the_run() {
+    let (store, run, _) = store_with_running_run().await;
+    apply(
+        &store,
+        &run.id,
+        &Observed::PermissionRequested(permission()),
+    )
+    .await
+    .unwrap();
+    apply(&store, &run.id, &Observed::PermissionExpired(permission()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        RunStore::get(&store, &run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        RunStatus::Running
+    );
+    assert!(ApprovalStore::list_pending(&store)
+        .await
+        .unwrap()
+        .is_empty());
+    let decided = ApprovalStore::get(&store, &ApprovalId::new("permission-perm-1").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(decided.status, latoile_core::ApprovalStatus::Rejected);
+    assert_eq!(
+        decided.decision_comment.as_deref(),
+        Some("permission request timed out")
+    );
+}
+
+#[tokio::test]
+async fn cancellation_and_restart_close_pending_permission_cards() {
+    for (observed, expected) in [
+        (Observed::Cancelled, RunStatus::Cancelled),
+        (Observed::Lost, RunStatus::Error),
+    ] {
+        let (store, run, _) = store_with_running_run().await;
+        apply(
+            &store,
+            &run.id,
+            &Observed::PermissionRequested(permission()),
+        )
+        .await
+        .unwrap();
+        apply(&store, &run.id, &observed).await.unwrap();
+
+        assert_eq!(
+            RunStore::get(&store, &run.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            expected
+        );
+        assert!(ApprovalStore::list_pending(&store)
+            .await
+            .unwrap()
+            .is_empty());
+        let decided = ApprovalStore::get(&store, &ApprovalId::new("permission-perm-1").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(decided.status, latoile_core::ApprovalStatus::Rejected);
+    }
 }
 
 #[test]
@@ -60,11 +190,7 @@ fn a_blocked_run_is_resumed_before_it_finishes() {
     task.bind_spec(latoile_core::ids::SpecVersionId::new("s1").unwrap());
     task.start().unwrap();
 
-    let steps = plan(
-        &run,
-        &task,
-        &Observed::finished("done"),
-    );
+    let steps = plan(&run, &task, &Observed::finished("done"));
     // ResumeRun must precede FinishRun or the domain refuses.
     assert_eq!(steps[0], Step::ResumeRun);
     assert_eq!(
@@ -97,32 +223,23 @@ fn a_task_already_past_in_progress_gets_no_second_review() {
     task.start().unwrap();
     task.submit_for_review().unwrap(); // already in review
 
-    let steps = plan(
-        &run,
-        &task,
-        &Observed::finished("s"),
-    );
+    let steps = plan(&run, &task, &Observed::finished("s"));
     assert!(!steps.contains(&Step::SubmitForReview));
     assert!(!steps.contains(&Step::DispatchReviewer));
     assert!(!steps
         .iter()
         .any(|step| matches!(step, Step::RequestReviewApproval { .. })));
-    assert!(steps.iter().any(|s| matches!(
-        s,
-        Step::Journal(EventKind::RunFinished, _)
-    )));
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, Step::Journal(EventKind::RunFinished, _))));
 }
 
 #[tokio::test]
 async fn a_finished_executor_enters_review_without_requesting_human_approval() {
     let (store, run, _) = store_with_running_run().await;
-    let applied = apply(
-        &store,
-        &run.id,
-        &Observed::finished("endpoint implemented"),
-    )
-    .await
-    .unwrap();
+    let applied = apply(&store, &run.id, &Observed::finished("endpoint implemented"))
+        .await
+        .unwrap();
 
     assert!(applied.review_approval.is_none());
     assert!(applied.reviewer_dispatch_requested);
@@ -131,7 +248,10 @@ async fn a_finished_executor_enters_review_without_requesting_human_approval() {
     let task = TaskStore::get(&store, &run.task_id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Review);
 
-    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
+    assert!(ApprovalStore::list_pending(&store)
+        .await
+        .unwrap()
+        .is_empty());
 
     let kinds: Vec<_> = store
         .events_since(0)
@@ -143,13 +263,9 @@ async fn a_finished_executor_enters_review_without_requesting_human_approval() {
     assert_eq!(kinds, [EventKind::RunFinished]);
 
     // A second tick is a no-op.
-    let again = apply(
-        &store,
-        &run.id,
-        &Observed::finished("endpoint implemented"),
-    )
-    .await
-    .unwrap();
+    let again = apply(&store, &run.id, &Observed::finished("endpoint implemented"))
+        .await
+        .unwrap();
     assert_eq!(again.steps, 0);
     assert!(!again.reviewer_dispatch_requested);
 }
@@ -175,14 +291,27 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
     }
 
     let (store, executor, _) = store_with_running_run().await;
-    apply(&store, &executor.id, &Observed::finished("endpoint implemented"))
+    apply(
+        &store,
+        &executor.id,
+        &Observed::finished("endpoint implemented"),
+    )
+    .await
+    .unwrap();
+    assert!(ApprovalStore::list_pending(&store)
         .await
-        .unwrap();
-    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
+        .unwrap()
+        .is_empty());
 
-    let reviewer = start_review(&store, &FakeAgents, &executor.task_id, &executor.id, "context")
-        .await
-        .unwrap();
+    let reviewer = start_review(
+        &store,
+        &FakeAgents,
+        &executor.task_id,
+        &executor.id,
+        "context",
+    )
+    .await
+    .unwrap();
     let output = serde_json::json!({
         "schema_version": 1,
         "verdict": "approve",
@@ -245,7 +374,10 @@ async fn a_failed_reviewer_creates_an_actionable_fallback_approval() {
     assert_eq!(pending.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
     assert_eq!(payload["verdict"], "changes_requested");
-    assert!(payload["summary"].as_str().unwrap().contains("provider unavailable"));
+    assert!(payload["summary"]
+        .as_str()
+        .unwrap()
+        .contains("provider unavailable"));
 }
 
 #[tokio::test]
@@ -267,7 +399,10 @@ async fn a_failed_run_is_journaled_and_the_task_returns_to_ready() {
     let task = TaskStore::get(&store, &run.task_id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Ready);
     assert!(task.spec_version_id.is_some());
-    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
+    assert!(ApprovalStore::list_pending(&store)
+        .await
+        .unwrap()
+        .is_empty());
     let events = store.events_since(0).await.unwrap();
     let kinds: Vec<_> = events.iter().map(|(_, e)| e.kind).collect();
     assert_eq!(kinds, [EventKind::RunFinished, EventKind::TaskReady]);
@@ -290,7 +425,10 @@ async fn a_cancelled_run_is_journaled_without_a_review() {
     apply(&store, &run.id, &Observed::Cancelled).await.unwrap();
     let run = RunStore::get(&store, &run.id).await.unwrap().unwrap();
     assert_eq!(run.status, RunStatus::Cancelled);
-    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
+    assert!(ApprovalStore::list_pending(&store)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -316,17 +454,19 @@ async fn the_reviewer_is_dispatched_on_a_task_in_review() {
     }
 
     let (store, run, _) = store_with_running_run().await;
-    apply(
+    apply(&store, &run.id, &Observed::finished("endpoint implemented"))
+        .await
+        .unwrap();
+
+    let review = start_review(
         &store,
+        &FakeAgents,
+        &run.task_id,
         &run.id,
-        &Observed::finished("endpoint implemented"),
+        "endpoint implemented",
     )
     .await
     .unwrap();
-
-    let review = start_review(&store, &FakeAgents, &run.task_id, &run.id, "endpoint implemented")
-        .await
-        .unwrap();
     assert_eq!(review.role_id.as_str(), "reviewer");
     assert_eq!(review.status, RunStatus::Running);
     // The task itself stays in review — the human decides.
@@ -351,7 +491,11 @@ async fn the_reviewer_is_refused_on_a_task_not_in_review() {
         ) -> Result<latoile_core::ports::ManagerReply, latoile_core::ports::PortError> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, _p: &str) -> Result<String, latoile_core::ports::PortError> {
+        async fn start_run(
+            &self,
+            _r: &Run,
+            _p: &str,
+        ) -> Result<String, latoile_core::ports::PortError> {
             panic!("must never be called")
         }
         async fn cancel_run(&self, _: &RunId) -> Result<(), latoile_core::ports::PortError> {
@@ -361,11 +505,9 @@ async fn the_reviewer_is_refused_on_a_task_not_in_review() {
 
     // Task still in progress: no review run may start on it.
     let (store, run, _) = store_with_running_run().await;
-    assert!(
-        start_review(&store, &NoAgents, &run.task_id, &run.id, "")
-            .await
-            .is_err()
-    );
+    assert!(start_review(&store, &NoAgents, &run.task_id, &run.id, "")
+        .await
+        .is_err());
 }
 
 #[tokio::test]

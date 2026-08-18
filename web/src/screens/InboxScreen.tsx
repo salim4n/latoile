@@ -28,6 +28,7 @@ interface InboxPayload {
   summary?: string;
   verdict?: string;
   command?: string;
+  request_id?: string;
 }
 
 function parsePayload(raw: string): InboxPayload {
@@ -129,7 +130,7 @@ function PermissionCard({
       </div>
       <h3 className="item-title">{title}</h3>
       <p className="item-sub">{contextLine(approval)}</p>
-      <code className="cmd">{payload.command ?? approval.payload}</code>
+      <code className="cmd">{payload.summary ?? payload.command ?? t("inbox.permission.blocked")}</code>
       <div className="item-actions">
         <button
           className="btn btn--primary btn--sm"

@@ -7,8 +7,10 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
-use latoile_app::use_cases::{GrantApproval, RejectApproval};
+use latoile_app::use_cases::{DecidePermission, GrantApproval, RejectApproval};
 use latoile_core::ids::ApprovalId;
+use latoile_core::ports::ApprovalStore;
+use latoile_core::ApprovalKind;
 use serde::Deserialize;
 
 pub async fn pending(State(state): State<AppState>) -> Result<Json<Vec<ApprovalDto>>, ApiError> {
@@ -42,6 +44,21 @@ pub async fn decide(
 ) -> Result<Json<ApprovalDto>, ApiError> {
     let id = ApprovalId::new(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let _decision_guard = state.decision_lock.lock().await;
+    let current = ApprovalStore::get(&state.store, &id)
+        .await?
+        .ok_or(ApiError::not_found("approval"))?;
+    if current.kind == ApprovalKind::Permission {
+        let approval = DecidePermission::new(
+            state.store.clone(),
+            state.store.clone(),
+            state.store.clone(),
+            state.store.clone(),
+            state.agents.clone(),
+        )
+        .execute(&id, body.granted, body.comment)
+        .await?;
+        return Ok(Json(ApprovalDto::from(&approval)));
+    }
     let approval = if body.granted {
         GrantApproval::new(
             state.store.clone(),

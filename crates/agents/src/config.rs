@@ -61,6 +61,9 @@ pub struct AgentTimeouts {
     /// One prompt turn. Coding runs are slow; this is the outer bound, not
     /// the expectation.
     pub prompt: Duration,
+    /// Maximum time an ACP tool call may wait for the owner. Expiry is a
+    /// refusal and is journaled by the supervision loop.
+    pub permission: Duration,
 }
 
 impl Default for AgentTimeouts {
@@ -68,6 +71,7 @@ impl Default for AgentTimeouts {
         Self {
             handshake: Duration::from_secs(30),
             prompt: Duration::from_secs(30 * 60),
+            permission: Duration::from_secs(15 * 60),
         }
     }
 }

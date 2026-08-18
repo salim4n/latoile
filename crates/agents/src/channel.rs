@@ -19,8 +19,9 @@
 
 use crate::config::{AgentCommand, ChannelConfig};
 use crate::error::AgentError;
+use crate::permissions::PermissionBroker;
 use crate::preamble::Preambles;
-use crate::transport::{Connection, Connector};
+use crate::transport::{Connection, Connector, PermissionContext};
 use crate::updates::{AgentUpdate, RunOutcome};
 use latoile_core::ids::{ProjectId, RunId};
 use latoile_core::ports::{AgentChannel, ManagerReply, PortResult};
@@ -127,6 +128,11 @@ fn checked_dir(dir: PathBuf) -> Result<PathBuf, AgentError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
     Running,
+    /// The ACP responder is parked until the exact request is decided.
+    Blocked(latoile_core::ports::PermissionRequest),
+    /// The wait budget elapsed; ACP received a refusal and the application
+    /// must close the persisted approval before normal supervision resumes.
+    PermissionExpired(latoile_core::ports::PermissionRequest),
     Done(RunReport),
     /// Transport or timeout failure; the message is for logs, not clients.
     Failed(String),
@@ -197,6 +203,7 @@ pub struct AcpChannel<C: Connector, D: ProjectDirs, R: RoutingSource> {
     preambles: Preambles,
     managers: Mutex<HashMap<String, ManagerSlot<C::Conn>>>,
     runs: Mutex<HashMap<String, RunEntry>>,
+    permissions: PermissionBroker,
 }
 
 impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
@@ -210,6 +217,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
             preambles,
             managers: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
+            permissions: PermissionBroker::default(),
         }
     }
 
@@ -224,8 +232,24 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
     /// `None` = unknown run.
     pub async fn run_state(&self, run: &RunId) -> Option<RunState> {
         let runs = self.runs.lock().await;
-        runs.get(run.as_str())
-            .map(|e| e.state.lock().expect("run state poisoned").clone())
+        let state = runs
+            .get(run.as_str())
+            .map(|entry| entry.state.lock().expect("run state poisoned").clone())?;
+        if let Some(request) = self.permissions.expired_for_run(run) {
+            return Some(RunState::PermissionExpired(request));
+        }
+        if state == RunState::Running {
+            if let Some(request) = self.permissions.pending_for_run(run) {
+                return Some(RunState::Blocked(request));
+            }
+        }
+        Some(state)
+    }
+
+    /// Remove a timeout marker only after its persisted approval has been
+    /// closed successfully by the supervision driver.
+    pub fn acknowledge_permission_expiry(&self, run: &RunId, request_id: &str) {
+        self.permissions.acknowledge_expiry(run, request_id);
     }
 
     async fn manager_for(&self, project: &ProjectId) -> Result<ManagerSlot<C::Conn>, AgentError> {
@@ -240,7 +264,19 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
             .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
             .and_then(checked_dir)?;
         let command = self.routing.command_for("manager");
-        let mut conn = self.connector.connect(&command, &dir).await?;
+        let mut conn = self
+            .connector
+            .connect(
+                &command,
+                &dir,
+                PermissionContext {
+                    role_id: "manager".into(),
+                    run_id: None,
+                    broker: self.permissions.clone(),
+                    timeout: self.config.timeouts.permission,
+                },
+            )
+            .await?;
         conn.new_session(&dir).await?;
         let entry = Arc::new(Mutex::new(ManagerEntry {
             conn,
@@ -308,7 +344,19 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
             .ok_or_else(|| AgentError::NoWorkspace(format!("run {}", run.id.as_str())))
             .and_then(checked_dir)?;
         let command = self.routing.command_for(run.role_id.as_str());
-        let mut conn = self.connector.connect(&command, &dir).await?;
+        let mut conn = self
+            .connector
+            .connect(
+                &command,
+                &dir,
+                PermissionContext {
+                    role_id: run.role_id.as_str().to_string(),
+                    run_id: Some(run.id.clone()),
+                    broker: self.permissions.clone(),
+                    timeout: self.config.timeouts.permission,
+                },
+            )
+            .await?;
         conn.new_session(&dir).await?;
 
         let preamble = self.preambles.for_role(&run.role_id);
@@ -319,6 +367,8 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
 
         let state = Arc::new(StdMutex::new(RunState::Running));
         let task_state = state.clone();
+        let permission_broker = self.permissions.clone();
+        let permission_run = run.id.clone();
         let task = tokio::spawn(async move {
             let recorded = match tokio::time::timeout(timeout, conn.prompt(&full_prompt)).await {
                 Ok(Ok(turn)) => {
@@ -343,6 +393,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
                 Ok(Err(e)) => RunState::Failed(e.to_string()),
                 Err(_) => RunState::Failed("timed out".into()),
             };
+            permission_broker.finish_run(&permission_run);
             *task_state.lock().expect("run state poisoned") = recorded;
             // `conn` drops here; the agent process dies with it.
         });
@@ -359,6 +410,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
     }
 
     async fn cancel_run(&self, run: &RunId) -> PortResult<()> {
+        self.permissions.cancel_run(run);
         // Unknown run: already gone is the wanted state — fine.
         if let Some(entry) = self.runs.lock().await.remove(run.as_str()) {
             entry.abort.abort(); // the connection — and the process — die
@@ -366,6 +418,17 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
                 RunState::Done(RunReport::terminal(RunOutcome::Cancelled, ""));
         }
         Ok(())
+    }
+
+    async fn resolve_permission(
+        &self,
+        run: &RunId,
+        request_id: &str,
+        granted: bool,
+    ) -> PortResult<()> {
+        self.permissions
+            .resolve(run, request_id, granted)
+            .map_err(latoile_core::ports::PortError)
     }
 }
 
@@ -377,9 +440,7 @@ fn activity_summary(update: &AgentUpdate) -> Option<String> {
         AgentUpdate::ToolCallFinished { .. } => Some("tool call finished".into()),
         AgentUpdate::PermissionRequested { .. } => Some("permission requested".into()),
         AgentUpdate::PlanUpdated => Some("plan updated".into()),
-        AgentUpdate::TextChunk(_)
-        | AgentUpdate::ThoughtChunk(_)
-        | AgentUpdate::Ignored(_) => None,
+        AgentUpdate::TextChunk(_) | AgentUpdate::ThoughtChunk(_) | AgentUpdate::Ignored(_) => None,
     }
 }
 

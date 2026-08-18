@@ -78,7 +78,10 @@ describe("InboxScreen visual contract", () => {
           kind: "permission",
           role_id: "backend",
           task_title: "Backend bloqué",
-          payload: JSON.stringify({ command: "npm install tailwindcss" }),
+          payload: JSON.stringify({
+            request_id: "perm-1",
+            summary: "Exécuter une commande dans le workspace du projet",
+          }),
         } as Partial<Approval> & Pick<Approval, "id" | "kind">),
       ],
       projects: [project],
@@ -90,7 +93,7 @@ describe("InboxScreen visual contract", () => {
     expect(screen.getByText("Review : page de connexion")).toBeTruthy();
     expect(screen.getByText(/LaToile · Frontend · run run-review-1/)).toBeTruthy();
     expect(screen.getByText("Changements demandés")).toBeTruthy();
-    expect(screen.getByText("npm install tailwindcss")).toBeTruthy();
+    expect(screen.getByText("Exécuter une commande dans le workspace du projet")).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Runs bloqués/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "LaToile" })).toBeTruthy();
     expect(screen.getByText("En cours")).toBeTruthy();

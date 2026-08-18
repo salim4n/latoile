@@ -1,37 +1,27 @@
-//! Permission decisions — the answer LaToile gives when an agent asks
-//! "may I?". Pure and total: the agent gets an answer immediately, and the
-//! request is surfaced as an [`AgentUpdate::PermissionRequested`] so the
-//! owner sees what was decided (journaled as `ApprovalRequested`).
+//! Pure, fail-closed ACP permission policy.
 //!
-//! The rules (architecture contract §3):
-//!
-//! - **Reject** anything touching `.env`, anything invoking `docker`, and any
-//!   absolute path outside the workspace.
-//! - **Allow once** everything else — a coding agent that cannot edit the
-//!   project it was spawned on is useless, and "once" (never "always") keeps
-//!   each decision visible.
-//!
-//! A real human-in-the-loop round-trip (park the run, ask the owner, resume)
-//! needs the app layer to orchestrate; until that wiring exists the policy is
-//! deliberately fail-closed on the dangerous patterns rather than blocking
-//! runs on everything.
+//! Hard-denied requests never become owner-grantable. Read-only operations
+//! inside the workspace are allowed once. Commands and mutations become an
+//! explicit human decision for executor roles; the Manager cannot acquire
+//! those execution rights.
 
 use std::path::Path;
 
-/// What the policy concluded about one tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     AllowOnce,
+    Ask,
     Reject,
 }
 
-/// Tokens that are never allowed, wherever they appear.
 const FORBIDDEN_NEEDLES: &[&str] = &[".env", "docker"];
+const MUTATION_HINTS: &[&str] = &[
+    "bash", "command", "create", "delete", "edit", "execute", "move", "patch", "rename", "shell",
+    "terminal", "write",
+];
 
-/// Decide for one tool call. `title` and `raw_input` are what the agent
-/// declared about the call; `workspace` is the only absolute path prefix a
-/// call may touch.
 pub fn decide(
+    role_id: &str,
     title: Option<&str>,
     raw_input: Option<&serde_json::Value>,
     workspace: &Path,
@@ -42,22 +32,57 @@ pub fn decide(
     }
     let lowered = haystack.to_lowercase();
 
-    if FORBIDDEN_NEEDLES.iter().any(|n| lowered.contains(n)) {
+    if FORBIDDEN_NEEDLES
+        .iter()
+        .any(|needle| lowered.contains(needle))
+        || contains_workspace_escape(&haystack, workspace)
+    {
         return Decision::Reject;
     }
 
-    // An absolute path outside the workspace is an escape attempt. JSON
-    // stringification leaves quotes around paths, which is exactly what
-    // split on non-path characters cleans up.
-    let outside = haystack
+    let has_command = raw_input
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|object| object.contains_key("command"));
+    let title_lowered = title.unwrap_or_default().to_lowercase();
+    let mutating = has_command
+        || MUTATION_HINTS
+            .iter()
+            .any(|hint| title_lowered.contains(hint));
+
+    match (role_id, mutating) {
+        ("manager", true) => Decision::Reject,
+        (_, true) => Decision::Ask,
+        _ => Decision::AllowOnce,
+    }
+}
+
+/// Owner-visible text intentionally contains no raw command, path or title:
+/// ACP metadata is agent-controlled and may contain a secret. The operation
+/// class plus task/run context is enough to make a safe V1 decision.
+pub fn sanitized_summary(title: Option<&str>, raw_input: Option<&serde_json::Value>) -> String {
+    let has_command = raw_input
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|object| object.contains_key("command"));
+    if has_command {
+        "Execute a command inside the project workspace".into()
+    } else {
+        let title_lowered = title.unwrap_or_default().to_lowercase();
+        if MUTATION_HINTS
+            .iter()
+            .any(|hint| title_lowered.contains(hint))
+        {
+            "Modify files inside the project workspace".into()
+        } else {
+            "Use a read-only tool inside the project workspace".into()
+        }
+    }
+}
+
+fn contains_workspace_escape(haystack: &str, workspace: &Path) -> bool {
+    haystack
         .split(|c: char| !(c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_' | '~')))
         .filter(|token| token.starts_with('/'))
-        .any(|token| !Path::new(token).starts_with(workspace));
-    if outside {
-        return Decision::Reject;
-    }
-
-    Decision::AllowOnce
+        .any(|token| !Path::new(token).starts_with(workspace))
 }
 
 #[cfg(test)]
@@ -71,46 +96,59 @@ mod tests {
     }
 
     #[test]
-    fn editing_inside_the_workspace_is_allowed_once() {
+    fn read_only_workspace_operations_are_allowed_once() {
         let raw = json!({"file_path": "/srv/latoile/projects/mon-app/src/main.rs"});
         assert_eq!(
-            decide(Some("Edit src/main.rs"), Some(&raw), &ws()),
+            decide("backend", Some("Read src/main.rs"), Some(&raw), &ws()),
             Decision::AllowOnce
+        );
+        assert_eq!(decide("backend", None, None, &ws()), Decision::AllowOnce);
+    }
+
+    #[test]
+    fn commands_and_mutations_ask_the_owner() {
+        let edit = json!({"file_path": "/srv/latoile/projects/mon-app/src/main.rs"});
+        assert_eq!(
+            decide("backend", Some("Edit src/main.rs"), Some(&edit), &ws()),
+            Decision::Ask
+        );
+        let command = json!({"command": "cargo test"});
+        assert_eq!(
+            decide("backend", Some("Bash"), Some(&command), &ws()),
+            Decision::Ask
         );
     }
 
     #[test]
-    fn relative_paths_are_allowed() {
-        let raw = json!({"command": "cargo test"});
-        assert_eq!(decide(None, Some(&raw), &ws()), Decision::AllowOnce);
-        assert_eq!(decide(None, None, &ws()), Decision::AllowOnce);
+    fn the_manager_cannot_obtain_execution_permissions() {
+        let command = json!({"command": "cargo test"});
+        assert_eq!(
+            decide("manager", Some("Bash"), Some(&command), &ws()),
+            Decision::Reject
+        );
     }
 
     #[test]
-    fn dotenv_is_rejected_even_inside_the_workspace() {
-        let raw = json!({"file_path": "/srv/latoile/projects/mon-app/.env"});
-        assert_eq!(decide(Some("Read .env"), Some(&raw), &ws()), Decision::Reject);
-        let lowercase = json!({"file_path": "/srv/latoile/projects/mon-app/.ENV"});
-        assert_eq!(decide(None, Some(&lowercase), &ws()), Decision::Reject);
+    fn hard_denials_never_become_ask_decisions() {
+        for raw in [
+            json!({"file_path": "/srv/latoile/projects/mon-app/.env"}),
+            json!({"command": "docker compose up -d"}),
+            json!({"command": "cat /etc/passwd"}),
+            json!({"file_path": "/srv/latoile/other-project/src/lib.rs"}),
+        ] {
+            assert_eq!(
+                decide("backend", Some("Bash"), Some(&raw), &ws()),
+                Decision::Reject
+            );
+        }
     }
 
     #[test]
-    fn docker_is_rejected() {
-        let raw = json!({"command": "docker compose up -d"});
-        assert_eq!(decide(Some("Bash"), Some(&raw), &ws()), Decision::Reject);
-    }
-
-    #[test]
-    fn absolute_paths_outside_the_workspace_are_rejected() {
-        let raw = json!({"command": "cat /etc/passwd"});
-        assert_eq!(decide(None, Some(&raw), &ws()), Decision::Reject);
-        let raw = json!({"file_path": "/srv/latoile/other-project/src/lib.rs"});
-        assert_eq!(decide(None, Some(&raw), &ws()), Decision::Reject);
-    }
-
-    #[test]
-    fn a_mixed_call_is_judged_by_its_worst_token() {
-        let raw = json!({"command": "cargo build && cp target/app /usr/local/bin/app"});
-        assert_eq!(decide(None, Some(&raw), &ws()), Decision::Reject);
+    fn summaries_do_not_echo_agent_controlled_input() {
+        let raw = json!({"command": "TOKEN=super-secret deploy --password hunter2"});
+        let summary = sanitized_summary(Some("Bash super-secret"), Some(&raw));
+        assert_eq!(summary, "Execute a command inside the project workspace");
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("hunter2"));
     }
 }

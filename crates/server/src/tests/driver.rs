@@ -4,13 +4,15 @@
 
 use super::*;
 use crate::driver;
-use latoile_agents::{
-    ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState,
-};
+use latoile_agents::{ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState};
 use latoile_core::event::EventKind;
 use latoile_core::ids::{RunId, SpecVersionId, TaskId};
+use latoile_core::ports::PermissionRequest;
 use latoile_core::ports::{ApprovalStore, RunStore, SpecStore, TaskStore};
-use latoile_core::{RoleId, Run, RunStatus, SpecVersion, Task, TaskStatus, TriggeredBy};
+use latoile_core::{
+    Approval, ApprovalId, ApprovalKind, ApprovalStatus, RoleId, Run, RunStatus, SpecVersion, Task,
+    TaskStatus, TriggeredBy,
+};
 use std::time::Duration;
 
 /// A running run on an in-progress task, straight into the store.
@@ -66,6 +68,127 @@ async fn wait_terminal(store: &Store, run: &RunId) -> RunStatus {
     panic!("run never left an active status");
 }
 
+async fn wait_blocked_with_approval(store: &Store, run: &RunId) -> Approval {
+    for _ in 0..100 {
+        if run_status(store, run).await == RunStatus::Blocked {
+            if let Some(approval) = store.list_pending().await.unwrap().into_iter().next() {
+                return approval;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("permission request never reached the Inbox");
+}
+
+#[tokio::test]
+async fn permission_decisions_block_and_resume_the_exact_http_request_once() {
+    for granted in [true, false] {
+        let (state, store, agents) = state().await;
+        let app = router(state.clone());
+        let project = create_project(&app).await;
+        let run = seed_running_run(&store, &project, "r-permission").await;
+        let request_id = "perm-http";
+        agents
+            .live_permissions
+            .lock()
+            .unwrap()
+            .insert(run.as_str().to_string(), request_id.into());
+        agents.run_states.lock().unwrap().insert(
+            run.as_str().to_string(),
+            RunState::Blocked(PermissionRequest {
+                id: request_id.into(),
+                summary: "Execute a command inside the project workspace".into(),
+            }),
+        );
+
+        let handle = driver::spawn_every(state, Duration::from_millis(20));
+        let approval = wait_blocked_with_approval(&store, &run).await;
+        assert_eq!(approval.kind, ApprovalKind::Permission);
+        let payload: serde_json::Value = serde_json::from_str(&approval.payload).unwrap();
+        assert_eq!(payload["request_id"], request_id);
+        assert_eq!(
+            payload["summary"],
+            "Execute a command inside the project workspace"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(authed(request(
+                "POST",
+                &format!("/api/approvals/{}", approval.id.as_str()),
+                Some(serde_json::json!({
+                    "granted": granted,
+                    "comment": if granted { "Autorisé une fois" } else { "Refusé" },
+                })),
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let decided = body_json(response).await;
+        assert_eq!(
+            decided["status"],
+            if granted { "granted" } else { "rejected" }
+        );
+        assert_eq!(run_status(&store, &run).await, RunStatus::Running);
+        assert_eq!(
+            agents.permission_decisions.lock().unwrap().as_slice(),
+            [(run.as_str().to_string(), request_id.into(), granted)]
+        );
+
+        let retry = app
+            .clone()
+            .oneshot(authed(request(
+                "POST",
+                &format!("/api/approvals/{}", approval.id.as_str()),
+                Some(serde_json::json!({"granted": granted})),
+            )))
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(agents.permission_decisions.lock().unwrap().len(), 1);
+        handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_restart_rejects_an_orphan_permission_and_fails_the_run() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let run_id = seed_running_run(&store, &project, "r-orphan").await;
+    let mut run = RunStore::get(&store, &run_id).await.unwrap().unwrap();
+    run.block().unwrap();
+    RunStore::save(&store, &run).await.unwrap();
+    let approval = Approval::new(
+        ApprovalId::new("permission-orphan").unwrap(),
+        run_id.clone(),
+        ApprovalKind::Permission,
+        serde_json::json!({
+            "schema_version": 1,
+            "request_id": "orphan",
+            "summary": "Modify files inside the project workspace",
+        })
+        .to_string(),
+    );
+    ApprovalStore::save(&store, &approval).await.unwrap();
+    // No channel state or live responder simulates the fresh server process.
+
+    let handle = driver::spawn_every(state, Duration::from_millis(20));
+    assert_eq!(wait_terminal(&store, &run_id).await, RunStatus::Error);
+    let closed = ApprovalStore::get(&store, &approval.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.status, ApprovalStatus::Rejected);
+    assert!(closed
+        .decision_comment
+        .as_deref()
+        .unwrap()
+        .contains("server restart"));
+    assert!(store.list_pending().await.unwrap().is_empty());
+    handle.abort();
+}
+
 #[tokio::test]
 async fn a_finished_run_drives_review_and_journals() {
     let (state, store, agents) = state().await;
@@ -75,29 +198,25 @@ async fn a_finished_run_drives_review_and_journals() {
 
     let handle = driver::spawn_every(state, Duration::from_millis(30));
     // The "agent" completes its turn.
-    agents
-        .run_states
-        .lock()
-        .unwrap()
-        .insert(
-            "r-fin".into(),
-            RunState::Done(RunReport {
-                outcome: RunOutcome::Finished,
-                summary: "endpoint implemented".into(),
-                activity: vec!["finished: cargo test".into()],
-                base_sha: Some("1111111".into()),
-                head_sha: Some("2222222".into()),
-                commits: vec![CommitEvidence {
-                    sha: "2222222".into(),
-                    subject: "feat: implement endpoint".into(),
-                }],
-                changed_files: vec![ChangedFileEvidence {
-                    status: "M".into(),
-                    path: "src/endpoint.rs".into(),
-                }],
-                diff_stat: "1 file changed, 12 insertions(+)".into(),
-            }),
-        );
+    agents.run_states.lock().unwrap().insert(
+        "r-fin".into(),
+        RunState::Done(RunReport {
+            outcome: RunOutcome::Finished,
+            summary: "endpoint implemented".into(),
+            activity: vec!["finished: cargo test".into()],
+            base_sha: Some("1111111".into()),
+            head_sha: Some("2222222".into()),
+            commits: vec![CommitEvidence {
+                sha: "2222222".into(),
+                subject: "feat: implement endpoint".into(),
+            }],
+            changed_files: vec![ChangedFileEvidence {
+                status: "M".into(),
+                path: "src/endpoint.rs".into(),
+            }],
+            diff_stat: "1 file changed, 12 insertions(+)".into(),
+        }),
+    );
 
     assert_eq!(wait_terminal(&store, &run).await, RunStatus::Finished);
     let stored_run = RunStore::get(&store, &run).await.unwrap().unwrap();
@@ -172,7 +291,10 @@ async fn a_finished_run_drives_review_and_journals() {
         reviewer.id.as_str().into(),
         RunState::Done(RunReport::terminal(RunOutcome::Finished, reviewer_result)),
     );
-    assert_eq!(wait_terminal(&store, &reviewer.id).await, RunStatus::Finished);
+    assert_eq!(
+        wait_terminal(&store, &reviewer.id).await,
+        RunStatus::Finished
+    );
 
     let pending = store.list_pending().await.unwrap();
     assert_eq!(pending.len(), 1);

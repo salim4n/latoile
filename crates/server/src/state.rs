@@ -78,6 +78,18 @@ impl AgentChannel for AgentSlot {
             Self::Stub(stub) => stub.start_run(run, prompt).await,
         }
     }
+    async fn resolve_permission(
+        &self,
+        run: &RunId,
+        request_id: &str,
+        granted: bool,
+    ) -> PortResult<()> {
+        match self {
+            Self::Real(channel) => channel.resolve_permission(run, request_id, granted).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.resolve_permission(run, request_id, granted).await,
+        }
+    }
     async fn cancel_run(&self, run: &RunId) -> PortResult<()> {
         match self {
             Self::Real(channel) => channel.cancel_run(run).await,
@@ -149,6 +161,25 @@ impl AgentSlot {
             Self::Real(channel) => channel.run_state(run).await,
             #[cfg(test)]
             Self::Stub(stub) => stub.run_states.lock().unwrap().get(run.as_str()).cloned(),
+        }
+    }
+
+    pub fn acknowledge_permission_expiry(&self, run: &RunId, request_id: &str) {
+        match self {
+            Self::Real(channel) => channel.acknowledge_permission_expiry(run, request_id),
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                if matches!(
+                    stub.run_states.lock().unwrap().get(run.as_str()),
+                    Some(latoile_agents::RunState::PermissionExpired(request))
+                        if request.id == request_id
+                ) {
+                    stub.run_states
+                        .lock()
+                        .unwrap()
+                        .insert(run.as_str().to_string(), latoile_agents::RunState::Running);
+                }
+            }
         }
     }
 }

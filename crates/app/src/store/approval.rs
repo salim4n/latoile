@@ -39,8 +39,7 @@ fn row_to_approval(row: &SqliteRow) -> Result<Approval, StoreError> {
     })
 }
 
-const COLUMNS: &str =
-    "id, run_id, kind, status, payload, decision_comment, corrective_run_id";
+const COLUMNS: &str = "id, run_id, kind, status, payload, decision_comment, corrective_run_id";
 
 /// Query-side projection for the owner Inbox. Audit/context columns stay out
 /// of the domain entity, while the UI receives enough real data to explain a
@@ -56,6 +55,22 @@ pub struct InboxApprovalRow {
 }
 
 impl Store {
+    pub async fn pending_permissions_for_run(&self, run_id: &RunId) -> PortResult<Vec<Approval>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM approval
+             WHERE run_id = ? AND kind = 'permission' AND status = 'pending'
+             ORDER BY created_at, id"
+        ))
+        .bind(run_id.as_str())
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(row_to_approval)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub async fn list_pending_for_inbox(&self) -> PortResult<Vec<InboxApprovalRow>> {
         let rows = sqlx::query(
             "SELECT a.id, a.run_id, a.kind, a.status, a.payload,
@@ -91,10 +106,7 @@ impl Store {
 
     /// One approval with its project/task context, including terminal
     /// decisions. The Review screen uses it as an audit view after reload.
-    pub async fn approval_detail(
-        &self,
-        id: &ApprovalId,
-    ) -> PortResult<Option<InboxApprovalRow>> {
+    pub async fn approval_detail(&self, id: &ApprovalId) -> PortResult<Option<InboxApprovalRow>> {
         let row = sqlx::query(
             "SELECT a.id, a.run_id, a.kind, a.status, a.payload,
                     a.decision_comment, a.corrective_run_id,
@@ -226,7 +238,8 @@ mod tests {
         let mut a = approval("a1", run.as_str(), ApprovalKind::Review);
         s.save(&a).await.unwrap();
 
-        a.reject_with_comment(Some("Corriger le focus".into())).unwrap();
+        a.reject_with_comment(Some("Corriger le focus".into()))
+            .unwrap();
         s.save(&a).await.unwrap();
         assert!(s.list_pending().await.unwrap().is_empty());
         let back = ApprovalStore::get(&s, &a.id).await.unwrap().unwrap();

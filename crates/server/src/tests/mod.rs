@@ -28,6 +28,9 @@ pub struct StubAgents {
     pub run_states: Arc<Mutex<std::collections::HashMap<String, latoile_agents::RunState>>>,
     /// Role and prompt for every spawned run, used to prove review context.
     pub run_prompts: Arc<Mutex<Vec<(String, String)>>>,
+    /// Live permission request ids keyed by run, plus forwarded decisions.
+    pub live_permissions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pub permission_decisions: Arc<Mutex<Vec<(String, String, bool)>>>,
 }
 
 impl Default for StubAgents {
@@ -37,6 +40,8 @@ impl Default for StubAgents {
             manager_reply: Arc::new(Mutex::new("Bien reçu, je m'en occupe.".into())),
             run_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
             run_prompts: Arc::new(Mutex::new(Vec::new())),
+            live_permissions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            permission_decisions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -66,6 +71,30 @@ impl AgentChannel for StubAgents {
         Ok("acp-stub".into())
     }
     async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
+        Ok(())
+    }
+    async fn resolve_permission(
+        &self,
+        run: &RunId,
+        request_id: &str,
+        granted: bool,
+    ) -> PortResult<()> {
+        let mut pending = self.live_permissions.lock().unwrap();
+        if pending.get(run.as_str()).map(String::as_str) != Some(request_id) {
+            return Err(latoile_core::ports::PortError(
+                "pending ACP permission request was not found".into(),
+            ));
+        }
+        pending.remove(run.as_str());
+        self.permission_decisions.lock().unwrap().push((
+            run.as_str().to_string(),
+            request_id.to_string(),
+            granted,
+        ));
+        self.run_states
+            .lock()
+            .unwrap()
+            .insert(run.as_str().to_string(), latoile_agents::RunState::Running);
         Ok(())
     }
 }

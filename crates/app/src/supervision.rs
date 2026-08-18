@@ -8,11 +8,12 @@
 //! its task to `review` and the reviewer is dispatched ([`start_review`],
 //! §5.2).
 
+use crate::review_result::{review_failure_payload, review_payload};
 use crate::store::Store;
 use crate::use_cases::UseCaseError;
-use crate::review_result::{review_failure_payload, review_payload};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RoleId, RunId, TaskId};
+use latoile_core::ports::PermissionRequest;
 use latoile_core::ports::{AgentChannel, ApprovalStore, EventLog, RunStore, TaskStore};
 use latoile_core::{Approval, ApprovalKind, Run, RunStatus, Task, TaskStatus, TriggeredBy};
 
@@ -21,6 +22,8 @@ use latoile_core::{Approval, ApprovalKind, Run, RunStatus, Task, TaskStatus, Tri
 pub enum Observed {
     /// Still going — nothing to do.
     Running,
+    PermissionRequested(PermissionRequest),
+    PermissionExpired(PermissionRequest),
     Finished {
         summary: String,
         base_sha: Option<String>,
@@ -28,7 +31,9 @@ pub enum Observed {
         artifacts: String,
     },
     Cancelled,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     /// Active in the store but unknown to the channel: the process died
     /// with a server restart. Treated as failed.
     Lost,
@@ -51,6 +56,7 @@ impl Observed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     BeginRun,
+    BlockRun,
     ResumeRun,
     FinishRun {
         summary: String,
@@ -64,7 +70,19 @@ pub enum Step {
     /// Tell the server driver to start the Reviewer after preview refresh.
     DispatchReviewer,
     /// Create the human approval from a terminal Reviewer result.
-    RequestReviewApproval { payload: String },
+    RequestReviewApproval {
+        payload: String,
+    },
+    RequestPermissionApproval {
+        request: PermissionRequest,
+    },
+    RejectPermissionApproval {
+        request: PermissionRequest,
+        reason: String,
+    },
+    RejectPendingPermissions {
+        reason: String,
+    },
     /// The run died: the task goes back to the board (`Task::fail_run`).
     RequeueTask,
     Journal(EventKind, String),
@@ -115,7 +133,94 @@ enum Terminal {
 pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
     let run_payload = format!("{{\"run_id\":\"{}\",\"outcome\":\"", run.id.as_str());
     match observed {
-        Observed::Running => vec![],
+        Observed::Running => {
+            if run.status == RunStatus::Blocked {
+                vec![Step::ResumeRun]
+            } else {
+                vec![]
+            }
+        }
+        Observed::PermissionRequested(request) => {
+            if !run.status.is_active() {
+                return vec![];
+            }
+            let mut steps = Vec::new();
+            if run.status == RunStatus::Starting {
+                steps.push(Step::BeginRun);
+            }
+            if run.status != RunStatus::Blocked {
+                steps.push(Step::BlockRun);
+                steps.push(Step::RequestPermissionApproval {
+                    request: request.clone(),
+                });
+                steps.push(Step::Journal(
+                    EventKind::RunBlocked,
+                    serde_json::json!({
+                        "run_id": run.id.as_str(),
+                        "permission_request_id": request.id,
+                    })
+                    .to_string(),
+                ));
+                steps.push(Step::Journal(
+                    EventKind::ApprovalRequested,
+                    serde_json::json!({
+                        "run_id": run.id.as_str(),
+                        "kind": "permission",
+                        "permission_request_id": request.id,
+                    })
+                    .to_string(),
+                ));
+            } else {
+                steps.push(Step::RequestPermissionApproval {
+                    request: request.clone(),
+                });
+            }
+            steps
+        }
+        Observed::PermissionExpired(request) => {
+            if !run.status.is_active() {
+                return vec![];
+            }
+            let mut steps = Vec::new();
+            if run.status == RunStatus::Starting {
+                steps.push(Step::BeginRun);
+            }
+            if run.status != RunStatus::Blocked {
+                steps.push(Step::BlockRun);
+                steps.push(Step::RequestPermissionApproval {
+                    request: request.clone(),
+                });
+                steps.push(Step::Journal(
+                    EventKind::RunBlocked,
+                    serde_json::json!({
+                        "run_id": run.id.as_str(),
+                        "permission_request_id": request.id,
+                        "expired": true,
+                    })
+                    .to_string(),
+                ));
+                steps.push(Step::Journal(
+                    EventKind::ApprovalRequested,
+                    serde_json::json!({
+                        "run_id": run.id.as_str(),
+                        "kind": "permission",
+                        "permission_request_id": request.id,
+                        "expired": true,
+                    })
+                    .to_string(),
+                ));
+            } else {
+                steps.push(Step::RequestPermissionApproval {
+                    request: request.clone(),
+                });
+            }
+            steps.push(Step::RejectPermissionApproval {
+                request: request.clone(),
+                reason: "permission request timed out".into(),
+            });
+            steps.push(Step::ResumeRun);
+            steps
+        }
         Observed::Finished {
             summary,
             base_sha,
@@ -144,10 +249,7 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
                 });
                 steps.push(Step::Journal(
                     EventKind::ApprovalRequested,
-                    format!(
-                        "{{\"run_id\":\"{}\",\"kind\":\"review\"}}",
-                        run.id.as_str()
-                    ),
+                    format!("{{\"run_id\":\"{}\",\"kind\":\"review\"}}", run.id.as_str()),
                 ));
             } else if task.status == TaskStatus::InProgress {
                 // Executor finished: enter review and dispatch the Reviewer.
@@ -160,6 +262,9 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
         Observed::Cancelled => {
             let mut steps = wind_down(run, Terminal::Cancel);
             if !steps.is_empty() {
+                steps.push(Step::RejectPendingPermissions {
+                    reason: "run cancelled while awaiting permission".into(),
+                });
                 steps.push(Step::Journal(
                     EventKind::RunFinished,
                     format!("{run_payload}cancelled\"}}"),
@@ -177,6 +282,9 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
 fn fail_plan(run: &Run, task: &Task, run_payload: &str, reason: &str) -> Vec<Step> {
     let mut steps = wind_down(run, Terminal::Fail);
     if !steps.is_empty() {
+        steps.push(Step::RejectPendingPermissions {
+            reason: format!("permission session unavailable: {reason}"),
+        });
         steps.push(Step::Journal(
             EventKind::RunFinished,
             format!(
@@ -191,7 +299,8 @@ fn fail_plan(run: &Run, task: &Task, run_payload: &str, reason: &str) -> Vec<Ste
 }
 
 fn finish_failed_review(run: &Run, task: &Task, steps: &mut Vec<Step>, reason: &str) {
-    if !steps.is_empty() && run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review {
+    if !steps.is_empty() && run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review
+    {
         steps.push(Step::RequestReviewApproval {
             payload: review_failure_payload(reason),
         });
@@ -230,7 +339,11 @@ pub struct Applied {
 
 /// Fetch, plan, execute. Idempotent: an already-terminal run plans to
 /// nothing, so a repeated tick is a no-op.
-pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result<Applied, UseCaseError> {
+pub async fn apply(
+    store: &Store,
+    run_id: &RunId,
+    observed: &Observed,
+) -> Result<Applied, UseCaseError> {
     let empty = |project_id| Applied {
         steps: 0,
         review_approval: None,
@@ -257,6 +370,7 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
     for step in steps {
         match step {
             Step::BeginRun => run.begin()?,
+            Step::BlockRun => run.block()?,
             Step::ResumeRun => run.resume()?,
             Step::FinishRun {
                 summary,
@@ -287,6 +401,62 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
                 ApprovalStore::save(store, &approval).await?;
                 review_approval = Some(approval.id);
             }
+            Step::RequestPermissionApproval { request } => {
+                RunStore::save(store, &run).await?;
+                let approval = Approval::new(
+                    permission_approval_id(&request.id)?,
+                    run.id.clone(),
+                    ApprovalKind::Permission,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "request_id": request.id,
+                        "summary": request.summary,
+                    })
+                    .to_string(),
+                );
+                ApprovalStore::save(store, &approval).await?;
+            }
+            Step::RejectPermissionApproval { request, reason } => {
+                let id = permission_approval_id(&request.id)?;
+                if let Some(mut approval) = ApprovalStore::get(store, &id).await? {
+                    if approval.status == latoile_core::ApprovalStatus::Pending {
+                        approval.reject_with_comment(Some(reason.clone()))?;
+                        ApprovalStore::save(store, &approval).await?;
+                        EventLog::append(
+                            store,
+                            &NewEvent {
+                                project_id: task.project_id.clone(),
+                                kind: EventKind::ApprovalRejected,
+                                payload: serde_json::json!({
+                                    "approval_id": approval.id.as_str(),
+                                    "reason": reason,
+                                })
+                                .to_string(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Step::RejectPendingPermissions { reason } => {
+                for mut approval in store.pending_permissions_for_run(&run.id).await? {
+                    approval.reject_with_comment(Some(reason.clone()))?;
+                    ApprovalStore::save(store, &approval).await?;
+                    EventLog::append(
+                        store,
+                        &NewEvent {
+                            project_id: task.project_id.clone(),
+                            kind: EventKind::ApprovalRejected,
+                            payload: serde_json::json!({
+                                "approval_id": approval.id.as_str(),
+                                "reason": reason,
+                            })
+                            .to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
             Step::Journal(kind, payload) => {
                 EventLog::append(
                     store,
@@ -313,6 +483,10 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
 
 fn review_approval_id(run_id: &RunId) -> Result<ApprovalId, UseCaseError> {
     Ok(ApprovalId::new(format!("review-{}", run_id.as_str()))?)
+}
+
+fn permission_approval_id(request_id: &str) -> Result<ApprovalId, UseCaseError> {
+    Ok(ApprovalId::new(format!("permission-{request_id}"))?)
 }
 
 /// Dispatch the reviewer run on a task that just entered review (§5.2).
@@ -409,7 +583,6 @@ pub async fn start_review<A: AgentChannel>(
     .await?;
     Ok(run)
 }
-
 
 #[cfg(test)]
 mod tests;

@@ -78,6 +78,7 @@ impl Connector for FakeConnector {
         &'a self,
         command: &'a AgentCommand,
         workspace: &'a Path,
+        _permissions: PermissionContext,
     ) -> impl std::future::Future<Output = Result<FakeConn, AgentError>> + Send + 'a {
         async move {
             self.commands.lock().unwrap().push(command.program.clone());

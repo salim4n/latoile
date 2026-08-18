@@ -10,6 +10,7 @@
 
 use crate::config::AgentCommand;
 use crate::error::AgentError;
+use crate::permissions::PermissionBroker;
 use crate::updates::{classify, outcome_of, AgentUpdate, RunOutcome};
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind,
@@ -18,6 +19,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, ConnectionTo, Responder};
+use latoile_core::ids::RunId;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -58,7 +60,18 @@ pub trait Connector: Send + Sync {
         &'a self,
         command: &'a AgentCommand,
         workspace: &'a Path,
+        permissions: PermissionContext,
     ) -> impl std::future::Future<Output = Result<Self::Conn, AgentError>> + Send + 'a;
+}
+
+/// Permission identity and rendezvous for one ACP process. Manager sessions
+/// carry no run id and can therefore never enter the human grant path.
+#[derive(Clone)]
+pub struct PermissionContext {
+    pub role_id: String,
+    pub run_id: Option<RunId>,
+    pub broker: PermissionBroker,
+    pub timeout: Duration,
 }
 
 // --- The real thing ---------------------------------------------------------
@@ -92,8 +105,9 @@ impl Connector for ProcessConnector {
         &'a self,
         command: &'a AgentCommand,
         workspace: &'a Path,
+        permissions: PermissionContext,
     ) -> impl std::future::Future<Output = Result<ProcessConnection, AgentError>> + Send + 'a {
-        async move { ProcessConnection::spawn(command, workspace, self.handshake).await }
+        async move { ProcessConnection::spawn(command, workspace, self.handshake, permissions).await }
     }
 }
 
@@ -121,6 +135,7 @@ impl ProcessConnection {
         command: &AgentCommand,
         workspace: &Path,
         handshake: Duration,
+        permissions: PermissionContext,
     ) -> Result<Self, AgentError> {
         let mut config = AcpAgentConfig::new(&command.program).args(command.args.clone());
         for (name, value) in &command.env {
@@ -135,6 +150,7 @@ impl ProcessConnection {
         let notif_tx = updates_tx.clone();
         let perm_tx = updates_tx;
         let perm_workspace = workspace.to_path_buf();
+        let perm_context = permissions;
         let actor_workspace = workspace.to_path_buf();
 
         let actor = tokio::spawn(async move {
@@ -154,7 +170,10 @@ impl ProcessConnection {
                     move |request: RequestPermissionRequest, responder, _conn| {
                         let tx = perm_tx.clone();
                         let workspace = perm_workspace.clone();
-                        async move { answer_permission(request, responder, tx, workspace) }
+                        let context = perm_context.clone();
+                        async move {
+                            answer_permission(request, responder, tx, workspace, context).await
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -184,32 +203,59 @@ impl ProcessConnection {
 
 /// The permission answer: the policy decides, the closest matching option is
 /// selected, and the request is surfaced as an update.
-fn answer_permission(
+async fn answer_permission(
     request: RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
     updates: mpsc::UnboundedSender<AgentUpdate>,
     workspace: PathBuf,
+    context: PermissionContext,
 ) -> Result<(), agent_client_protocol::Error> {
     let title = request.tool_call.fields.title.as_deref();
-    let summary = title.unwrap_or("tool call").to_string();
-    let _ = updates.send(AgentUpdate::PermissionRequested {
-        summary: summary.clone(),
-    });
-
     let decision = crate::policy::decide(
+        &context.role_id,
         title,
         request.tool_call.fields.raw_input.as_ref(),
         &workspace,
     );
     let wanted = match decision {
-        crate::policy::Decision::AllowOnce => PermissionOptionKind::AllowOnce,
-        crate::policy::Decision::Reject => PermissionOptionKind::RejectOnce,
+        crate::policy::Decision::AllowOnce => Some(PermissionOptionKind::AllowOnce),
+        crate::policy::Decision::Reject => Some(PermissionOptionKind::RejectOnce),
+        crate::policy::Decision::Ask => {
+            let Some(run_id) = context.run_id else {
+                return respond_with(&request, responder, PermissionOptionKind::RejectOnce);
+            };
+            let summary = crate::policy::sanitized_summary(
+                title,
+                request.tool_call.fields.raw_input.as_ref(),
+            );
+            let (pending, decision) = context.broker.register(run_id, summary.clone());
+            let _ = updates.send(AgentUpdate::PermissionRequested { summary });
+            match tokio::time::timeout(context.timeout, decision).await {
+                Ok(Ok(true)) => Some(PermissionOptionKind::AllowOnce),
+                Ok(Ok(false)) => Some(PermissionOptionKind::RejectOnce),
+                Ok(Err(_)) => Some(PermissionOptionKind::RejectOnce),
+                Err(_) => {
+                    context.broker.expire(&pending.id);
+                    Some(PermissionOptionKind::RejectOnce)
+                }
+            }
+        }
     };
-    let option = request
-        .options
-        .iter()
-        .find(|o| o.kind == wanted)
-        .or(request.options.first());
+
+    match wanted {
+        Some(kind) => respond_with(&request, responder, kind),
+        None => responder.respond(RequestPermissionResponse::new(
+            RequestPermissionOutcome::Cancelled,
+        )),
+    }
+}
+
+fn respond_with(
+    request: &RequestPermissionRequest,
+    responder: Responder<RequestPermissionResponse>,
+    wanted: PermissionOptionKind,
+) -> Result<(), agent_client_protocol::Error> {
+    let option = request.options.iter().find(|option| option.kind == wanted);
 
     responder.respond(RequestPermissionResponse::new(match option {
         Some(o) => {

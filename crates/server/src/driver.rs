@@ -39,11 +39,23 @@ pub fn spawn_every(state: AppState, interval: Duration) -> JoinHandle<()> {
 async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseError> {
     let runs = state.store.active_runs().await?;
     for run in runs {
-        let observed = observe(state, &run.id).await;
-        if observed == Observed::Running {
-            continue;
+        // The owner decision route uses the same tiny critical section. It
+        // prevents a polling tick based on a stale permission snapshot from
+        // writing `blocked` back after the HTTP decision resumed the run.
+        let (observed, applied) = {
+            let _decision_guard = state.decision_lock.lock().await;
+            let observed = observe(state, &run.id).await;
+            if observed == Observed::Running {
+                continue;
+            }
+            let applied = supervision::apply(&state.store, &run.id, &observed).await?;
+            (observed, applied)
+        };
+        if let Observed::PermissionExpired(request) = &observed {
+            state
+                .agents
+                .acknowledge_permission_expiry(&run.id, &request.id);
         }
-        let applied = supervision::apply(&state.store, &run.id, &observed).await?;
 
         if let Some(project) = applied.project_id.clone() {
             if applied.reviewer_dispatch_requested {
@@ -155,7 +167,11 @@ fn design_evidence(local_path: &str, design_dir: &str) -> (String, String) {
     let mut excerpts = String::new();
     let mut visuals = Vec::new();
     for path in files.into_iter().take(40) {
-        let relative = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
             "md" | "txt" | "json" | "yaml" | "yml" if excerpts.len() < 16 * 1024 => {
                 if let Ok(content) = std::fs::read_to_string(&path) {
@@ -239,6 +255,8 @@ async fn observe(state: &AppState, run: &RunId) -> Observed {
         // The channel knows no such run: its process died with a restart.
         None => Observed::Lost,
         Some(RunState::Running) => Observed::Running,
+        Some(RunState::Blocked(request)) => Observed::PermissionRequested(request),
+        Some(RunState::PermissionExpired(request)) => Observed::PermissionExpired(request),
         Some(RunState::Done(report)) => match report.outcome {
             latoile_agents::RunOutcome::Finished => {
                 let artifacts = serde_json::to_string(&report).unwrap_or_else(|e| {
@@ -277,8 +295,7 @@ mod context_tests {
         .unwrap();
         std::fs::write(design.join("login.png"), b"not-a-real-image").unwrap();
 
-        let (excerpts, visuals) =
-            design_evidence(checkout.path().to_str().unwrap(), "design");
+        let (excerpts, visuals) = design_evidence(checkout.path().to_str().unwrap(), "design");
         assert!(excerpts.contains("Le bouton primaire"));
         assert!(excerpts.contains("design/spec.md"));
         assert!(visuals.contains("design/login.png"));

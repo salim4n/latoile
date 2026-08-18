@@ -22,6 +22,7 @@ mod auth;
 mod channel;
 mod config;
 mod error;
+mod permissions;
 mod policy;
 mod preamble;
 mod transport;
@@ -37,10 +38,11 @@ pub use channel::{
 };
 pub use config::{AgentCommand, AgentTimeouts, ChannelConfig};
 pub use error::AgentError;
+pub use permissions::PermissionBroker;
 pub use updates::{AgentUpdate, RunOutcome};
 
 pub use updates::{classify, outcome_event, outcome_of, update_event};
 
 /// The production connector: spawns real agent processes. Everything else in
 /// the crate is testable without one.
-pub use transport::{Connection, Connector, ProcessConnector, TurnResult};
+pub use transport::{Connection, Connector, PermissionContext, ProcessConnector, TurnResult};
