@@ -695,3 +695,53 @@ requires a new discovery attempt.
 + One stochastic premature completion recovers without losing session context.
 + Repeated noncompliance remains explicit and fail-closed.
 − A guarded discovery may spend one additional provider turn.
+
+---
+
+# ADR-019 — Repair one invalid post-answer Architect contract
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The first-turn guard solved premature completion, but a later greenfield
+canary failed after five valid owner decisions. The real Architect returned a
+syntactically readable contract whose `kind` and `phase` contradicted each
+other. The owner answers and pinned skill provenance were intact; terminating
+the whole discovery on one machine-protocol error was safe but unnecessarily
+brittle.
+
+## Decision
+
+After a durable owner answer, LaToile validates the provider turn against both
+the wire schema and a cloned domain session. If parsing or the phase transition
+is invalid, it sends exactly one protocol-repair prompt through a dedicated
+port in the same ACP session. The prompt carries the current persisted phase
+and the allowed current-or-later question phases, but no new owner answer. It
+requires the Architect to preserve the underlying question or readiness
+decision and return only a corrected contract.
+
+The repaired reply must retain the ACP session id, skill name, skill digest and
+operating mode. LaToile parses and applies it again from the unchanged domain
+state. A lost session, changed provenance, adapter failure or second invalid
+contract marks discovery failed with a bounded reason. There is no silent
+normalization and no unbounded retry.
+
+## Rejected alternatives
+
+- Infer `phase` from `kind`: accepts model output the server did not actually
+  receive and can hide a regressing question.
+- Restart discovery: discards valid owner decisions and breaks session
+  provenance for a recoverable serialization defect.
+- Replay the last owner answer: duplicates user input and may change the
+  Architect's decision instead of repairing its representation.
+- Retry until valid: hides systematic provider noncompliance and creates an
+  unbounded paid loop.
+
+## Consequences
+
++ One stochastic wire/domain mismatch no longer destroys valid discovery.
++ Owner input, skill identity and ACP context remain auditable and unchanged.
++ Regressing phases and malformed repairs still fail closed.
+− A repaired discovery may spend one additional provider turn.

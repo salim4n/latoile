@@ -121,6 +121,25 @@ impl AgentChannel for AgentSlot {
             Self::Stub(stub) => stub.retry_architecture_question(project, session).await,
         }
     }
+    async fn retry_architecture_contract(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        current_phase: latoile_core::ArchitecturePhase,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .retry_architecture_contract(project, session, current_phase)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.retry_architecture_contract(project, session, current_phase)
+                    .await
+            }
+        }
+    }
     async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
         match self {
             Self::Real(channel) => channel.cancel_architecture(session).await,

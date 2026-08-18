@@ -279,6 +279,29 @@ impl AgentChannel for StubAgents {
             operating_mode: ArchitectureOperatingMode::Greenfield,
         })
     }
+    async fn retry_architecture_contract(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+        current_phase: latoile_core::ArchitecturePhase,
+    ) -> PortResult<ArchitectReply> {
+        self.architecture_messages
+            .lock()
+            .unwrap()
+            .push(format!("guard:contract-repair:{}", current_phase.as_str()));
+        Ok(ArchitectReply {
+            content: self
+                .architecture_replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| "missing scripted Architect repair reply".into()),
+            acp_session_id: format!("acp-architecture:{}", session.as_str()),
+            skill_name: ARCHITECT_SKILL_NAME.into(),
+            skill_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            operating_mode: ArchitectureOperatingMode::Greenfield,
+        })
+    }
     async fn generate_architecture_package(
         &self,
         _project: &ProjectId,

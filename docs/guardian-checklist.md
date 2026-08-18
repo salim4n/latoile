@@ -41,6 +41,7 @@ run the paid, stateful real-provider canary.
 | 27 | Corrective capture cannot reuse an old preview process | App and driver tests prove frontend completion emits `PreviewStale`, recycles the supervised process before capture and does so idempotently; the real-provider canary must prove `blocking → passed` |
 | 28 | Transport metadata cannot create a false visual reservation | Unit tests preserve semantic link URLs while excluding only the AX root transport URL; installed-Chromium tests prove exact HTTP bytes with relative links pass, changed link destinations reserve, and the deliberate 16 px regression still blocks under capture V3 |
 | 29 | Architect cannot skip the first owner challenge | Agent prompt tests require a first-turn question; HTTP flow tests prove one premature `ready_to_draft` is recentered in the same session and a second attempt fails closed |
+| 30 | Architect protocol drift cannot destroy a valid discovery silently | Agent and HTTP tests prove one post-answer contract repair stays in the same session with no owner input, enforces current-or-later phases, and fails closed on a second invalid turn |
 
 ## Anti-drift rules
 

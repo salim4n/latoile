@@ -374,6 +374,132 @@ async fn an_architect_that_skips_the_first_challenge_twice_fails_closed() {
 }
 
 #[tokio::test]
+async fn an_answer_contract_phase_mismatch_is_repaired_in_the_same_session() {
+    let (state, _, agents) = state().await;
+    {
+        let mut replies = agents.architecture_replies.lock().unwrap();
+        replies.clear();
+        replies.extend([
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"question\",\"phase\":\"domain_discovery\",\"message\":\"Quel résultat métier doit être mesuré ?\"}\n```".into(),
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ux_discovery\",\"message\":\"Les décisions sont suffisantes.\"}\n```".into(),
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ready_to_draft\",\"message\":\"Les décisions sont suffisantes.\"}\n```".into(),
+        ]);
+    }
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let started = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un tableau de bord métier.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let answered = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({"content": "Le taux de résolution hebdomadaire."})),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(
+        agents.architecture_messages.lock().unwrap().as_slice(),
+        [
+            "brief:Construire un tableau de bord métier.",
+            "answer:Le taux de résolution hebdomadaire.",
+            "guard:contract-repair:domain_discovery"
+        ]
+    );
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "ready_to_draft");
+    assert_eq!(architecture["phase"], "ready_to_draft");
+    assert_eq!(architecture["package_status"], "draft_ready");
+}
+
+#[tokio::test]
+async fn a_second_answer_contract_mismatch_fails_closed() {
+    let (state, _, agents) = state().await;
+    let mismatch = "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ux_discovery\",\"message\":\"Les décisions sont suffisantes.\"}\n```";
+    {
+        let mut replies = agents.architecture_replies.lock().unwrap();
+        replies.clear();
+        replies.extend([
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"question\",\"phase\":\"domain_discovery\",\"message\":\"Quel résultat métier doit être mesuré ?\"}\n```".into(),
+            mismatch.into(),
+            mismatch.into(),
+        ]);
+    }
+    let app = router(state);
+    let project = create_project(&app).await;
+    app.clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un tableau de bord métier.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+
+    let refused = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({"content": "Le taux de résolution hebdomadaire."})),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "failed");
+    assert!(architecture["failure_reason"]
+        .as_str()
+        .unwrap()
+        .contains("contract repair failed: question/ready phase mismatch"));
+    assert_eq!(
+        agents
+            .architecture_messages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.starts_with("guard:contract-repair:"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn architecture_discovery_can_be_cancelled_and_stays_observable() {
     let (state, _, agents) = state().await;
     let app = router(state);

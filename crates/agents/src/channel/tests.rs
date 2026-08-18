@@ -238,6 +238,11 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
                 text: "question imposée".into(),
                 updates: vec![],
             }),
+            Ok(TurnResult {
+                outcome: RunOutcome::Finished,
+                text: "contrat réparé".into(),
+                updates: vec![],
+            }),
         ]),
         pend: false,
         dropped: Arc::new(AtomicBool::new(false)),
@@ -253,6 +258,13 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
     ch.continue_architecture(&project(), &architecture_session(), "Une équipe produit")
         .await
         .unwrap();
+    ch.retry_architecture_contract(
+        &project(),
+        &architecture_session(),
+        ArchitecturePhase::Requirements,
+    )
+    .await
+    .unwrap();
 
     let prompts = log.lock().unwrap();
     assert!(prompts[0].contains("PINNED SKILL BUNDLE"));
@@ -261,6 +273,9 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
     assert!(prompts[0].contains("kind MUST be `question`"));
     assert!(prompts[1].starts_with("DISCOVERY GUARD\n"));
     assert!(prompts[2].starts_with("OWNER ANSWER\n"));
+    assert!(prompts[3].starts_with("CONTRACT REPAIR\n"));
+    assert!(prompts[3].contains("persisted phase is `requirements`"));
+    assert!(prompts[3].contains("requirements or ux_discovery"));
     assert_eq!(ch.connector.spawned.load(Ordering::SeqCst), 1);
 }
 

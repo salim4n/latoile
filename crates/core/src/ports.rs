@@ -13,8 +13,8 @@
 
 use crate::approval::Approval;
 use crate::architecture::{
-    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitectureQuestion,
-    ArchitectureSession,
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePhase,
+    ArchitectureQuestion, ArchitectureSession,
 };
 use crate::conversation::{Conversation, Message};
 use crate::delivery::Delivery;
@@ -236,6 +236,14 @@ pub trait AgentChannel {
         &self,
         _project: &ProjectId,
         _session: &ArchitectureSessionId,
+    ) -> PortResult<ArchitectReply> {
+        Err(PortError("architecture sessions are not supported".into()))
+    }
+    async fn retry_architecture_contract(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+        _current_phase: ArchitecturePhase,
     ) -> PortResult<ArchitectReply> {
         Err(PortError("architecture sessions are not supported".into()))
     }

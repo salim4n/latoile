@@ -30,7 +30,7 @@ use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
     ManagerReply, PortResult,
 };
-use latoile_core::{ArchitectureOperatingMode, Run};
+use latoile_core::{ArchitectureOperatingMode, ArchitecturePhase, Run};
 use latoile_core::{ArchitecturePackageValidation, SpecVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -463,6 +463,44 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
             })?;
         let prompt = "DISCOVERY GUARD\nNo owner answer was supplied. Your first turn cannot be `ready_to_draft`. Identify one consequential unresolved owner decision and ask exactly one question. Return only the fenced `latoile-architecture` JSON contract with kind `question`; do not write files or execute commands.";
         match self.architecture_prompt(&entry, session, prompt).await {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                self.architects.lock().await.remove(session.as_str());
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn retry_architecture_contract(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+        current_phase: ArchitecturePhase,
+    ) -> PortResult<ArchitectReply> {
+        let entry = self
+            .architects
+            .lock()
+            .await
+            .get(session.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                latoile_core::ports::PortError(
+                    "the live Architect session is unavailable; restart discovery".into(),
+                )
+            })?;
+        let allowed_question_phases = match current_phase {
+            ArchitecturePhase::DomainDiscovery => {
+                "domain_discovery, requirements, or ux_discovery"
+            }
+            ArchitecturePhase::Requirements => "requirements or ux_discovery",
+            ArchitecturePhase::UxDiscovery => "ux_discovery",
+            ArchitecturePhase::ReadyToDraft => "none",
+        };
+        let prompt = format!(
+            "CONTRACT REPAIR\nNo new owner answer was supplied. Your previous response did not satisfy the discovery protocol. Preserve the same underlying question or readiness decision; do not invent owner input. The persisted phase is `{}`. Return exactly one fenced `latoile-architecture` JSON object. For kind `question`, phase MUST be one of: {allowed_question_phases}. For kind `ready_to_draft`, phase MUST be `ready_to_draft`. Do not write files or execute commands.",
+            current_phase.as_str(),
+        );
+        match self.architecture_prompt(&entry, session, &prompt).await {
             Ok(reply) => Ok(reply),
             Err(error) => {
                 self.architects.lock().await.remove(session.as_str());

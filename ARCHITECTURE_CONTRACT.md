@@ -46,7 +46,10 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   operating mode; a missing reference is a hard failure, never a thin fallback.
   The first turn must be a decision-rich question. A premature
   `ready_to_draft` is recentered once in the same ACP session without inventing
-  an owner answer; a second attempt fails closed.
+  an owner answer; a second attempt fails closed. After a durable owner answer,
+  one invalid question/readiness contract may likewise be repaired in that
+  same pinned session without replaying or fabricating owner input; the repaired
+  turn is revalidated from scratch and a second invalid contract fails closed.
 - Architect generation runs only in a detached worktree. Its permission scope
   permits static `.md`/`.html` files under one server-selected `design/v…/`
   root and rejects shell, path traversal and every production/config mutation.
