@@ -146,6 +146,24 @@ class CanarySafetyTests(unittest.TestCase):
         self.assertNotIn("summary", observation)
         self.assertNotIn("text", json.dumps(observation))
 
+    def test_baseline_observation_keeps_codes_without_browser_or_provider_text(self):
+        observation = canary.baseline_observations(
+            [
+                {
+                    "comparison_id": "home",
+                    "status": "failed",
+                    "failure_code": "readiness_timeout",
+                    "failure_message": "unbounded browser output",
+                    "recovery_action": "fix readiness selector",
+                    "html": "private mockup",
+                }
+            ]
+        )
+
+        self.assertEqual(observation[0]["failure_code"], "readiness_timeout")
+        self.assertNotIn("failure_message", observation[0])
+        self.assertNotIn("html", observation[0])
+
     def test_architecture_diagnostic_is_bounded_and_excludes_owner_content(self):
         with tempfile.TemporaryDirectory() as artifact_root:
             runner = canary.Canary(

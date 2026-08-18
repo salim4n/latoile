@@ -54,8 +54,10 @@ not retained.
 
 On failure the same artifact records `first_broken_seam` and a concise safe
 diagnostic. Architecture failures retain only session status, phase, package
-state, fixed failure reason, pinned role provenance and question counts. The
-remote repository is retained so the failure remains inspectable.
+state, fixed failure reason, pinned role provenance and question counts.
+Baseline approval failures retain only comparison id, status, fixed failure
+code and recovery action; mockup bytes and browser/provider prose stay
+excluded. The remote repository is retained so the failure remains inspectable.
 
 ## Cleanup
 

@@ -206,6 +206,18 @@ def reviewer_observation(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def baseline_observations(payload: Any) -> list[dict[str, Any]]:
+    """Retain only bounded server-classified baseline failure metadata."""
+    if not isinstance(payload, list):
+        return []
+    fields = ("comparison_id", "status", "failure_code", "recovery_action")
+    return [
+        {field: row.get(field) for field in fields}
+        for row in payload[:50]
+        if isinstance(row, dict)
+    ]
+
+
 def prove_replacement_evidence(
     original: dict[str, Any], corrected: dict[str, Any]
 ) -> None:
@@ -654,7 +666,16 @@ class Canary:
         )
 
         self.stage("immutable spec and baseline approval")
-        spec = api.post(f"/api/spec-versions/{draft['id']}/approve")
+        try:
+            spec = api.post(f"/api/spec-versions/{draft['id']}/approve")
+        except ApiFailure as error:
+            if error.status == 422:
+                with contextlib.suppress(CanaryFailure):
+                    baselines = api.get(f"/api/spec-versions/{draft['id']}/baselines")
+                    observations = baseline_observations(baselines)
+                    if observations:
+                        self.data["baseline_diagnostic"] = observations
+            raise
         if spec.get("status") != "approved" or spec.get("package_commit_sha") != package_commit:
             raise CanaryFailure("the immutable draft spec was not approved exactly")
         baselines = api.get(f"/api/spec-versions/{spec['id']}/baselines")
