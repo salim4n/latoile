@@ -75,11 +75,14 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   bounded hashes/status; a ready baseline is immutable and missing or failed
   required baselines block approval and executor dispatch.
 - After a finished frontend run, the live route is replayed with that exact
-  scenario contract. Chromium inherits no service environment and may reach
-  only the supervised loopback origin; every other request and WebSocket is
-  blocked. The server stores immutable render, pixel diff, heatmap, DOM and
-  accessibility changes plus environment hashes. Fixed domain thresholds —
-  never Reviewer prose — classify invalid, blocking, reservation or passed.
+  scenario contract. Any ready preview is first marked stale and its process is
+  recycled, including after corrective runs, so capture cannot observe code
+  cached by the previous executor. Chromium inherits no service environment
+  and may reach only the supervised loopback origin; every other request and
+  WebSocket is blocked. The server stores immutable render, pixel diff,
+  heatmap, DOM and accessibility changes plus environment hashes. Fixed domain
+  thresholds — never Reviewer prose — classify invalid, blocking, reservation
+  or passed.
 - Every Reviewer run stores one immutable `reviewed_run_id`. Reviewer V2 may
   cite only the exact server evidence set for that finished executor run and
   current project/spec, with every artifact hash unchanged. The server rebuilds

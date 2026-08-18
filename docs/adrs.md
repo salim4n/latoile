@@ -547,3 +547,39 @@ the original decision and correction history remain auditable.
 + Mobile/desktop and FR/EN scenarios use the same manifest-backed interaction.
 + Correction history proves new output against an unchanged approved target.
 − The UI must manage authenticated object URLs and release them after use.
+
+---
+
+# ADR-016 — Recycle the preview process before every frontend capture
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The first greenfield mismatch/correction canary proved that changing files is
+not enough to refresh a long-lived dev server. The corrective executor removed
+the deliberate 16 px injection, but the ready Node process had loaded the old
+module and `EnsurePreview` returned it untouched. The second Chromium capture
+therefore reproduced the original blocking evidence exactly.
+
+## Decision
+
+After every finished frontend run and before `EnsurePreview`, LaToile marks an
+existing ready preview `stale`, persists a `PreviewStale` event and recycles the
+supervised process. Initial runs with no preview remain a no-op; an already
+stale preview is idempotent. Live comparison and Reviewer dispatch happen only
+after this refresh attempt, so corrective evidence observes the current commit.
+
+## Rejected alternatives
+
+- Rely on filesystem watching or HMR: the V1 proxy does not guarantee either.
+- Ask the executor to restart the server: process ownership belongs to LaToile.
+- Add a delay before recapture: time cannot invalidate a loaded module.
+- Accept identical corrective evidence: that would hide a stale runtime.
+
+## Consequences
+
++ Corrective capture measures the corrected commit rather than cached code.
++ `PreviewStale → PreviewReady` is explicit and auditable for every frontend run.
+− Frontend completion pays one bounded dev-server restart before review.

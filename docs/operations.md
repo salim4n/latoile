@@ -31,10 +31,12 @@ changing that environment makes a repeat mismatch explicit instead of silently
 replacing approved evidence.
 
 Live comparison uses the same pinned browser/font environment. The capture
-browser starts with a cleared process environment, allows HTTP requests only
-to the exact supervised `127.0.0.1:<preview-port>` origin and blocks HTTPS,
-file, FTP and every WebSocket. A browser/font mismatch records an invalid,
-actionable comparison rather than calculating a misleading similarity score.
+browser starts only after every ready preview has been marked stale and its dev
+process recycled for the finished frontend run. It uses a cleared process
+environment, allows HTTP requests only to the exact supervised
+`127.0.0.1:<preview-port>` origin and blocks HTTPS, file, FTP and every
+WebSocket. A browser/font mismatch records an invalid, actionable comparison
+rather than calculating a misleading similarity score.
 
 The subsequent Reviewer run is permanently bound to that executor run. Its V2
 response must echo the exact evidence ids and hashes shown in the prompt; the

@@ -321,8 +321,14 @@ async fn a_finished_run_drives_review_and_journals() {
     let app = router(state.clone());
     let project = create_project(&app).await;
     let run = seed_running_run(&store, &project, "r-fin").await;
-
-    let handle = driver::spawn_every(state, Duration::from_millis(30));
+    let mut previous_preview = Preview::new(
+        PreviewId::new("preview-before-r-fin").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        26100,
+        "work",
+    );
+    previous_preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &previous_preview).await.unwrap();
     // The "agent" completes its turn.
     agents.run_states.lock().unwrap().insert(
         "r-fin".into(),
@@ -343,6 +349,7 @@ async fn a_finished_run_drives_review_and_journals() {
             diff_stat: "1 file changed, 12 insertions(+)".into(),
         }),
     );
+    let handle = driver::spawn_every(state, Duration::from_millis(30));
 
     assert_eq!(wait_terminal(&store, &run).await, RunStatus::Finished);
     let stored_run = RunStore::get(&store, &run).await.unwrap().unwrap();
@@ -369,7 +376,16 @@ async fn a_finished_run_drives_review_and_journals() {
         .map(|(_, e)| e.kind)
         .collect();
     assert!(kinds.contains(&EventKind::RunFinished));
+    assert!(kinds.contains(&EventKind::PreviewStale));
     assert!(!kinds.contains(&EventKind::ApprovalRequested));
+    assert!(
+        kinds
+            .iter()
+            .position(|kind| *kind == EventKind::RunFinished)
+            < kinds
+                .iter()
+                .position(|kind| *kind == EventKind::PreviewStale)
+    );
 
     // §5.2: the reviewer run is dispatched on the task — after the preview
     // step, so give the tick a moment to get there.

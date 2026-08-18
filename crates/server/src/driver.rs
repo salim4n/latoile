@@ -11,7 +11,7 @@
 use crate::state::AppState;
 use latoile_agents::RunState;
 use latoile_app::supervision::{self, Observed};
-use latoile_app::use_cases::{CaptureVisualComparisons, EnsurePreview};
+use latoile_app::use_cases::{CaptureVisualComparisons, EnsurePreview, InvalidatePreview};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::RunId;
 use latoile_core::ports::{
@@ -116,6 +116,15 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
                 // §5.2, in order: refresh the preview, then dispatch the
                 // reviewer. Both best-effort — a dead dev server or a
                 // missing adapter must not break supervision.
+                if run.role_id.as_str() == "frontend" {
+                    let invalidated =
+                        InvalidatePreview::new(state.store.clone(), state.store.clone())
+                            .execute(&project)
+                            .await;
+                    if let Err(e) = invalidated {
+                        tracing::warn!(error = %e, "preview invalidation after frontend run failed");
+                    }
+                }
                 let ensured = EnsurePreview::new(
                     state.store.clone(),
                     state.store.clone(),

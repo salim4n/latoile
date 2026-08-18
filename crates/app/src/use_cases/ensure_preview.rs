@@ -192,6 +192,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn frontend_invalidation_forces_the_next_ensure_to_recycle() {
+        let store = test_fixtures::store_with_project().await;
+        let first = use_case(&store)
+            .execute(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
+        assert!(
+            crate::use_cases::InvalidatePreview::new(store.clone(), store.clone())
+                .execute(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+        );
+
+        let refreshed = use_case(&store)
+            .execute(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
+
+        assert!(refreshed.recycled);
+        assert_eq!(refreshed.preview.id, first.preview.id);
+        assert_eq!(refreshed.preview.status, PreviewStatus::Ready);
+        let events = store.since(&test_fixtures::PROJECT, 0).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|(_, event)| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                EventKind::PreviewReady,
+                EventKind::PreviewStale,
+                EventKind::PreviewReady,
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn a_dead_preview_frees_the_slot_for_a_fresh_one() {
         let store = test_fixtures::store_with_project().await;
         let mut preview = use_case(&store)

@@ -108,11 +108,13 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     baseline matching every scenario and the exact spec manifest/commit.
 20. A finished frontend run replays the same route, fixture, locale, theme,
     viewport, readiness, selector and approved-mask contract. The fresh browser
-    has a cleared process environment and an exact loopback-origin network
-    allowlist. Render, pixel diff, heatmap, geometry changes, accessibility
-    changes and environment are immutable and hashed. Domain-owned thresholds
-    classify `invalid`, `blocking`, `reservation` or `passed`; invalid evidence
-    carries no fabricated pixel metrics.
+    runs only after a ready preview has transitioned to `stale` and its dev
+    process has been recycled, including for corrective runs. It has a cleared
+    process environment and an exact loopback-origin network allowlist. Render,
+    pixel diff, heatmap, geometry changes, accessibility changes and environment
+    are immutable and hashed. Domain-owned thresholds classify `invalid`,
+    `blocking`, `reservation` or `passed`; invalid evidence carries no fabricated
+    pixel metrics.
 21. A Reviewer run has one immutable `reviewed_run_id`. V2 output declares
     visual applicability and echoes exact evidence ids/hashes, but cannot emit
     trusted status, metrics or gate fields. The server matches the complete set
