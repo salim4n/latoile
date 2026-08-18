@@ -88,6 +88,7 @@ pub struct ArchitecturePackageDto {
     pub head_sha: String,
     pub tree_sha: String,
     pub package_digest: String,
+    pub manifest_digest: String,
     pub changed_files: Vec<String>,
     pub diff_stat: String,
 }
@@ -112,6 +113,7 @@ impl ArchitectureSessionDto {
                     head_sha: package.head_sha.clone(),
                     tree_sha: package.tree_sha.clone(),
                     package_digest: package.package_digest.clone(),
+                    manifest_digest: package.manifest_digest.clone(),
                     changed_files: package.changed_files.clone(),
                     diff_stat: package.diff_stat.clone(),
                 }),
@@ -184,6 +186,8 @@ pub struct SpecDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub package_commit_sha: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_tree_sha: Option<String>,
@@ -204,8 +208,76 @@ impl From<&SpecVersion> for SpecDto {
             skill_digest: provenance.map(|value| value.skill_digest.clone()),
             operating_mode: provenance.map(|value| value.operating_mode.as_str()),
             package_digest: provenance.map(|value| value.package_digest.clone()),
+            manifest_digest: provenance.map(|value| value.manifest_digest.clone()),
             package_commit_sha: provenance.map(|value| value.package_commit_sha.clone()),
             package_tree_sha: provenance.map(|value| value.package_tree_sha.clone()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct ArchitectureValidationFindingDto {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct ArchitectureVisualScenarioDto {
+    pub comparison_id: String,
+    pub screen: String,
+    pub state: String,
+    pub locale: String,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub device_scale_factor_milli: u32,
+    pub mockup: String,
+}
+
+#[derive(Serialize)]
+pub struct ArchitecturePackageValidationDto {
+    pub valid: bool,
+    pub package_digest: String,
+    pub manifest_digest: String,
+    pub commit_sha: String,
+    pub tree_sha: String,
+    pub file_count: u32,
+    pub gallery_path: String,
+    pub scenarios: Vec<ArchitectureVisualScenarioDto>,
+    pub findings: Vec<ArchitectureValidationFindingDto>,
+}
+
+impl From<&latoile_core::ArchitecturePackageValidation> for ArchitecturePackageValidationDto {
+    fn from(value: &latoile_core::ArchitecturePackageValidation) -> Self {
+        Self {
+            valid: value.valid,
+            package_digest: value.package_digest.clone(),
+            manifest_digest: value.manifest_digest.clone(),
+            commit_sha: value.commit_sha.clone(),
+            tree_sha: value.tree_sha.clone(),
+            file_count: value.file_count,
+            gallery_path: value.gallery_path.clone(),
+            scenarios: value
+                .scenarios
+                .iter()
+                .map(|scenario| ArchitectureVisualScenarioDto {
+                    comparison_id: scenario.comparison_id.clone(),
+                    screen: scenario.screen.clone(),
+                    state: scenario.state.clone(),
+                    locale: scenario.locale.clone(),
+                    viewport_width: scenario.viewport_width,
+                    viewport_height: scenario.viewport_height,
+                    device_scale_factor_milli: scenario.device_scale_factor_milli,
+                    mockup: scenario.mockup.clone(),
+                })
+                .collect(),
+            findings: value
+                .findings
+                .iter()
+                .map(|finding| ArchitectureValidationFindingDto {
+                    code: finding.code.clone(),
+                    message: finding.message.clone(),
+                })
+                .collect(),
         }
     }
 }

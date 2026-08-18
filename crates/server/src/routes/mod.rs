@@ -51,6 +51,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/projects/{id}/spec-versions", get(specs::list))
         .route("/api/spec-versions/{id}/approve", post(specs::approve))
+        .route("/api/spec-versions/{id}/validation", get(specs::validate))
+        .route(
+            "/api/spec-versions/{id}/artifacts/{*path}",
+            get(specs::artifact),
+        )
         .route("/api/roles", get(roles))
         .route("/api/agent-auth/start", post(agent_auth::start))
         .route("/api/agent-auth/status", get(agent_auth::status_all))

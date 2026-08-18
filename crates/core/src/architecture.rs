@@ -47,8 +47,47 @@ pub struct ArchitecturePackageEvidence {
     pub head_sha: String,
     pub tree_sha: String,
     pub package_digest: String,
+    pub manifest_digest: String,
     pub changed_files: Vec<String>,
     pub diff_stat: String,
+}
+
+/// One deterministic visual contract declared by the architecture manifest.
+/// `comparison_id` is the stable key reused by baseline capture and pixel
+/// comparison; viewport and locale are data, never conventions hidden in a
+/// browser script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectureVisualScenario {
+    pub comparison_id: String,
+    pub screen: String,
+    pub state: String,
+    pub locale: String,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub device_scale_factor_milli: u32,
+    pub mockup: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectureValidationFinding {
+    pub code: String,
+    pub message: String,
+}
+
+/// Read-only proof produced from Git plus the package bytes. Invalid packages
+/// are values (with findings), not adapter failures, so the owner can inspect
+/// exactly why approval is blocked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitecturePackageValidation {
+    pub valid: bool,
+    pub package_digest: String,
+    pub manifest_digest: String,
+    pub commit_sha: String,
+    pub tree_sha: String,
+    pub file_count: u32,
+    pub gallery_path: String,
+    pub scenarios: Vec<ArchitectureVisualScenario>,
+    pub findings: Vec<ArchitectureValidationFinding>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -429,6 +468,8 @@ mod tests {
                 head_sha: "head".into(),
                 tree_sha: "tree".into(),
                 package_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+                manifest_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .into(),
                 changed_files: vec!["design/v1/architecture-spec.md".into()],
                 diff_stat: "1 file changed".into(),

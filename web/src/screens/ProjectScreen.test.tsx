@@ -48,6 +48,7 @@ function mockProject({
   });
   vi.spyOn(api, "messages").mockResolvedValue(messages);
   vi.spyOn(api, "architecture").mockResolvedValue(null);
+  vi.spyOn(api, "specs").mockResolvedValue([]);
   if (preview) vi.spyOn(api, "preview").mockResolvedValue(preview);
   else vi.spyOn(api, "preview").mockRejectedValue(new ApiError(404, "not_found", "preview not found"));
 }
@@ -78,6 +79,93 @@ describe("ProjectScreen visual contract", () => {
     expect(screen.getByText("4 tâches prêtes")).toBeTruthy();
     expect(screen.getByText("Run démarré")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Réglages du projet" })).toBeTruthy();
+  });
+
+  it("blocks approval behind structured Git proof and renders the real static gallery", async () => {
+    mockProject();
+    const architecture: ArchitectureSession = {
+      id: "architecture-1",
+      project_id: project.id,
+      status: "ready_to_draft",
+      phase: "ready_to_draft",
+      skill_name: "app-architect-brainstorm",
+      skill_digest: "a".repeat(64),
+      operating_mode: "greenfield",
+      package_status: "draft_ready",
+      package: {
+        design_dir: "design/v0001-architec/",
+        base_sha: "0".repeat(40),
+        head_sha: "1".repeat(40),
+        tree_sha: "2".repeat(40),
+        package_digest: "b".repeat(64),
+        manifest_digest: "c".repeat(64),
+        changed_files: ["design/v0001-architec/gallery.html"],
+        diff_stat: "16 files changed",
+      },
+      questions: [],
+    };
+    vi.spyOn(api, "architecture").mockResolvedValue(architecture);
+    const draft = {
+      id: "spec-1",
+      project_id: project.id,
+      version: 1,
+      status: "draft" as const,
+      design_dir: architecture.package!.design_dir,
+      architecture_session_id: architecture.id,
+      skill_name: architecture.skill_name,
+      skill_digest: architecture.skill_digest,
+      operating_mode: architecture.operating_mode,
+      package_digest: architecture.package!.package_digest,
+      manifest_digest: architecture.package!.manifest_digest,
+      package_commit_sha: architecture.package!.head_sha,
+      package_tree_sha: architecture.package!.tree_sha,
+    };
+    vi.spyOn(api, "specs").mockResolvedValue([draft]);
+    vi.spyOn(api, "validateSpec").mockResolvedValue({
+      valid: true,
+      package_digest: draft.package_digest!,
+      manifest_digest: draft.manifest_digest!,
+      commit_sha: draft.package_commit_sha!,
+      tree_sha: draft.package_tree_sha!,
+      file_count: 16,
+      gallery_path: "gallery.html",
+      scenarios: [
+        {
+          comparison_id: "home-default-fr-mobile",
+          screen: "home",
+          state: "default",
+          locale: "fr-FR",
+          viewport_width: 390,
+          viewport_height: 844,
+          device_scale_factor_milli: 1000,
+          mockup: "mockups/home.html",
+        },
+      ],
+      findings: [
+        {
+          code: "git_commit_tree_verified",
+          message: "Pinned commit and tree match.",
+        },
+      ],
+    });
+    const artifact = vi
+      .spyOn(api, "specArtifact")
+      .mockResolvedValue("<!doctype html><html><body>Galerie réelle</body></html>");
+    const approve = vi.spyOn(api, "approveSpec").mockResolvedValue({
+      ...draft,
+      status: "approved",
+    });
+
+    renderProject();
+
+    expect(await screen.findByText("Complet et immuable")).toBeTruthy();
+    expect(screen.getByText("git_commit_tree_verified")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Inspecter la galerie réelle" }));
+    expect(await screen.findByTitle("Galerie statique réelle")).toBeTruthy();
+    expect(artifact).toHaveBeenCalledWith("spec-1", "gallery.html");
+
+    fireEvent.click(screen.getByRole("button", { name: "Approuver cette version immuable" }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("spec-1"));
   });
 
   it("delivers only on owner action and shows verified PR evidence", async () => {

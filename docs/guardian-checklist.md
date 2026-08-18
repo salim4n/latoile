@@ -33,6 +33,7 @@ run the paid, stateful real-provider canary.
 | 19 | Backup pairs database and key | CLI tests prove integrity, key verification, no overwrite and workspace preservation |
 | 20 | Architect skill input is complete and pinned | Bundle tests require every reference and prove any byte change changes the SHA-256 |
 | 21 | Architect output cannot escape | ACP adapter tests prove package-only permission scope, mandatory static inventory, rejected source mutation, unchanged live HEAD on refusal and exact fast-forward on success |
+| 22 | Spec approval is immutable | Domain/app/agent/server/UI tests prove complete manifest metadata, Git/tree/content revalidation, drift refusal, atomic approval, exact-commit artifact rendering and pre-dispatch revalidation |
 
 ## Anti-drift rules
 

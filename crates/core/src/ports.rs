@@ -222,6 +222,30 @@ pub trait AgentChannel {
             "architecture package generation is not supported".into(),
         ))
     }
+    /// Revalidate a draft or approved package against its immutable Git and
+    /// content provenance. Validation failures are returned as a structured
+    /// `valid = false` report; only infrastructure failures use `PortError`.
+    async fn verify_architecture_package(
+        &self,
+        _project: &ProjectId,
+        _spec: &SpecVersion,
+    ) -> PortResult<crate::architecture::ArchitecturePackageValidation> {
+        Err(PortError(
+            "architecture package verification is not supported".into(),
+        ))
+    }
+    /// Read one self-contained HTML artifact from the pinned package commit.
+    /// Implementations must revalidate the package before returning bytes.
+    async fn read_architecture_artifact(
+        &self,
+        _project: &ProjectId,
+        _spec: &SpecVersion,
+        _relative_path: &str,
+    ) -> PortResult<String> {
+        Err(PortError(
+            "architecture artifact reading is not supported".into(),
+        ))
+    }
     async fn cancel_architecture(&self, _session: &ArchitectureSessionId) -> PortResult<()> {
         Ok(())
     }

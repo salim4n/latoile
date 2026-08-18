@@ -30,7 +30,7 @@ impl Store {
                status = ?, phase = ?, acp_session_id = ?, skill_name = ?, skill_digest = ?,
                operating_mode = ?, package_status = ?, package_design_dir = ?,
                package_base_sha = ?, package_head_sha = ?, package_tree_sha = ?,
-               package_digest = ?, package_changed_files = ?, package_diff_stat = ?,
+               package_digest = ?, package_manifest_digest = ?, package_changed_files = ?, package_diff_stat = ?,
                failure_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE id = ?",
         )
@@ -46,6 +46,7 @@ impl Store {
         .bind(&package.head_sha)
         .bind(&package.tree_sha)
         .bind(&package.package_digest)
+        .bind(&package.manifest_digest)
         .bind(changed_files)
         .bind(&package.diff_stat)
         .bind(&session.failure_reason)
@@ -64,8 +65,8 @@ impl Store {
             "INSERT INTO spec_version
                (id, project_id, version, status, design_dir, architect_run_id,
                 architecture_session_id, skill_name, skill_digest, operating_mode,
-                package_digest, package_commit_sha, package_tree_sha)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                package_digest, manifest_digest, package_commit_sha, package_tree_sha)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(spec.id.as_str())
         .bind(spec.project_id.as_str())
@@ -78,6 +79,7 @@ impl Store {
         .bind(&provenance.skill_digest)
         .bind(provenance.operating_mode.as_str())
         .bind(&provenance.package_digest)
+        .bind(&provenance.manifest_digest)
         .bind(&provenance.package_commit_sha)
         .bind(&provenance.package_tree_sha)
         .execute(&mut *transaction)

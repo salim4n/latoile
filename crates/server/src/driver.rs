@@ -15,10 +15,9 @@ use latoile_app::use_cases::EnsurePreview;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::RunId;
 use latoile_core::ports::{
-    ArchitectureSessionStore, EventLog, PreviewStore, ProjectStore, RunStore, SpecStore, TaskStore,
+    AgentChannel, ArchitectureSessionStore, EventLog, PreviewStore, RunStore, SpecStore, TaskStore,
 };
 use latoile_core::{PreviewStatus, Run};
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
@@ -198,19 +197,65 @@ async fn review_context(
         .await?
         .ok_or(latoile_app::use_cases::UseCaseError::NotFound("task"))?;
     let spec = SpecStore::approved_for_project(&state.store, &task.project_id).await?;
-    let project = ProjectStore::get(&state.store, &task.project_id)
-        .await?
-        .ok_or(latoile_app::use_cases::UseCaseError::NotFound("project"))?;
-
     let (spec_reference, excerpts, visual_references) = match spec {
         Some(spec) => {
-            let (excerpts, visuals) = design_evidence(&project.local_path, &spec.design_dir);
+            let validation = state
+                .agents
+                .verify_architecture_package(&task.project_id, &spec)
+                .await?;
+            if !validation.valid {
+                return Err(latoile_core::DomainError::Invariant(
+                    "the approved architecture package changed; reviewer dispatch is blocked until a new version is approved",
+                )
+                .into());
+            }
+            let mut excerpts = String::new();
+            for path in [
+                "architecture-spec.md",
+                "component-specification.md",
+                "screen-inventory.md",
+                "design-tokens.md",
+            ] {
+                let content = state
+                    .agents
+                    .read_architecture_artifact(&task.project_id, &spec, path)
+                    .await?;
+                excerpts.push_str(&format!(
+                    "\n### `{}` from commit {}\n{}\n",
+                    path,
+                    validation.commit_sha,
+                    truncate(&content, 4 * 1024)
+                ));
+            }
+            let visuals = validation
+                .scenarios
+                .iter()
+                .map(|scenario| {
+                    format!(
+                        "- `{}`: {} / {} / {} at {}x{} @ {} — Git object `{}:{}{}`",
+                        scenario.comparison_id,
+                        scenario.screen,
+                        scenario.state,
+                        scenario.locale,
+                        scenario.viewport_width,
+                        scenario.viewport_height,
+                        scenario.device_scale_factor_milli,
+                        validation.commit_sha,
+                        spec.design_dir,
+                        scenario.mockup,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             (
                 format!(
-                    "spec {} v{} (approved), directory `{}`",
+                    "spec {} v{} (approved), immutable commit {}, tree {}, package {}, manifest {}",
                     spec.id.as_str(),
                     spec.version,
-                    spec.design_dir
+                    validation.commit_sha,
+                    validation.tree_sha,
+                    validation.package_digest,
+                    validation.manifest_digest,
                 ),
                 excerpts,
                 visuals,
@@ -240,96 +285,6 @@ async fn review_context(
         head,
         truncate(artifacts, 32 * 1024),
     ))
-}
-
-/// Read only bounded, text-shaped spec evidence under the project's
-/// checkout. A stale or escaping design path degrades to metadata only.
-fn design_evidence(local_path: &str, design_dir: &str) -> (String, String) {
-    let Ok(root) = std::fs::canonicalize(local_path) else {
-        return unavailable_design_evidence();
-    };
-    let Ok(design) = std::fs::canonicalize(root.join(design_dir)) else {
-        return unavailable_design_evidence();
-    };
-    if !design.starts_with(&root) {
-        return unavailable_design_evidence();
-    }
-
-    let mut files = collect_design_files(&design);
-    files.sort();
-    let mut excerpts = String::new();
-    let mut visuals = Vec::new();
-    for path in files.into_iter().take(40) {
-        let relative = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
-        match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
-            "md" | "txt" | "json" | "yaml" | "yml" if excerpts.len() < 16 * 1024 => {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    excerpts.push_str(&format!(
-                        "\n### `{relative}`\n{}\n",
-                        truncate(&content, 4 * 1024)
-                    ));
-                }
-            }
-            "png" | "jpg" | "jpeg" | "webp" | "svg" => visuals.push(relative),
-            _ => {}
-        }
-    }
-
-    if excerpts.is_empty() {
-        excerpts.push_str("(no readable text spec file found)");
-    }
-    let visuals = if visuals.is_empty() {
-        "(no image reference found; inspect the design directory directly)".into()
-    } else {
-        visuals
-            .into_iter()
-            .take(20)
-            .map(|path| format!("- `{path}`"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    (truncate(&excerpts, 20 * 1024), visuals)
-}
-
-fn collect_design_files(root: &Path) -> Vec<PathBuf> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut files = Vec::new();
-    let mut visited_dirs = 0usize;
-    while let Some(dir) = pending.pop() {
-        visited_dirs += 1;
-        if visited_dirs > 40 || files.len() >= 100 {
-            break;
-        }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() && visited_dirs + pending.len() < 40 {
-                pending.push(path);
-            } else if file_type.is_file() {
-                files.push(path);
-            }
-        }
-    }
-    files
-}
-
-fn unavailable_design_evidence() -> (String, String) {
-    (
-        "(spec files unavailable; inspect the approved design directory in the workspace)".into(),
-        "(visual references unavailable)".into(),
-    )
 }
 
 fn truncate(value: &str, limit: usize) -> String {
@@ -369,42 +324,5 @@ async fn observe(state: &AppState, run: &RunId) -> Observed {
             },
         },
         Some(RunState::Failed(reason)) => Observed::Failed { reason },
-    }
-}
-
-#[cfg(test)]
-mod context_tests {
-    use super::*;
-
-    #[test]
-    fn design_evidence_includes_bounded_text_and_visual_references() {
-        let checkout = tempfile::tempdir().unwrap();
-        let design = checkout.path().join("design");
-        std::fs::create_dir_all(&design).unwrap();
-        std::fs::write(
-            design.join("spec.md"),
-            "# Login\n\nLe bouton primaire respecte un espacement de 16 px.",
-        )
-        .unwrap();
-        std::fs::write(design.join("login.png"), b"not-a-real-image").unwrap();
-
-        let (excerpts, visuals) = design_evidence(checkout.path().to_str().unwrap(), "design");
-        assert!(excerpts.contains("Le bouton primaire"));
-        assert!(excerpts.contains("design/spec.md"));
-        assert!(visuals.contains("design/login.png"));
-    }
-
-    #[test]
-    fn an_escaping_design_path_is_never_read() {
-        let checkout = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.md"), "must not leak").unwrap();
-
-        let (excerpts, _) = design_evidence(
-            checkout.path().to_str().unwrap(),
-            outside.path().to_str().unwrap(),
-        );
-        assert!(!excerpts.contains("must not leak"));
-        assert!(excerpts.contains("unavailable"));
     }
 }

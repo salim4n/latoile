@@ -22,7 +22,7 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(store, &mut spec).await;
     SpecStore::save(store, &spec).await.unwrap();
 
     let mut task = Task::new(
@@ -394,7 +394,7 @@ async fn approving_a_spec_marks_the_project_specced() {
     let app = router(state);
     let project = create_project(&app).await;
 
-    let draft = SpecVersion::new(
+    let mut draft = SpecVersion::new(
         SpecVersionId::new("s1").unwrap(),
         ProjectId::new(&project).unwrap(),
         1,
@@ -402,6 +402,7 @@ async fn approving_a_spec_marks_the_project_specced() {
         None,
     )
     .unwrap();
+    crate::tests::attach_test_spec_provenance(&store, &mut draft).await;
     SpecStore::save(&store, &draft).await.unwrap();
 
     let list = app
@@ -414,6 +415,47 @@ async fn approving_a_spec_marks_the_project_specced() {
         .await
         .unwrap();
     assert_eq!(body_json(list).await[0]["status"], "draft");
+
+    let validation = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/validation",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(validation.status(), StatusCode::OK);
+    let validation = body_json(validation).await;
+    assert_eq!(validation["valid"], true);
+    assert_eq!(
+        validation["scenarios"][0]["comparison_id"],
+        "home-default-fr-mobile"
+    );
+
+    let gallery = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/artifacts/gallery.html",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(gallery.status(), StatusCode::OK);
+    assert_eq!(
+        gallery.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    let gallery = http_body_util::BodyExt::collect(gallery.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(
+        String::from_utf8(gallery.to_vec())
+            .unwrap()
+            .contains("stub artifact gallery.html")
+    );
 
     let approved = app
         .clone()
@@ -569,11 +611,13 @@ async fn the_roles_route_lists_the_seeded_team() {
         .unwrap();
     let roles = body_json(response).await;
     assert_eq!(roles.as_array().unwrap().len(), 5);
-    assert!(roles
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["id"] == "manager"));
+    assert!(
+        roles
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "manager")
+    );
 }
 
 /// The documented D9 exception: `?token=` works for preview paths only.

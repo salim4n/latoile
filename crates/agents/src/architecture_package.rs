@@ -3,6 +3,12 @@
 //! validates the complete static package and the exact path-level diff,
 //! commits it itself, then integrates only that verified commit by fast
 //! forward.
+//!
+//! This module deliberately keeps generation-time and approval-time package
+//! validation in one trust boundary: both paths call the same manifest and
+//! digest functions. Splitting those rules into independently evolving
+//! modules would reintroduce the exact validation drift this boundary exists
+//! to prevent. ACP transport and permission policy remain separate modules.
 
 use crate::config::{AgentCommand, AgentTimeouts};
 use crate::error::AgentError;
@@ -10,9 +16,13 @@ use crate::preamble::ArchitectSkillBundle;
 use crate::transport::{Connection, Connector, PermissionContext};
 use crate::updates::RunOutcome;
 use latoile_core::ports::{ArchitecturePackageReply, ArchitecturePackageRequest};
-use latoile_core::{ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitectureSessionId};
+use latoile_core::{
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageValidation,
+    ArchitectureSessionId, ArchitectureValidationFinding, ArchitectureVisualScenario, SpecVersion,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 const REQUIRED_FILES: &[&str] = &[
@@ -41,15 +51,41 @@ struct PackageManifest {
     schema_version: u32,
     skill_digest: String,
     operating_mode: String,
+    deliverables: Vec<ManifestDeliverable>,
     p0_scenarios: Vec<P0Scenario>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ManifestDeliverable {
+    path: String,
+    kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct P0Scenario {
-    id: String,
+    comparison_id: String,
     screen: String,
+    state: String,
+    locale: String,
+    viewport: ManifestViewport,
     mockup: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestViewport {
+    width: u32,
+    height: u32,
+    device_scale_factor_milli: u32,
+}
+
+struct ValidatedPackage {
+    package_digest: String,
+    manifest_digest: String,
+    file_count: u32,
+    scenarios: Vec<ArchitectureVisualScenario>,
 }
 
 pub async fn detect_operating_mode(dir: &Path) -> Result<ArchitectureOperatingMode, AgentError> {
@@ -189,7 +225,7 @@ async fn generate_in_worktree<C: Connector>(
 
     let changed_files = changed_files(worktree).await?;
     validate_changed_paths(&changed_files, &request.design_dir)?;
-    let package_digest = validate_package(&package_root, request, bundle)?;
+    let validated = validate_package(&package_root, &request.skill_digest, request.operating_mode)?;
 
     git_ok(worktree, &["add", "--", &request.design_dir]).await?;
     git_ok(
@@ -213,6 +249,7 @@ async fn generate_in_worktree<C: Connector>(
         .map(str::to_string)
         .collect::<Vec<_>>();
     validate_changed_paths(&committed_paths, &request.design_dir)?;
+    validate_committed_bytes(worktree, &package_root, &request.design_dir, &head_sha).await?;
     let diff_stat = git_text(worktree, &["diff", "--stat", base_sha, &head_sha]).await?;
 
     let live_head = git_text(project_dir, &["rev-parse", "HEAD"]).await?;
@@ -236,12 +273,38 @@ async fn generate_in_worktree<C: Connector>(
             base_sha: base_sha.to_string(),
             head_sha,
             tree_sha,
-            package_digest,
+            package_digest: validated.package_digest,
+            manifest_digest: validated.manifest_digest,
             changed_files: committed_paths,
             diff_stat: truncate(diff_stat, 32 * 1024),
         },
         summary: truncate(turn.text.trim().to_string(), 16 * 1024),
     })
+}
+
+async fn validate_committed_bytes(
+    worktree: &Path,
+    package_root: &Path,
+    design_dir: &str,
+    commit: &str,
+) -> Result<(), AgentError> {
+    for path in package_files(package_root)? {
+        let relative = path
+            .strip_prefix(package_root)
+            .map_err(|_| AgentError::Prompt("package path escaped root".into()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let object = format!("{commit}:{design_dir}{relative}");
+        let committed = git_bytes(worktree, &["show", &object]).await?;
+        let validated = std::fs::read(&path)
+            .map_err(|error| AgentError::Prompt(format!("reading package artifact: {error}")))?;
+        if committed != validated {
+            return Err(AgentError::Prompt(format!(
+                "Git filters changed architecture artifact bytes at {design_dir}{relative}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_request(
@@ -294,7 +357,7 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 1, the pinned skill_digest, operating_mode, and non-empty p0_scenarios entries containing id, screen and mockup (path relative to the package). Every P0 id must appear in screen-inventory.md. Gallery must link every P0 mockup. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
+        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 1, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Comparison ids are stable and unique; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
         bundle.render(),
         request.operating_mode.as_str(),
         request.skill_digest,
@@ -349,9 +412,9 @@ fn validate_changed_paths(paths: &[String], design_dir: &str) -> Result<(), Agen
 
 fn validate_package(
     root: &Path,
-    request: &ArchitecturePackageRequest,
-    bundle: &ArchitectSkillBundle,
-) -> Result<String, AgentError> {
+    expected_skill_digest: &str,
+    expected_mode: ArchitectureOperatingMode,
+) -> Result<ValidatedPackage, AgentError> {
     for required in REQUIRED_FILES {
         require_regular_file(&root.join(required), required)?;
     }
@@ -368,7 +431,11 @@ fn validate_package(
         ));
     }
 
-    let manifest_text = read_bounded(&root.join("package-manifest.md"))?;
+    let manifest_bytes = std::fs::read(root.join("package-manifest.md"))
+        .map_err(|error| AgentError::Prompt(format!("reading package manifest: {error}")))?;
+    let manifest_digest = sha256(&manifest_bytes);
+    let manifest_text = String::from_utf8(manifest_bytes)
+        .map_err(|_| AgentError::Prompt("package-manifest.md is not valid UTF-8".into()))?;
     let manifest_raw = fenced_block(&manifest_text, "latoile-package").ok_or_else(|| {
         AgentError::Prompt("package-manifest.md is missing the latoile-package contract".into())
     })?;
@@ -376,8 +443,9 @@ fn validate_package(
         AgentError::Prompt(format!("invalid latoile-package manifest: {error}"))
     })?;
     if manifest.schema_version != 1
-        || manifest.skill_digest != bundle.digest
-        || manifest.operating_mode != request.operating_mode.as_str()
+        || manifest.skill_digest != expected_skill_digest
+        || manifest.operating_mode != expected_mode.as_str()
+        || manifest.deliverables.is_empty()
         || manifest.p0_scenarios.is_empty()
     {
         return Err(AgentError::Prompt(
@@ -385,28 +453,117 @@ fn validate_package(
         ));
     }
 
+    let package_files = package_files(root)?;
+    let actual_paths = package_files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .map_err(|_| AgentError::Prompt("package path escaped root".into()))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut declared_paths = BTreeSet::new();
+    for deliverable in &manifest.deliverables {
+        let path = Path::new(&deliverable.path);
+        if deliverable.kind.trim().is_empty()
+            || deliverable.path.trim().is_empty()
+            || path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+            || !matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("md" | "html")
+            )
+            || !declared_paths.insert(deliverable.path.clone())
+        {
+            return Err(AgentError::Prompt(
+                "manifest deliverables must be unique safe .md/.html package paths with a kind"
+                    .into(),
+            ));
+        }
+    }
+    if declared_paths != actual_paths {
+        return Err(AgentError::Prompt(
+            "manifest deliverables do not exactly match every package file".into(),
+        ));
+    }
+
     let inventory = read_bounded(&root.join("screen-inventory.md"))?;
     let gallery = read_bounded(&root.join("gallery.html"))?;
+    let mut comparison_ids = BTreeSet::new();
+    let mut scenarios = Vec::new();
     for scenario in &manifest.p0_scenarios {
-        if scenario.id.trim().is_empty()
+        let mockup_path = Path::new(&scenario.mockup);
+        if scenario.comparison_id.trim().is_empty()
+            || scenario.comparison_id.len() > 128
+            || !scenario.comparison_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
             || scenario.screen.trim().is_empty()
+            || scenario.screen.len() > 128
+            || scenario.state.trim().is_empty()
+            || scenario.state.len() > 128
+            || scenario.locale.trim().is_empty()
+            || scenario.locale.len() > 35
+            || scenario.viewport.width == 0
+            || scenario.viewport.width > 4096
+            || scenario.viewport.height == 0
+            || scenario.viewport.height > 4096
+            || !(500..=4000).contains(&scenario.viewport.device_scale_factor_milli)
+            || !comparison_ids.insert(scenario.comparison_id.clone())
             || !scenario.mockup.starts_with("mockups/")
-            || Path::new(&scenario.mockup)
-                .extension()
-                .and_then(|value| value.to_str())
-                != Some("html")
+            || mockup_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+            || mockup_path.extension().and_then(|value| value.to_str()) != Some("html")
         {
             return Err(AgentError::Prompt(
                 "every P0 scenario needs an id, screen and mockups/*.html path".into(),
             ));
         }
         require_regular_file(&root.join(&scenario.mockup), &scenario.mockup)?;
-        if !inventory.contains(&scenario.id) || !gallery.contains(&scenario.mockup) {
+        if !inventory.contains(&scenario.comparison_id) || !gallery.contains(&scenario.mockup) {
             return Err(AgentError::Prompt(format!(
                 "P0 scenario {} is not traceable through inventory and gallery",
-                scenario.id
+                scenario.comparison_id
             )));
         }
+        let mockup_text = read_bounded(&root.join(&scenario.mockup))?;
+        let markers = [
+            format!("data-latoile-comparison-id=\"{}\"", scenario.comparison_id),
+            format!("data-latoile-screen=\"{}\"", scenario.screen),
+            format!("data-latoile-state=\"{}\"", scenario.state),
+            format!("data-latoile-locale=\"{}\"", scenario.locale),
+            format!(
+                "data-latoile-viewport=\"{}x{}@{}\"",
+                scenario.viewport.width,
+                scenario.viewport.height,
+                scenario.viewport.device_scale_factor_milli
+            ),
+        ];
+        if markers.iter().any(|marker| !mockup_text.contains(marker)) {
+            return Err(AgentError::Prompt(format!(
+                "P0 mockup {} does not pin its comparison metadata",
+                scenario.mockup
+            )));
+        }
+        scenarios.push(ArchitectureVisualScenario {
+            comparison_id: scenario.comparison_id.clone(),
+            screen: scenario.screen.clone(),
+            state: scenario.state.clone(),
+            locale: scenario.locale.clone(),
+            viewport_width: scenario.viewport.width,
+            viewport_height: scenario.viewport.height,
+            device_scale_factor_milli: scenario.viewport.device_scale_factor_milli,
+            mockup: scenario.mockup.clone(),
+        });
     }
     for mockup in &mockups {
         let relative = mockup
@@ -427,14 +584,14 @@ fn validate_package(
     let tokens = std::fs::read(root.join("design-tokens.md"))
         .map_err(|error| AgentError::Prompt(format!("reading design tokens: {error}")))?;
     let token_digest = sha256(&tokens);
-    for html in std::iter::once(root.join("gallery.html")).chain(mockups.into_iter()) {
-        let text = read_bounded(&html)?;
+    for html in package_files
+        .iter()
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("html"))
+    {
+        let text = read_bounded(html)?;
         let lowered = text.to_ascii_lowercase();
         if !text.contains(&format!("data-latoile-token-digest=\"{token_digest}\""))
-            || lowered.contains("<script src=")
-            || lowered.contains("<link rel=")
-            || lowered.contains("http://")
-            || lowered.contains("https://")
+            || !html_is_self_contained(&lowered)
         {
             return Err(AgentError::Prompt(format!(
                 "HTML artifact {} is external or does not pin the shared design tokens",
@@ -443,7 +600,99 @@ fn validate_package(
         }
     }
 
-    digest_tree(root)
+    let package_digest = digest_tree(root)?;
+    Ok(ValidatedPackage {
+        package_digest,
+        manifest_digest,
+        file_count: u32::try_from(package_files.len())
+            .map_err(|_| AgentError::Prompt("package file count overflowed".into()))?,
+        scenarios,
+    })
+}
+
+fn html_is_self_contained(html: &str) -> bool {
+    if [
+        "http://",
+        "https://",
+        "ws://",
+        "wss://",
+        "ftp://",
+        "file://",
+        "@import",
+        "<script",
+        "<link ",
+        "<base ",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<form",
+        " http-equiv=",
+        " srcset=",
+        " poster=",
+        " action=",
+        " formaction=",
+        " xlink:href=",
+        " ping=",
+        "\"//",
+        "'//",
+        " onclick=",
+        " onload=",
+        " onerror=",
+        " onchange=",
+        " oninput=",
+        " onsubmit=",
+        "<meta http-equiv=\"refresh\"",
+        "<meta http-equiv='refresh'",
+    ]
+    .iter()
+    .any(|marker| html.contains(marker))
+    {
+        return false;
+    }
+    attributes(html, "src")
+        .iter()
+        .all(|value| value.starts_with("data:"))
+        && attributes(html, "href").iter().all(|value| {
+            value.starts_with('#')
+                || value == &"gallery.html"
+                || (value.starts_with("mockups/") && value.ends_with(".html"))
+        })
+        && css_urls(html)
+            .iter()
+            .all(|value| value.starts_with("data:"))
+}
+
+fn attributes<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
+    let mut values = Vec::new();
+    for quote in ['\"', '\''] {
+        let marker = format!(" {name}={quote}");
+        let mut rest = html;
+        while let Some(start) = rest.find(&marker) {
+            let value = &rest[start + marker.len()..];
+            let Some(end) = value.find(quote) else {
+                values.push("");
+                break;
+            };
+            values.push(value[..end].trim());
+            rest = &value[end + quote.len_utf8()..];
+        }
+    }
+    values
+}
+
+fn css_urls(html: &str) -> Vec<&str> {
+    let mut values = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("url(") {
+        let value = &rest[start + 4..];
+        let Some(end) = value.find(')') else {
+            values.push("");
+            break;
+        };
+        values.push(value[..end].trim().trim_matches(['\"', '\'']));
+        rest = &value[end + 1..];
+    }
+    values
 }
 
 fn require_regular_file(path: &Path, label: &str) -> Result<(), AgentError> {
@@ -492,7 +741,7 @@ fn fenced_block<'a>(text: &'a str, language: &str) -> Option<&'a str> {
     Some(body[..end].trim())
 }
 
-fn digest_tree(root: &Path) -> Result<String, AgentError> {
+fn package_files(root: &Path) -> Result<Vec<PathBuf>, AgentError> {
     fn visit(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), AgentError> {
         for entry in std::fs::read_dir(dir)
             .map_err(|error| AgentError::Prompt(format!("reading package tree: {error}")))?
@@ -526,7 +775,24 @@ fn digest_tree(root: &Path) -> Result<String, AgentError> {
             "the package exceeded the file-count evidence bound".into(),
         ));
     }
-    let mut total = 0u64;
+    let total = files.iter().try_fold(0u64, |total, path| {
+        let size = std::fs::metadata(path)
+            .map_err(|error| AgentError::Prompt(format!("reading package metadata: {error}")))?
+            .len();
+        let total = total.saturating_add(size);
+        if total > MAX_PACKAGE_BYTES {
+            return Err(AgentError::Prompt(
+                "the package exceeded the 10 MiB evidence bound".into(),
+            ));
+        }
+        Ok(total)
+    })?;
+    let _ = total;
+    Ok(files)
+}
+
+fn digest_tree(root: &Path) -> Result<String, AgentError> {
+    let files = package_files(root)?;
     let mut hasher = Sha256::new();
     for path in files {
         let relative = path
@@ -534,12 +800,6 @@ fn digest_tree(root: &Path) -> Result<String, AgentError> {
             .map_err(|_| AgentError::Prompt("package path escaped root".into()))?;
         let bytes = std::fs::read(&path)
             .map_err(|error| AgentError::Prompt(format!("reading package artifact: {error}")))?;
-        total = total.saturating_add(bytes.len() as u64);
-        if total > MAX_PACKAGE_BYTES {
-            return Err(AgentError::Prompt(
-                "the package exceeded the 10 MiB evidence bound".into(),
-            ));
-        }
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0]);
         hasher.update(&bytes);
@@ -550,6 +810,259 @@ fn digest_tree(root: &Path) -> Result<String, AgentError> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Re-run every package and Git invariant without spawning an agent or
+/// mutating the checkout. Expected validation failures are structured data so
+/// the approval surface can explain the exact blocker.
+pub async fn verify_existing(
+    project_dir: &Path,
+    spec: &SpecVersion,
+) -> ArchitecturePackageValidation {
+    match verify_existing_inner(project_dir, spec).await {
+        Ok(validated) => ArchitecturePackageValidation {
+            valid: true,
+            package_digest: validated.package_digest,
+            manifest_digest: validated.manifest_digest,
+            commit_sha: spec
+                .provenance
+                .as_ref()
+                .map(|value| value.package_commit_sha.clone())
+                .unwrap_or_default(),
+            tree_sha: spec
+                .provenance
+                .as_ref()
+                .map(|value| value.package_tree_sha.clone())
+                .unwrap_or_default(),
+            file_count: validated.file_count,
+            gallery_path: "gallery.html".into(),
+            scenarios: validated.scenarios,
+            findings: vec![
+                ArchitectureValidationFinding {
+                    code: "git_commit_tree_verified".into(),
+                    message: "Pinned commit and full tree match the draft provenance.".into(),
+                },
+                ArchitectureValidationFinding {
+                    code: "design_tree_clean".into(),
+                    message: "The live design tree is byte-identical to the pinned commit.".into(),
+                },
+                ArchitectureValidationFinding {
+                    code: "manifest_complete".into(),
+                    message:
+                        "Every deliverable and P0 comparison contract is declared and present."
+                            .into(),
+                },
+                ArchitectureValidationFinding {
+                    code: "static_assets_safe".into(),
+                    message: "All artifacts are confined, self-contained and network-free.".into(),
+                },
+                ArchitectureValidationFinding {
+                    code: "content_digests_verified".into(),
+                    message: "Manifest and package content digests match the draft.".into(),
+                },
+            ],
+        },
+        Err(error) => invalid_validation(spec, error.to_string()),
+    }
+}
+
+async fn verify_existing_inner(
+    project_dir: &Path,
+    spec: &SpecVersion,
+) -> Result<ValidatedPackage, AgentError> {
+    let provenance = spec
+        .provenance
+        .as_ref()
+        .ok_or_else(|| AgentError::Prompt("draft has no immutable Architect provenance".into()))?;
+    let design = Path::new(&spec.design_dir);
+    if design.is_absolute()
+        || !spec.design_dir.starts_with("design/v")
+        || !spec.design_dir.ends_with('/')
+        || design.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(AgentError::Prompt(
+            "draft design directory is outside the versioned package scope".into(),
+        ));
+    }
+
+    let commit_object = format!("{}^{{commit}}", provenance.package_commit_sha);
+    if git_text(project_dir, &["rev-parse", "--verify", &commit_object]).await?
+        != provenance.package_commit_sha
+    {
+        return Err(AgentError::Prompt(
+            "pinned architecture commit no longer resolves exactly".into(),
+        ));
+    }
+    let commit_tree = format!("{}^{{tree}}", provenance.package_commit_sha);
+    if git_text(project_dir, &["rev-parse", &commit_tree]).await? != provenance.package_tree_sha {
+        return Err(AgentError::Prompt(
+            "pinned architecture commit tree does not match the draft".into(),
+        ));
+    }
+    if !git_success(
+        project_dir,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &provenance.package_commit_sha,
+            "HEAD",
+        ],
+    )
+    .await?
+    {
+        return Err(AgentError::Prompt(
+            "pinned architecture commit is not an ancestor of the current checkout".into(),
+        ));
+    }
+    if !git_success(
+        project_dir,
+        &[
+            "diff",
+            "--quiet",
+            &provenance.package_commit_sha,
+            "HEAD",
+            "--",
+            &spec.design_dir,
+        ],
+    )
+    .await?
+        || !git_text(
+            project_dir,
+            &["status", "--porcelain=v1", "--", &spec.design_dir],
+        )
+        .await?
+        .is_empty()
+    {
+        return Err(AgentError::Prompt(
+            "architecture package bytes changed after the draft was created; start a new version"
+                .into(),
+        ));
+    }
+
+    let root = project_dir.join(spec.design_dir.trim_end_matches('/'));
+    if std::fs::symlink_metadata(&root)
+        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        .unwrap_or(true)
+    {
+        return Err(AgentError::Prompt(
+            "architecture package root is missing or not a regular directory".into(),
+        ));
+    }
+    let validated = validate_package(&root, &provenance.skill_digest, provenance.operating_mode)?;
+    if validated.package_digest != provenance.package_digest
+        || validated.manifest_digest != provenance.manifest_digest
+    {
+        return Err(AgentError::Prompt(
+            "architecture package content digest does not match the draft".into(),
+        ));
+    }
+    Ok(validated)
+}
+
+fn invalid_validation(spec: &SpecVersion, message: String) -> ArchitecturePackageValidation {
+    let provenance = spec.provenance.as_ref();
+    ArchitecturePackageValidation {
+        valid: false,
+        package_digest: provenance
+            .map(|value| value.package_digest.clone())
+            .unwrap_or_default(),
+        manifest_digest: provenance
+            .map(|value| value.manifest_digest.clone())
+            .unwrap_or_default(),
+        commit_sha: provenance
+            .map(|value| value.package_commit_sha.clone())
+            .unwrap_or_default(),
+        tree_sha: provenance
+            .map(|value| value.package_tree_sha.clone())
+            .unwrap_or_default(),
+        file_count: 0,
+        gallery_path: "gallery.html".into(),
+        scenarios: Vec::new(),
+        findings: vec![ArchitectureValidationFinding {
+            code: "immutable_package_invalid".into(),
+            message,
+        }],
+    }
+}
+
+pub async fn read_artifact(
+    project_dir: &Path,
+    spec: &SpecVersion,
+    relative_path: &str,
+) -> Result<String, AgentError> {
+    let verification = verify_existing(project_dir, spec).await;
+    if !verification.valid {
+        return Err(AgentError::Prompt(
+            "architecture package is no longer valid; artifact access is blocked".into(),
+        ));
+    }
+    let path = Path::new(relative_path);
+    if relative_path.is_empty()
+        || path.is_absolute()
+        || !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("md" | "html")
+        )
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(AgentError::Prompt(
+            "only confined Markdown or HTML architecture artifacts may be read".into(),
+        ));
+    }
+    let provenance = spec
+        .provenance
+        .as_ref()
+        .ok_or_else(|| AgentError::Prompt("architecture artifact has no pinned commit".into()))?;
+    let object = format!(
+        "{}:{}{}",
+        provenance.package_commit_sha, spec.design_dir, relative_path
+    );
+    let bytes = git_bytes(project_dir, &["show", &object]).await?;
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        return Err(AgentError::Prompt(
+            "architecture artifact exceeds the rendering bound".into(),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| AgentError::Prompt("architecture artifact is not UTF-8".into()))
+}
+
+async fn git_success(dir: &Path, args: &[&str]) -> Result<bool, AgentError> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(|error| AgentError::Prompt(format!("reading Git evidence: {error}")))?;
+    Ok(output.status.success())
+}
+
+async fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, AgentError> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(|error| AgentError::Prompt(format!("reading Git artifact: {error}")))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(AgentError::Prompt(
+            "the requested architecture artifact is absent from the pinned commit".into(),
+        ))
+    }
 }
 
 async fn git_ok(dir: &Path, args: &[&str]) -> Result<(), AgentError> {
@@ -606,4 +1119,32 @@ fn truncate(mut value: String, limit: usize) -> String {
         value.push_str("\n… truncated");
     }
     value
+}
+
+#[cfg(test)]
+mod html_safety_tests {
+    use super::html_is_self_contained;
+
+    #[test]
+    fn static_gallery_links_and_data_assets_are_allowed() {
+        assert!(html_is_self_contained(
+            r#"<html><a href="mockups/home.html">Home</a><img src="data:image/png;base64,AA=="><style>.x{background:url('data:image/png;base64,AA==')}</style></html>"#,
+        ));
+    }
+
+    #[test]
+    fn scripts_and_every_network_shaped_dependency_are_rejected() {
+        for html in [
+            r#"<script>fetch('/secret')</script>"#,
+            r#"<img src="//example.com/image.png">"#,
+            r#"<style>@import "theme.css";</style>"#,
+            r#"<div style="background:url(asset.png)"></div>"#,
+            r#"<button onclick="fetch('/x')">X</button>"#,
+        ] {
+            assert!(
+                !html_is_self_contained(html),
+                "accepted unsafe HTML: {html}"
+            );
+        }
+    }
 }

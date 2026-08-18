@@ -12,7 +12,7 @@
 //! spec-list read, which ProposeSpec needs to number versions.
 
 use super::{DispatchTask, DispatchTaskInput, UseCaseError};
-use crate::manager_actions::{parse_reply, ManagerAction};
+use crate::manager_actions::{ManagerAction, parse_reply};
 use crate::store::Store;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{MessageId, ProjectId, RoleId, SpecVersionId, TaskId};
@@ -207,9 +207,9 @@ impl<A: AgentChannel + Clone> ManagerTurn<A> {
 mod tests {
     use super::*;
     use crate::store::test_fixtures;
+    use latoile_core::Run;
     use latoile_core::ids::RunId;
     use latoile_core::ports::PortResult;
-    use latoile_core::Run;
 
     #[derive(Clone)]
     struct FakeAgents;
@@ -220,6 +220,13 @@ mod tests {
         }
         async fn start_run(&self, _project: &ProjectId, _r: &Run, _p: &str) -> PortResult<String> {
             Ok("acp-fake".into())
+        }
+        async fn verify_architecture_package(
+            &self,
+            _project: &ProjectId,
+            spec: &latoile_core::SpecVersion,
+        ) -> PortResult<latoile_core::ArchitecturePackageValidation> {
+            Ok(test_fixtures::test_verification(spec))
         }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
             Ok(())
@@ -263,9 +270,11 @@ mod tests {
         assert_eq!(tasks[0].title, "Login page");
         let events = store.events_since(0).await.unwrap();
         assert!(events.iter().any(|(_, e)| e.kind == EventKind::TaskReady));
-        assert!(events
-            .iter()
-            .any(|(_, e)| e.kind == EventKind::MessagePosted));
+        assert!(
+            events
+                .iter()
+                .any(|(_, e)| e.kind == EventKind::MessagePosted)
+        );
     }
 
     #[tokio::test]
@@ -283,11 +292,13 @@ mod tests {
         let cards: serde_json::Value =
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Dispatch refused: Login page");
-        assert!(store
-            .list_for_project(&test_fixtures::PROJECT)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .list_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

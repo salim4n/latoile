@@ -49,6 +49,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   root and rejects shell, path traversal and every production/config mutation.
   Only a bounded, inventory-complete package commit may fast-forward the live
   checkout (ADR-010).
+- A visual manifest enumerates every package file and declares each P0 screen,
+  state, locale, viewport, scale factor, stable comparison id and mockup. HTML
+  pins the declared metadata and the shared design-token digest.
 - Raw ACP tool input and hidden reasoning never enter events, run artifacts,
   approval payloads, logs or canary evidence.
 
@@ -59,8 +62,12 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - `EVENT` is append-only; `seq` is the only SSE cursor.
 - Design artifacts never go into the DB (ADR-003).
 - Architecture metadata pins skill digest, operating mode, package digest,
-  commit SHA and tree SHA. Package bytes remain in Git; session + draft +
+  manifest digest, commit SHA and tree SHA. Package bytes remain in Git; session + draft +
   creation event persist atomically.
+- A spec can transition to approved only with a fresh verification matching
+  every pinned digest. Supersession, approval, project status, waiting-task
+  binding and the audit event persist in one transaction. Later design-tree
+  drift blocks artifact reads, dispatch and Reviewer context until a new draft.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked
@@ -93,6 +100,8 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - The bearer-aware SSE reader is confined to `events.ts`, parses frames without
   casts and exposes only event kind/payload strings. External Reviewer JSON is
   runtime-validated by `reviewPayload.ts` and degrades safely when malformed.
+- The owner sees structured package findings and the exact static gallery from
+  the pinned commit before the approval action becomes available.
 - Mobile-first: every screen is designed at 390px viewport first.
 - No mock data outside a `fixtures/` directory clearly excluded from real routes (Firetower lesson V-M2).
 

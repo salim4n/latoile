@@ -73,6 +73,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+async function requestText(path: string): Promise<string> {
+  const token = getToken();
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    throw new ApiError(0, "unreachable", "network");
+  }
+  if (response.status === 401) {
+    setToken(null);
+    unauthorizedHandler();
+    throw new ApiError(401, "unauthorized", "token required");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status,
+      body?.code ?? "error",
+      body?.message ?? response.statusText,
+    );
+  }
+  return response.text();
+}
+
 // ── DTOs (mirror crates/server/src/routes/dto.rs) ───────────────────────────
 
 export interface Project {
@@ -174,11 +200,51 @@ export interface ArchitectureSession {
     head_sha: string;
     tree_sha: string;
     package_digest: string;
+    manifest_digest: string;
     changed_files: string[];
     diff_stat: string;
   };
   failure_reason?: string;
   questions: ArchitectureQuestion[];
+}
+
+export interface SpecVersion {
+  id: string;
+  project_id: string;
+  version: number;
+  status: "draft" | "approved" | "superseded";
+  design_dir: string;
+  architecture_session_id?: string;
+  skill_name?: string;
+  skill_digest?: string;
+  operating_mode?: "greenfield" | "reverse_engineering";
+  package_digest?: string;
+  manifest_digest?: string;
+  package_commit_sha?: string;
+  package_tree_sha?: string;
+}
+
+export interface ArchitectureVisualScenario {
+  comparison_id: string;
+  screen: string;
+  state: string;
+  locale: string;
+  viewport_width: number;
+  viewport_height: number;
+  device_scale_factor_milli: number;
+  mockup: string;
+}
+
+export interface ArchitecturePackageValidation {
+  valid: boolean;
+  package_digest: string;
+  manifest_digest: string;
+  commit_sha: string;
+  tree_sha: string;
+  file_count: number;
+  gallery_path: string;
+  scenarios: ArchitectureVisualScenario[];
+  findings: { code: string; message: string }[];
 }
 
 export interface Preview {
@@ -248,6 +314,14 @@ export const api = {
     ),
   architecture: (project: string) =>
     request<ArchitectureSession | null>(`/api/projects/${project}/architecture`),
+  specs: (project: string) =>
+    request<SpecVersion[]>(`/api/projects/${project}/spec-versions`),
+  validateSpec: (spec: string) =>
+    request<ArchitecturePackageValidation>(`/api/spec-versions/${spec}/validation`),
+  approveSpec: (spec: string) =>
+    request<SpecVersion>(`/api/spec-versions/${spec}/approve`, { method: "POST" }),
+  specArtifact: (spec: string, path: string) =>
+    requestText(`/api/spec-versions/${spec}/artifacts/${path}`),
   cancelArchitecture: (project: string) =>
     request<ArchitectureSession>(`/api/projects/${project}/architecture`, {
       method: "DELETE",

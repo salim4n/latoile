@@ -29,8 +29,9 @@ pub mod task;
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
 pub use architecture::{
     ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageStatus,
-    ArchitecturePhase, ArchitectureQuestion, ArchitectureQuestionStatus, ArchitectureSession,
-    ArchitectureStatus, ARCHITECT_SKILL_NAME,
+    ArchitecturePackageValidation, ArchitecturePhase, ArchitectureQuestion,
+    ArchitectureQuestionStatus, ArchitectureSession, ArchitectureStatus,
+    ArchitectureValidationFinding, ArchitectureVisualScenario, ARCHITECT_SKILL_NAME,
 };
 pub use conversation::{Author, Conversation, Message};
 pub use delivery::{Delivery, DeliveryStatus};

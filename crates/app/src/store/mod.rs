@@ -23,6 +23,7 @@ mod role;
 mod run;
 mod setting;
 mod spec;
+mod spec_approval;
 mod task;
 
 pub use approval::InboxApprovalRow;
@@ -174,15 +175,64 @@ impl Store {
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::*;
-    use latoile_core::ports::{ProjectStore, RunStore, SpecStore, TaskStore};
+    use latoile_core::ports::{ArchitectureSessionStore, ProjectStore, RunStore, SpecStore, TaskStore};
     use latoile_core::{
-        Project, ProjectId, RoleId, Run, RunId, SpecVersion, SpecVersionId, Task, TaskId,
+        ArchitectureOperatingMode, ArchitecturePackageValidation, ArchitectureVisualScenario,
+        Project, ProjectId, RoleId, Run, RunId, SpecProvenance, SpecVersion, SpecVersionId, Task,
+        TaskId,
     };
     use std::sync::LazyLock;
 
     pub(crate) static PROJECT: LazyLock<ProjectId> =
         LazyLock::new(|| ProjectId::new("p1").unwrap());
     pub(crate) const SPEC: &str = "s1";
+
+    pub(crate) fn attach_test_provenance(spec: &mut SpecVersion) {
+        spec.attach_provenance(SpecProvenance {
+            architecture_session_id: latoile_core::ArchitectureSessionId::new("architecture-1")
+                .unwrap(),
+            skill_name: latoile_core::ARCHITECT_SKILL_NAME.into(),
+            skill_digest: "a".repeat(64),
+            operating_mode: ArchitectureOperatingMode::Greenfield,
+            package_digest: "b".repeat(64),
+            manifest_digest: "c".repeat(64),
+            package_commit_sha: "1".repeat(40),
+            package_tree_sha: "2".repeat(40),
+        })
+        .unwrap();
+    }
+
+    pub(crate) async fn seed_test_architecture_session(store: &Store) {
+        let session = latoile_core::ArchitectureSession::new(
+            latoile_core::ArchitectureSessionId::new("architecture-1").unwrap(),
+            PROJECT.clone(),
+        );
+        ArchitectureSessionStore::save(store, &session).await.unwrap();
+    }
+
+    pub(crate) fn test_verification(spec: &SpecVersion) -> ArchitecturePackageValidation {
+        let provenance = spec.provenance.as_ref().unwrap();
+        ArchitecturePackageValidation {
+            valid: true,
+            package_digest: provenance.package_digest.clone(),
+            manifest_digest: provenance.manifest_digest.clone(),
+            commit_sha: provenance.package_commit_sha.clone(),
+            tree_sha: provenance.package_tree_sha.clone(),
+            file_count: 16,
+            gallery_path: "gallery.html".into(),
+            scenarios: vec![ArchitectureVisualScenario {
+                comparison_id: "home-default".into(),
+                screen: "home".into(),
+                state: "default".into(),
+                locale: "fr-FR".into(),
+                viewport_width: 390,
+                viewport_height: 844,
+                device_scale_factor_milli: 1000,
+                mockup: "mockups/home-default.html".into(),
+            }],
+            findings: Vec::new(),
+        }
+    }
 
     pub(crate) async fn store_with_project() -> Store {
         let store = Store::open_ephemeral().await.unwrap();
@@ -202,6 +252,7 @@ pub(crate) mod test_fixtures {
 
     pub(crate) async fn store_with_approved_spec() -> Store {
         let store = store_with_project().await;
+        seed_test_architecture_session(&store).await;
         let mut spec = SpecVersion::new(
             SpecVersionId::new(SPEC).unwrap(),
             PROJECT.clone(),
@@ -210,7 +261,8 @@ pub(crate) mod test_fixtures {
             None,
         )
         .unwrap();
-        spec.approve().unwrap();
+        attach_test_provenance(&mut spec);
+        spec.approve(&test_verification(&spec)).unwrap();
         SpecStore::save(&store, &spec).await.unwrap();
         store
     }

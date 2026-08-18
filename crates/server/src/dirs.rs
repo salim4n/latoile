@@ -6,9 +6,9 @@
 
 use latoile_agents::ProjectDirs;
 use latoile_app::store::Store;
+use latoile_core::Run;
 use latoile_core::ids::ProjectId;
 use latoile_core::ports::ProjectStore;
-use latoile_core::Run;
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone)]
@@ -101,7 +101,7 @@ mod tests {
             None,
         )
         .unwrap();
-        spec.approve().unwrap();
+        crate::tests::approve_test_spec(&store, &mut spec).await;
         latoile_core::ports::SpecStore::save(&store, &spec)
             .await
             .unwrap();

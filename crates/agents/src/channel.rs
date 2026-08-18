@@ -31,6 +31,7 @@ use latoile_core::ports::{
     ManagerReply, PortResult,
 };
 use latoile_core::{ArchitectureOperatingMode, Run};
+use latoile_core::{ArchitecturePackageValidation, SpecVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -517,6 +518,37 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
         )
         .await
         .map_err(Into::into)
+    }
+
+    async fn verify_architecture_package(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+    ) -> PortResult<ArchitecturePackageValidation> {
+        let dir = self
+            .dirs
+            .manager_dir(project)
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
+            .and_then(checked_dir)?;
+        Ok(architecture_package::verify_existing(&dir, spec).await)
+    }
+
+    async fn read_architecture_artifact(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+        relative_path: &str,
+    ) -> PortResult<String> {
+        let dir = self
+            .dirs
+            .manager_dir(project)
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
+            .and_then(checked_dir)?;
+        architecture_package::read_artifact(&dir, spec, relative_path)
+            .await
+            .map_err(Into::into)
     }
 
     async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {

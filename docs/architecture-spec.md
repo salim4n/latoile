@@ -29,6 +29,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D13 | Mutating ACP requests block the run and require an exact, one-shot owner decision; hard denials are never grantable | Trust the agent prompt or auto-allow all workspace tools |
 | D14 | Delivery is an explicit owner action: verify approved SHAs, push without force, verify the remote SHA, then find or create a PR; never merge | Push automatically when a run finishes or merge through the application |
 | D15 | A restart invalidates process-backed rows before HTTP readiness; the service cgroup reaps crash orphans, and backup always pairs SQLite with the external root key | Resume unknown processes, signal persisted PIDs, or back up the database alone |
+| D16 | Spec approval revalidates a complete machine-readable visual manifest and exact Git/content provenance; approval, supersession, task binding and event are one transaction | Trust validation performed only when the Architect originally generated the draft |
 
 ## 3. Domain model
 
@@ -83,8 +84,16 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     mandatory spec/ADR/guardian/flow/token/gallery/P0 inventory, commits the
     package itself and integrates only that verified commit by fast-forward.
 15. A generated draft pins architecture-session id, skill digest, operating
-    mode, package digest, commit SHA and tree SHA. Session, draft and
+    mode, package digest, manifest digest, commit SHA and tree SHA. Session, draft and
     `SpecVersionCreated` event become visible in one SQLite transaction.
+16. The package manifest enumerates every `.md`/`.html` deliverable exactly
+    once. Every P0 contract has a unique stable comparison id, screen, state,
+    locale, viewport, scale factor and mockup whose HTML pins the same fields.
+17. Approval reruns Git ancestry/tree/cleanliness, inventory, network-isolation,
+    token and content-digest checks. It then atomically supersedes the previous
+    spec, approves the exact draft, marks the project specced, binds waiting
+    tasks and journals every immutable digest. Drift blocks approval, artifact
+    rendering, executor dispatch and Reviewer context; a new draft is required.
 
 ### 3.3 Domain events
 
@@ -145,6 +154,7 @@ erDiagram
         text skill_digest "nullable for legacy drafts"
         text operating_mode "greenfield | reverse_engineering"
         text package_digest
+        text manifest_digest
         text package_commit_sha
         text package_tree_sha
         text created_at
@@ -164,6 +174,7 @@ erDiagram
         text package_head_sha
         text package_tree_sha
         text package_digest
+        text package_manifest_digest
     }
     ARCHITECTURE_QUESTION {
         text id PK "ulid"
@@ -351,7 +362,9 @@ sequenceDiagram
 | GET/POST | `/api/projects/:id/tasks` | board / explicit executor dispatch |
 | PATCH | `/api/projects/:id/tasks/:task_id` | reorder one task |
 | GET | `/api/projects/:id/spec-versions` | list draft, approved and superseded specs |
-| POST | `/api/spec-versions/:id/approve` | approve a spec |
+| GET | `/api/spec-versions/:id/validation` | rerun and expose structured immutable package findings |
+| GET | `/api/spec-versions/:id/artifacts/*` | render a revalidated HTML artifact from the pinned commit with restrictive CSP |
+| POST | `/api/spec-versions/:id/approve` | revalidate and atomically approve the exact immutable spec |
 | GET | `/api/runs/:id` | status, summary, base/head SHA and sanitized artifacts |
 | GET | `/api/approvals`, `/api/approvals/:id` | pending inbox / decision detail |
 | POST | `/api/approvals/:id` | `{granted: bool, comment?: string}` for review or permission |

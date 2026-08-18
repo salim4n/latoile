@@ -303,3 +303,51 @@ its HEAD still equals the base. The draft pins package digest, commit and tree.
 + A draft identifies exact skill inputs and exact Git output.
 + A concurrent project HEAD change refuses integration instead of merging stale architecture.
 − Package generation uses an extra worktree and a second ACP process after discovery.
+
+---
+
+# ADR-011 — Approve only a freshly revalidated immutable architecture package
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+A package that was valid when generated can drift before the owner clicks
+approve. A tree digest alone also does not make visual capture deterministic:
+screen state, locale, viewport and stable comparison identity must be explicit.
+Saving spec status, project state, task bindings and an event as separate writes
+can expose a partially approved system after a failure.
+
+## Decision
+
+The fenced manifest enumerates every package file exactly once and declares
+every P0 visual contract with a stable comparison id, screen, state, locale,
+viewport, device scale and mockup. Each mockup pins those fields plus the shared
+design-token digest in its HTML.
+
+Before approval, LaToile proves the pinned commit exists, its full tree matches,
+it is an ancestor of HEAD, the versioned design path is unchanged and clean,
+and every inventory, safety and content digest still passes. The UI exposes the
+structured findings and renders HTML read from that exact commit under a
+restrictive CSP. The domain requires the matching verification proof. SQLite
+then supersedes the predecessor, approves the draft, updates the project, binds
+waiting tasks and writes the immutable audit payload in one transaction.
+Dispatch and Reviewer context revalidate again; any later design drift makes the
+version unusable and requires a new draft.
+
+## Rejected alternatives
+
+- Reuse generation-time validation at approval: leaves a time-of-check gap.
+- Approve a design directory without manifest metadata: baselines become
+  dependent on undocumented browser conventions.
+- Render the mutable checkout directly: the owner may inspect bytes different
+  from the version being approved.
+- Persist approval consequences one row at a time: permits partial state.
+
+## Consequences
+
++ Owner approval refers to exact bytes and deterministic visual scenarios.
++ Drift fails closed everywhere the approved package is consumed.
++ Approval is one auditable database fact with all provenance hashes.
+− Any intentional design edit requires generating and approving a new version.

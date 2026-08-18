@@ -12,6 +12,7 @@ import {
   type Delivery,
   type Message,
   type Preview,
+  type SpecVersion,
   type Task,
 } from "../api";
 import { useAsync, useEventReload, type Async } from "../hooks";
@@ -19,6 +20,7 @@ import { useT, type Key, type Lang } from "../i18n";
 import { Shell } from "../components/Shell";
 import { EmptyState, ErrorState } from "../components/states";
 import { CheckIcon, GearIcon, PlayIcon, SendIcon, WarningIcon } from "../components/icons";
+import { ArchitectureApproval } from "./ArchitectureApproval";
 
 type Tab = "chat" | "board" | "preview";
 
@@ -187,9 +189,11 @@ const ARCHITECTURE_PHASE_KEYS: Record<ArchitectureSession["phase"], Key> = {
 function ArchitecturePanel({
   project,
   architecture,
+  specs,
 }: {
   project: string;
   architecture: Async<ArchitectureSession | null>;
+  specs: Async<SpecVersion[]>;
 }) {
   const { t } = useT();
   const [cancelling, setCancelling] = useState(false);
@@ -275,6 +279,15 @@ function ArchitecturePanel({
           </span>
         </div>
       )}
+      {session.package_status === "draft_ready" && (
+        <ArchitectureApproval
+          draft={(specs.data ?? []).find(
+            (spec) =>
+              spec.status === "draft" && spec.architecture_session_id === session.id,
+          )}
+          specs={specs}
+        />
+      )}
       {openQuestion && (
         <div className="architecture-current">
           <strong>{t("architecture.current_question")}</strong>
@@ -322,11 +335,13 @@ function ChatTab({ project }: { project: string }) {
   const { t, lang } = useT();
   const messages = useAsync(() => api.messages(project), [project]);
   const architecture = useAsync(() => api.architecture(project), [project]);
+  const specs = useAsync(() => api.specs(project), [project]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
   useEventReload(["message_posted"], messages.reload);
   useEventReload(["message_posted"], architecture.reload);
+  useEventReload(["spec_version_created", "spec_approved"], specs.reload);
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -350,7 +365,7 @@ function ChatTab({ project }: { project: string }) {
   const awaitingArchitect = architecture.data?.status === "awaiting_answer";
   return (
     <div className="chat-panel">
-      <ArchitecturePanel project={project} architecture={architecture} />
+      <ArchitecturePanel project={project} architecture={architecture} specs={specs} />
       <div className="chat-thread">
         {messages.loading && <ProjectLoading label={t("chat.loading")} />}
         {messages.error && (

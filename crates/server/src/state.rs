@@ -24,7 +24,7 @@ use latoile_core::ports::{
     PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, WorkBranchPublisher,
     WorkspaceProvisioner,
 };
-use latoile_core::Run;
+use latoile_core::{ArchitecturePackageValidation, Run, SpecVersion};
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
 use latoile_vault::Vault;
@@ -125,6 +125,36 @@ impl AgentChannel for AgentSlot {
             #[cfg(test)]
             Self::Stub(stub) => {
                 stub.generate_architecture_package(project, session, request)
+                    .await
+            }
+        }
+    }
+    async fn verify_architecture_package(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+    ) -> PortResult<ArchitecturePackageValidation> {
+        match self {
+            Self::Real(channel) => channel.verify_architecture_package(project, spec).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.verify_architecture_package(project, spec).await,
+        }
+    }
+    async fn read_architecture_artifact(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+        relative_path: &str,
+    ) -> PortResult<String> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .read_architecture_artifact(project, spec, relative_path)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.read_architecture_artifact(project, spec, relative_path)
                     .await
             }
         }

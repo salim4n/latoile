@@ -27,7 +27,7 @@ async fn seed_running_run(store: &Store, project: &str, run_id: &str) -> RunId {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(store, &mut spec).await;
     SpecStore::save(store, &spec).await.unwrap();
 
     let mut task = Task::new(
@@ -182,11 +182,13 @@ async fn a_restart_rejects_an_orphan_permission_and_fails_the_run() {
         .unwrap()
         .unwrap();
     assert_eq!(closed.status, ApprovalStatus::Rejected);
-    assert!(closed
-        .decision_comment
-        .as_deref()
-        .unwrap()
-        .contains("server restart"));
+    assert!(
+        closed
+            .decision_comment
+            .as_deref()
+            .unwrap()
+            .contains("server restart")
+    );
     assert!(store.list_pending().await.unwrap().is_empty());
     handle.abort();
 }
@@ -262,13 +264,15 @@ async fn startup_recovery_closes_all_process_claims_before_serving() {
             .status,
         TaskStatus::Ready
     );
-    assert!(store
-        .events_since(0)
-        .await
-        .unwrap()
-        .iter()
-        .any(|(_, event)| event.kind == EventKind::PreviewError
-            && event.payload.contains("restart_preview")));
+    assert!(
+        store
+            .events_since(0)
+            .await
+            .unwrap()
+            .iter()
+            .any(|(_, event)| event.kind == EventKind::PreviewError
+                && event.payload.contains("restart_preview"))
+    );
 
     assert_eq!(
         driver::recover_startup(&state).await.unwrap(),
@@ -303,13 +307,15 @@ async fn the_health_loop_marks_a_dead_preview_as_error() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(store.active_previews().await.unwrap().is_empty());
-    assert!(store
-        .events_since(0)
-        .await
-        .unwrap()
-        .iter()
-        .any(|(_, event)| event.kind == EventKind::PreviewError
-            && event.payload.contains("process_exited")));
+    assert!(
+        store
+            .events_since(0)
+            .await
+            .unwrap()
+            .iter()
+            .any(|(_, event)| event.kind == EventKind::PreviewError
+                && event.payload.contains("process_exited"))
+    );
     handle.abort();
 }
 
@@ -483,9 +489,11 @@ async fn a_run_the_channel_never_saw_is_lost_to_the_restart() {
     let handle = driver::spawn_every(state, Duration::from_millis(30));
     assert_eq!(wait_terminal(&store, &run).await, RunStatus::Error);
     let events = store.events_since(0).await.unwrap();
-    assert!(events
-        .iter()
-        .any(|(_, e)| e.payload.contains("server restart")));
+    assert!(
+        events
+            .iter()
+            .any(|(_, e)| e.payload.contains("server restart"))
+    );
     handle.abort();
 }
 

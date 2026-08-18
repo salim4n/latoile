@@ -2,7 +2,7 @@
 //! performed by core before upsert; SQLite mirrors the single-active-session
 //! and single-open-question invariants with partial unique indexes.
 
-use super::{unknown_variant, Store, StoreError};
+use super::{Store, StoreError, unknown_variant};
 use latoile_core::ports::{ArchitectureSessionStore, PortResult};
 use latoile_core::{
     ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageStatus,
@@ -75,6 +75,9 @@ fn map_session(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureSession, Sto
                 head_sha: row.try_get::<String, _>("package_head_sha")?,
                 tree_sha: row.try_get::<String, _>("package_tree_sha")?,
                 package_digest: row.try_get::<String, _>("package_digest")?,
+                manifest_digest: row
+                    .try_get::<Option<String>, _>("package_manifest_digest")?
+                    .unwrap_or_default(),
                 changed_files,
                 diff_stat: row.try_get::<String, _>("package_diff_stat")?,
             })
@@ -115,7 +118,7 @@ fn map_question(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureQuestion, S
 
 const SESSION_COLUMNS: &str = "id, project_id, status, phase, acp_session_id, skill_name, \
     skill_digest, operating_mode, package_status, package_design_dir, package_base_sha, \
-    package_head_sha, package_tree_sha, package_digest, package_changed_files, \
+    package_head_sha, package_tree_sha, package_digest, package_manifest_digest, package_changed_files, \
     package_diff_stat, failure_reason";
 const QUESTION_COLUMNS: &str = "id, session_id, sequence, prompt, status, answer";
 
@@ -195,9 +198,9 @@ impl ArchitectureSessionStore for Store {
             "INSERT INTO architecture_session
                (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
                 operating_mode, package_status, package_design_dir, package_base_sha,
-                package_head_sha, package_tree_sha, package_digest, package_changed_files,
-                package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
+                package_changed_files, package_diff_stat, failure_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
@@ -211,6 +214,7 @@ impl ArchitectureSessionStore for Store {
                package_head_sha = excluded.package_head_sha,
                package_tree_sha = excluded.package_tree_sha,
                package_digest = excluded.package_digest,
+               package_manifest_digest = excluded.package_manifest_digest,
                package_changed_files = excluded.package_changed_files,
                package_diff_stat = excluded.package_diff_stat,
                failure_reason = excluded.failure_reason,
@@ -230,6 +234,7 @@ impl ArchitectureSessionStore for Store {
         .bind(package.map(|value| value.head_sha.as_str()))
         .bind(package.map(|value| value.tree_sha.as_str()))
         .bind(package.map(|value| value.package_digest.as_str()))
+        .bind(package.map(|value| value.manifest_digest.as_str()))
         .bind(
             package
                 .map(|value| serde_json::to_string(&value.changed_files))
@@ -347,9 +352,9 @@ impl ArchitectureSessionStore for Store {
             "INSERT INTO architecture_session
                (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
                 operating_mode, package_status, package_design_dir, package_base_sha,
-                package_head_sha, package_tree_sha, package_digest, package_changed_files,
-                package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
+                package_changed_files, package_diff_stat, failure_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
@@ -363,6 +368,7 @@ impl ArchitectureSessionStore for Store {
                package_head_sha = excluded.package_head_sha,
                package_tree_sha = excluded.package_tree_sha,
                package_digest = excluded.package_digest,
+               package_manifest_digest = excluded.package_manifest_digest,
                package_changed_files = excluded.package_changed_files,
                package_diff_stat = excluded.package_diff_stat,
                failure_reason = excluded.failure_reason,
@@ -382,6 +388,7 @@ impl ArchitectureSessionStore for Store {
         .bind(package.map(|value| value.head_sha.as_str()))
         .bind(package.map(|value| value.tree_sha.as_str()))
         .bind(package.map(|value| value.package_digest.as_str()))
+        .bind(package.map(|value| value.manifest_digest.as_str()))
         .bind(
             package
                 .map(|value| serde_json::to_string(&value.changed_files))
@@ -467,8 +474,10 @@ mod tests {
             ArchitectureSessionId::new("as2").unwrap(),
             test_fixtures::PROJECT.clone(),
         );
-        assert!(ArchitectureSessionStore::save(&store, &second)
-            .await
-            .is_err());
+        assert!(
+            ArchitectureSessionStore::save(&store, &second)
+                .await
+                .is_err()
+        );
     }
 }

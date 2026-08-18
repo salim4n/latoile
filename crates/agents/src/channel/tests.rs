@@ -4,10 +4,10 @@ use super::*;
 use crate::config::{AgentCommand, AgentTimeouts};
 use crate::transport::TurnResult;
 use crate::updates::AgentUpdate;
-use latoile_core::ids::{RoleId, TaskId};
-use latoile_core::ports::{ArchitectureDecision, ArchitecturePackageRequest};
-use latoile_core::ArchitectureOperatingMode;
 use latoile_core::TriggeredBy;
+use latoile_core::ids::{RoleId, SpecVersionId, TaskId};
+use latoile_core::ports::{ArchitectureDecision, ArchitecturePackageRequest};
+use latoile_core::{ArchitectureOperatingMode, SpecProvenance, SpecVersion};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::path::Path;
@@ -289,7 +289,7 @@ impl Connection for PackageConn {
             .and_then(|tail| tail.lines().next())
             .unwrap();
         let manifest = format!(
-            "```latoile-package\n{{\"schema_version\":1,\"skill_digest\":\"{skill_digest}\",\"operating_mode\":\"greenfield\",\"p0_scenarios\":[{{\"id\":\"P0-home\",\"screen\":\"Home\",\"mockup\":\"mockups/home.html\"}}]}}\n```\n"
+            "```latoile-package\n{{\"schema_version\":1,\"skill_digest\":\"{skill_digest}\",\"operating_mode\":\"greenfield\",\"deliverables\":[{{\"path\":\"package-manifest.md\",\"kind\":\"manifest\"}},{{\"path\":\"architecture-spec.md\",\"kind\":\"document\"}},{{\"path\":\"domain-model.md\",\"kind\":\"document\"}},{{\"path\":\"data-model.md\",\"kind\":\"document\"}},{{\"path\":\"api-contract.md\",\"kind\":\"document\"}},{{\"path\":\"architecture-blueprint.md\",\"kind\":\"document\"}},{{\"path\":\"component-specification.md\",\"kind\":\"document\"}},{{\"path\":\"stack-decisions.md\",\"kind\":\"document\"}},{{\"path\":\"architecture-contract.md\",\"kind\":\"document\"}},{{\"path\":\"guardian-checklist.md\",\"kind\":\"document\"}},{{\"path\":\"user-flows.md\",\"kind\":\"document\"}},{{\"path\":\"screen-inventory.md\",\"kind\":\"document\"}},{{\"path\":\"design-tokens.md\",\"kind\":\"tokens\"}},{{\"path\":\"gallery.html\",\"kind\":\"gallery\"}},{{\"path\":\"adrs/ADR-001-boundary.md\",\"kind\":\"decision\"}},{{\"path\":\"mockups/home.html\",\"kind\":\"mockup\"}}],\"p0_scenarios\":[{{\"comparison_id\":\"P0-home\",\"screen\":\"Home\",\"state\":\"default\",\"locale\":\"fr-FR\",\"viewport\":{{\"width\":390,\"height\":844,\"device_scale_factor_milli\":1000}},\"mockup\":\"mockups/home.html\"}}]}}\n```\n"
         );
         std::fs::write(root.join("package-manifest.md"), manifest).unwrap();
         for file in [
@@ -319,7 +319,7 @@ impl Connection for PackageConn {
         std::fs::write(
             root.join("mockups/home.html"),
             format!(
-                "<!doctype html><html data-latoile-token-digest=\"{token_digest}\"><body>Home</body></html>"
+                "<!doctype html><html data-latoile-token-digest=\"{token_digest}\" data-latoile-comparison-id=\"P0-home\" data-latoile-screen=\"Home\" data-latoile-state=\"default\" data-latoile-locale=\"fr-FR\" data-latoile-viewport=\"390x844@1000\"><body>Home</body></html>"
             ),
         )
         .unwrap();
@@ -409,10 +409,12 @@ async fn the_acp_adapter_rejects_and_does_not_integrate_an_escape() {
             },
         )
         .await;
-    assert!(result
-        .unwrap_err()
-        .0
-        .contains("outside the static package scope"));
+    assert!(
+        result
+            .unwrap_err()
+            .0
+            .contains("outside the static package scope")
+    );
     assert!(!dir.path().join("src/forbidden.rs").exists());
     let head = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -458,26 +460,78 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
         .unwrap();
 
     assert_eq!(generated.evidence.package_digest.len(), 64);
-    assert!(generated
-        .evidence
-        .changed_files
-        .iter()
-        .all(|path| path.starts_with("design/v0001-as1/")));
-    assert!(dir
-        .path()
-        .join("design/v0001-as1/mockups/home.html")
-        .is_file());
-    let prompt = &log.lock().unwrap()[0];
+    assert!(
+        generated
+            .evidence
+            .changed_files
+            .iter()
+            .all(|path| path.starts_with("design/v0001-as1/"))
+    );
+    assert!(
+        dir.path()
+            .join("design/v0001-as1/mockups/home.html")
+            .is_file()
+    );
+    let prompt = log.lock().unwrap()[0].clone();
     assert!(prompt.contains("references/brainstorming-method.md"));
     assert!(prompt.contains("assets/templates/arch-spec-template.md"));
     assert!(prompt.contains(&bundle.digest));
-    let contexts = contexts.lock().unwrap();
-    assert_eq!(contexts[0].0, "architect_package");
-    assert!(contexts[0]
-        .1
-        .as_ref()
-        .unwrap()
-        .ends_with("design/v0001-as1"));
+    {
+        let contexts = contexts.lock().unwrap();
+        assert_eq!(contexts[0].0, "architect_package");
+        assert!(
+            contexts[0]
+                .1
+                .as_ref()
+                .unwrap()
+                .ends_with("design/v0001-as1")
+        );
+    }
+
+    let mut spec = SpecVersion::new(
+        SpecVersionId::new("spec-1").unwrap(),
+        project(),
+        1,
+        "design/v0001-as1/",
+        None,
+    )
+    .unwrap();
+    spec.attach_provenance(SpecProvenance {
+        architecture_session_id: architecture_session(),
+        skill_name: latoile_core::ARCHITECT_SKILL_NAME.into(),
+        skill_digest: bundle.digest,
+        operating_mode: ArchitectureOperatingMode::Greenfield,
+        package_digest: generated.evidence.package_digest,
+        manifest_digest: generated.evidence.manifest_digest,
+        package_commit_sha: generated.evidence.head_sha,
+        package_tree_sha: generated.evidence.tree_sha,
+    })
+    .unwrap();
+    let verified = channel
+        .verify_architecture_package(&project(), &spec)
+        .await
+        .unwrap();
+    assert!(verified.valid);
+    assert_eq!(verified.scenarios[0].comparison_id, "P0-home");
+    assert!(
+        channel
+            .read_architecture_artifact(&project(), &spec, "gallery.html")
+            .await
+            .unwrap()
+            .contains("mockups/home.html")
+    );
+
+    std::fs::write(
+        dir.path().join("design/v0001-as1/mockups/home.html"),
+        "changed after draft",
+    )
+    .unwrap();
+    let drifted = channel
+        .verify_architecture_package(&project(), &spec)
+        .await
+        .unwrap();
+    assert!(!drifted.valid);
+    assert_eq!(drifted.findings[0].code, "immutable_package_invalid");
 }
 
 #[tokio::test]

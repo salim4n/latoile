@@ -113,6 +113,7 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
         skill_digest: skill_digest.clone(),
         operating_mode,
         package_digest: generated.evidence.package_digest.clone(),
+        manifest_digest: generated.evidence.manifest_digest.clone(),
         package_commit_sha: generated.evidence.head_sha.clone(),
         package_tree_sha: generated.evidence.tree_sha.clone(),
     })?;
@@ -136,6 +137,7 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
         "skill_digest": skill_digest,
         "operating_mode": operating_mode.as_str(),
         "package_digest": generated.evidence.package_digest,
+        "manifest_digest": generated.evidence.manifest_digest,
         "package_commit_sha": generated.evidence.head_sha,
         "package_tree_sha": generated.evidence.tree_sha,
     }]);

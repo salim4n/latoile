@@ -11,16 +11,66 @@ use latoile_app::store::Store;
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
-    ManagerReply, PortResult, RepoInfo,
+    ArchitectureSessionStore, ManagerReply, PortResult, RepoInfo,
 };
 use latoile_core::{
-    ArchitectureOperatingMode, ArchitecturePackageEvidence, Run, ARCHITECT_SKILL_NAME,
+    ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
+    ArchitecturePackageValidation, ArchitectureValidationFinding, ArchitectureVisualScenario, Run,
+    SpecProvenance, SpecVersion,
 };
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 pub const TOKEN: &str = "test-token";
+
+pub async fn attach_test_spec_provenance(store: &Store, spec: &mut SpecVersion) {
+    let session_id =
+        ArchitectureSessionId::new(format!("architecture-{}", spec.id.as_str())).unwrap();
+    let mut session =
+        latoile_core::ArchitectureSession::new(session_id.clone(), spec.project_id.clone());
+    session.cancel().unwrap();
+    ArchitectureSessionStore::save(store, &session)
+        .await
+        .unwrap();
+    spec.attach_provenance(SpecProvenance {
+        architecture_session_id: session_id,
+        skill_name: ARCHITECT_SKILL_NAME.into(),
+        skill_digest: "a".repeat(64),
+        operating_mode: ArchitectureOperatingMode::Greenfield,
+        package_digest: "b".repeat(64),
+        manifest_digest: "c".repeat(64),
+        package_commit_sha: "1".repeat(40),
+        package_tree_sha: "2".repeat(40),
+    })
+    .unwrap();
+}
+
+pub async fn approve_test_spec(store: &Store, spec: &mut SpecVersion) {
+    attach_test_spec_provenance(store, spec).await;
+    let provenance = spec.provenance.as_ref().unwrap();
+    let verification = ArchitecturePackageValidation {
+        valid: true,
+        package_digest: provenance.package_digest.clone(),
+        manifest_digest: provenance.manifest_digest.clone(),
+        commit_sha: provenance.package_commit_sha.clone(),
+        tree_sha: provenance.package_tree_sha.clone(),
+        file_count: 16,
+        gallery_path: "gallery.html".into(),
+        scenarios: vec![ArchitectureVisualScenario {
+            comparison_id: "home-default-fr-mobile".into(),
+            screen: "home".into(),
+            state: "default".into(),
+            locale: "fr-FR".into(),
+            viewport_width: 390,
+            viewport_height: 844,
+            device_scale_factor_milli: 1000,
+            mockup: "mockups/home-default-fr-mobile.html".into(),
+        }],
+        findings: Vec::new(),
+    };
+    spec.approve(&verification).unwrap();
+}
 
 /// The scripted agent channel: the Manager answers with a canned reply,
 /// runs get a canned session handle. Records what it was told.
@@ -129,11 +179,55 @@ impl AgentChannel for StubAgents {
                 tree_sha: "3333333333333333333333333333333333333333".into(),
                 package_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     .into(),
+                manifest_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    .into(),
                 changed_files: vec![format!("{}architecture-spec.md", request.design_dir)],
                 diff_stat: "14 files changed".into(),
             },
             summary: "Package complete".into(),
         })
+    }
+    async fn verify_architecture_package(
+        &self,
+        _project: &ProjectId,
+        spec: &SpecVersion,
+    ) -> PortResult<ArchitecturePackageValidation> {
+        let provenance = spec.provenance.as_ref().ok_or_else(|| {
+            latoile_core::ports::PortError("draft has no package provenance".into())
+        })?;
+        Ok(ArchitecturePackageValidation {
+            valid: true,
+            package_digest: provenance.package_digest.clone(),
+            manifest_digest: provenance.manifest_digest.clone(),
+            commit_sha: provenance.package_commit_sha.clone(),
+            tree_sha: provenance.package_tree_sha.clone(),
+            file_count: 16,
+            gallery_path: "gallery.html".into(),
+            scenarios: vec![ArchitectureVisualScenario {
+                comparison_id: "home-default-fr-mobile".into(),
+                screen: "home".into(),
+                state: "default".into(),
+                locale: "fr-FR".into(),
+                viewport_width: 390,
+                viewport_height: 844,
+                device_scale_factor_milli: 1000,
+                mockup: "mockups/home-default-fr-mobile.html".into(),
+            }],
+            findings: vec![ArchitectureValidationFinding {
+                code: "stub_verified".into(),
+                message: "Stub package verified.".into(),
+            }],
+        })
+    }
+    async fn read_architecture_artifact(
+        &self,
+        _project: &ProjectId,
+        _spec: &SpecVersion,
+        relative_path: &str,
+    ) -> PortResult<String> {
+        Ok(format!(
+            "<!doctype html><html><body>stub artifact {relative_path}</body></html>"
+        ))
     }
     async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
         self.architecture_messages
@@ -209,10 +303,8 @@ pub async fn state() -> (AppState, Store, StubAgents) {
                 args: vec!["-c".into(), script.into()],
                 env: Vec::new(),
             };
-            let login_claude =
-                "printf 'https://claude.com/oauth/authorize?test=1\\n'; read line; [ \"$line\" = good ]";
-            let login_codex =
-                "printf 'Go to https://auth.openai.com/codex/device and enter TEST-CODE1\\n'; sleep 60";
+            let login_claude = "printf 'https://claude.com/oauth/authorize?test=1\\n'; read line; [ \"$line\" = good ]";
+            let login_codex = "printf 'Go to https://auth.openai.com/codex/device and enter TEST-CODE1\\n'; sleep 60";
             latoile_agents::AgentAuthManager::new(latoile_agents::DEFAULT_TTL)
                 .with_commands(
                     latoile_agents::AuthProvider::Claude,

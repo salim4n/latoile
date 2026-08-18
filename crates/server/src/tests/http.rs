@@ -62,10 +62,12 @@ async fn a_project_is_created_and_listed() {
     let projects = body_json(list).await;
     assert_eq!(projects.as_array().unwrap().len(), 1);
     assert_eq!(projects[0]["slug"], "mon-app");
-    assert!(projects[0]["last_activity_at"]
-        .as_str()
-        .unwrap()
-        .ends_with('Z'));
+    assert!(
+        projects[0]["last_activity_at"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
+    );
 
     let detail = app
         .oneshot(authed(request("GET", &format!("/api/projects/{id}"), None)))
@@ -127,16 +129,20 @@ async fn a_message_is_stored_and_the_manager_answers() {
         .unwrap();
     let thread = body_json(thread).await;
     assert_eq!(thread.as_array().unwrap().len(), 2);
-    assert!(thread
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|message| message["created_at"].as_str().unwrap().ends_with('Z')));
+    assert!(
+        thread
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["created_at"].as_str().unwrap().ends_with('Z'))
+    );
     let events = store.events_since(0).await.unwrap();
     assert_eq!(events.len(), 2);
-    assert!(events
-        .iter()
-        .all(|(_, e)| e.kind == EventKind::MessagePosted));
+    assert!(
+        events
+            .iter()
+            .all(|(_, e)| e.kind == EventKind::MessagePosted)
+    );
 }
 
 #[tokio::test]
@@ -161,10 +167,12 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
     let started = body_json(started).await;
     assert_eq!(started["message"]["author"], "user");
     assert_eq!(started["reply"]["author"], "manager");
-    assert!(started["reply"]["content"]
-        .as_str()
-        .unwrap()
-        .contains("Architecte"));
+    assert!(
+        started["reply"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Architecte")
+    );
 
     assert!(agents.manager_messages.lock().unwrap().is_empty());
     assert_eq!(
@@ -205,10 +213,12 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
         .unwrap();
     assert_eq!(answered.status(), StatusCode::OK);
     let answered = body_json(answered).await;
-    assert!(answered["reply"]["content"]
-        .as_str()
-        .unwrap()
-        .contains("paquet confiné et vérifié"));
+    assert!(
+        answered["reply"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("paquet confiné et vérifié")
+    );
     assert!(agents.manager_messages.lock().unwrap().is_empty());
     assert_eq!(
         agents.architecture_messages.lock().unwrap().as_slice(),
@@ -295,13 +305,15 @@ async fn architecture_discovery_can_be_cancelled_and_stays_observable() {
     assert_eq!(cancelled.status(), StatusCode::OK);
     let cancelled = body_json(cancelled).await;
     assert_eq!(cancelled["status"], "cancelled");
-    assert!(agents
-        .architecture_messages
-        .lock()
-        .unwrap()
-        .last()
-        .unwrap()
-        .starts_with("cancel:"));
+    assert!(
+        agents
+            .architecture_messages
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .starts_with("cancel:")
+    );
 
     let retry = app
         .oneshot(authed(request(
@@ -350,10 +362,12 @@ async fn malformed_architect_output_fails_closed_without_waking_the_manager() {
         .unwrap();
     let architecture = body_json(architecture).await;
     assert_eq!(architecture["status"], "failed");
-    assert!(architecture["failure_reason"]
-        .as_str()
-        .unwrap()
-        .contains("latoile-architecture"));
+    assert!(
+        architecture["failure_reason"]
+            .as_str()
+            .unwrap()
+            .contains("latoile-architecture")
+    );
 }
 
 #[tokio::test]
@@ -371,10 +385,12 @@ async fn dispatch_without_a_spec_is_refused_with_a_domain_error() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body_json(response).await["message"]
-        .as_str()
-        .unwrap()
-        .contains("spec"));
+    assert!(
+        body_json(response).await["message"]
+            .as_str()
+            .unwrap()
+            .contains("spec")
+    );
 }
 
 /// Seed an approved spec, then dispatch: the task starts and its run is on
@@ -393,7 +409,7 @@ async fn dispatch_with_an_approved_spec_starts_a_run() {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(&store, &mut spec).await;
     SpecStore::save(&store, &spec).await.unwrap();
 
     let response = app
@@ -446,7 +462,7 @@ async fn a_manager_reply_with_actions_drives_the_board() {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(&store, &mut spec).await;
     SpecStore::save(&store, &spec).await.unwrap();
 
     *agents.manager_reply.lock().unwrap() = "Je lance le Frontend.\n\n```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Page de connexion\", \"role_id\": \"frontend\", \"prompt\": \"Build it per design/\"}]\n```".into();

@@ -6,7 +6,7 @@ use super::UseCaseError;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ProjectId, RoleId, RunId, TaskId};
 use latoile_core::ports::{AgentChannel, EventLog, RunStore, SpecStore, TaskStore};
-use latoile_core::{Run, Task, TriggeredBy};
+use latoile_core::{DomainError, Run, Task, TriggeredBy};
 
 pub struct DispatchTaskInput {
     pub project_id: ProjectId,
@@ -48,6 +48,18 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
     pub async fn execute(&self, input: DispatchTaskInput) -> Result<DispatchedTask, UseCaseError> {
         // 2. Fetch: the approved spec this task materializes, if any.
         let spec = self.specs.approved_for_project(&input.project_id).await?;
+        if let Some(spec) = &spec {
+            let verification = self
+                .agents
+                .verify_architecture_package(&input.project_id, spec)
+                .await?;
+            if !verification.valid {
+                return Err(DomainError::Invariant(
+                    "the approved architecture package changed; create and approve a new version before dispatch",
+                )
+                .into());
+            }
+        }
 
         // 3. Domain. `Task::new` validates the title; `start` refuses
         // without a spec — before anything hits the database.
@@ -126,6 +138,13 @@ mod tests {
         ) -> PortResult<String> {
             Ok("acp-session-1".into())
         }
+        async fn verify_architecture_package(
+            &self,
+            _project: &ProjectId,
+            spec: &latoile_core::SpecVersion,
+        ) -> PortResult<latoile_core::ArchitecturePackageValidation> {
+            Ok(test_fixtures::test_verification(spec))
+        }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
             Ok(())
         }
@@ -191,19 +210,24 @@ mod tests {
             store.clone(),
         );
 
-        assert!(uc
-            .execute(input(test_fixtures::PROJECT.clone()))
-            .await
-            .is_err());
-        assert!(store
-            .list_for_project(&test_fixtures::PROJECT)
-            .await
-            .unwrap()
-            .is_empty());
-        assert!(store
-            .since(&test_fixtures::PROJECT, 0)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            uc.execute(input(test_fixtures::PROJECT.clone()))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .list_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .since(&test_fixtures::PROJECT, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
