@@ -16,7 +16,9 @@ use crate::manager_actions::{parse_reply, ManagerAction};
 use crate::store::Store;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{MessageId, ProjectId, RoleId, SpecVersionId, TaskId};
-use latoile_core::ports::{AgentChannel, ConversationStore, EventLog, ManagerReply, SpecStore, TaskStore};
+use latoile_core::ports::{
+    AgentChannel, ConversationStore, EventLog, ManagerReply, SpecStore, TaskStore,
+};
 use latoile_core::{Author, Message, SpecVersion, Task, TriggeredBy};
 
 pub struct ManagerTurn<A> {
@@ -216,7 +218,7 @@ mod tests {
         async fn tell_manager(&self, _p: &ProjectId, _m: &str) -> PortResult<ManagerReply> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, _p: &str) -> PortResult<String> {
+        async fn start_run(&self, _project: &ProjectId, _r: &Run, _p: &str) -> PortResult<String> {
             Ok("acp-fake".into())
         }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
@@ -253,12 +255,17 @@ mod tests {
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Task created: Login page → frontend");
 
-        let tasks = store.list_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let tasks = store
+            .list_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Login page");
         let events = store.events_since(0).await.unwrap();
         assert!(events.iter().any(|(_, e)| e.kind == EventKind::TaskReady));
-        assert!(events.iter().any(|(_, e)| e.kind == EventKind::MessagePosted));
+        assert!(events
+            .iter()
+            .any(|(_, e)| e.kind == EventKind::MessagePosted));
     }
 
     #[tokio::test]
@@ -305,7 +312,10 @@ mod tests {
         let cards: serde_json::Value =
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Run started — Login page");
-        let tasks = store.list_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let tasks = store
+            .list_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(tasks[0].status, latoile_core::TaskStatus::InProgress);
     }
 
@@ -328,7 +338,10 @@ mod tests {
             .await
             .unwrap();
 
-        let specs = store.specs_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let specs = store
+            .specs_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(specs[0].version, 2);
         assert_eq!(specs[0].status, latoile_core::SpecStatus::Draft);
         assert_eq!(outcome.warnings.len(), 0);

@@ -72,11 +72,11 @@ impl AgentChannel for AgentSlot {
             Self::Stub(stub) => stub.tell_manager(project, message).await,
         }
     }
-    async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String> {
+    async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {
         match self {
-            Self::Real(channel) => channel.start_run(run, prompt).await,
+            Self::Real(channel) => channel.start_run(project, run, prompt).await,
             #[cfg(test)]
-            Self::Stub(stub) => stub.start_run(run, prompt).await,
+            Self::Stub(stub) => stub.start_run(project, run, prompt).await,
         }
     }
     async fn resolve_permission(

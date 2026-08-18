@@ -1,12 +1,13 @@
 //! Project directory resolution for the agent channel: the project's
-//! `local_path` from the store — the checkout the code lives in. Run dirs go
-//! run → task → project. Unknown anything resolves to `None`; the channel
+//! `local_path` from the store — the checkout the code lives in. A run's
+//! project is explicit because new task/run rows are persisted only after a
+//! successful ACP handshake. Unknown projects resolve to `None`; the channel
 //! turns that into a clean error before spawning.
 
 use latoile_agents::ProjectDirs;
 use latoile_app::store::Store;
 use latoile_core::ids::ProjectId;
-use latoile_core::ports::{ProjectStore, RunStore, TaskStore};
+use latoile_core::ports::ProjectStore;
 use latoile_core::Run;
 use std::path::{Component, Path, PathBuf};
 
@@ -58,15 +59,11 @@ impl ProjectDirs for StoreDirs {
 
     fn run_dir<'a>(
         &'a self,
-        run: &'a Run,
+        project: &'a ProjectId,
+        _run: &'a Run,
     ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a {
         async move {
-            let run = RunStore::get(&self.store, &run.id).await.ok().flatten()?;
-            let task = TaskStore::get(&self.store, &run.task_id)
-                .await
-                .ok()
-                .flatten()?;
-            ProjectStore::get(&self.store, &task.project_id)
+            ProjectStore::get(&self.store, project)
                 .await
                 .ok()
                 .flatten()
@@ -79,6 +76,7 @@ impl ProjectDirs for StoreDirs {
 mod tests {
     use super::*;
     use latoile_core::ids::{RoleId, RunId, SpecVersionId, TaskId};
+    use latoile_core::ports::{RunStore, TaskStore};
     use latoile_core::{Project, Run as RunEntity, SpecVersion, Task, TriggeredBy};
 
     async fn store_with_run(local_path: &str) -> (Store, RunEntity, ProjectId) {
@@ -141,11 +139,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_run_resolves_through_its_task() {
-        let (store, run, _) = store_with_run("/srv/latoile/mon-app").await;
+    async fn a_new_unpersisted_run_resolves_from_its_explicit_project() {
+        let (store, persisted, project) = store_with_run("/srv/latoile/mon-app").await;
+        let run = RunEntity::new(
+            RunId::new("not-persisted-yet").unwrap(),
+            persisted.task_id,
+            RoleId::new("frontend").unwrap(),
+            TriggeredBy::Manager,
+        );
         let dirs = StoreDirs::new(store, PathBuf::from("/srv/latoile/workspace"));
         assert_eq!(
-            dirs.run_dir(&run).await,
+            dirs.run_dir(&project, &run).await,
             Some(PathBuf::from("/srv/latoile/mon-app"))
         );
     }

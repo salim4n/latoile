@@ -57,7 +57,7 @@ impl AgentChannel for StubAgents {
             actions: None,
         })
     }
-    async fn start_run(&self, r: &Run, prompt: &str) -> PortResult<String> {
+    async fn start_run(&self, _project: &ProjectId, r: &Run, prompt: &str) -> PortResult<String> {
         // Registered as running so the supervision driver can be scripted:
         // tests flip the entry to Done/Failed when the "agent" is done.
         self.run_states

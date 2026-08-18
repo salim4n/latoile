@@ -88,6 +88,7 @@ pub trait ProjectDirs: Send + Sync {
     ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a;
     fn run_dir<'a>(
         &'a self,
+        project: &'a ProjectId,
         run: &'a Run,
     ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a;
 }
@@ -105,6 +106,7 @@ impl ProjectDirs for RootDirs {
     }
     fn run_dir<'a>(
         &'a self,
+        _project: &'a ProjectId,
         _run: &'a Run,
     ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'a {
         async move { Some(self.0.clone()) }
@@ -336,10 +338,10 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
         }
     }
 
-    async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String> {
+    async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {
         let dir = self
             .dirs
-            .run_dir(run)
+            .run_dir(project, run)
             .await
             .ok_or_else(|| AgentError::NoWorkspace(format!("run {}", run.id.as_str())))
             .and_then(checked_dir)?;

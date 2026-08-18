@@ -73,6 +73,7 @@ The web UI is embedded via rust-embed: **release builds bake `web/dist` into the
 - [`docs/adrs.md`](docs/adrs.md) — the four founding decisions and their rejected alternatives
 - [`ARCHITECTURE_CONTRACT.md`](ARCHITECTURE_CONTRACT.md) — verifiable rules (layers, secrets, errors, tests)
 - [`docs/guardian-checklist.md`](docs/guardian-checklist.md) — anti-drift checks to run before merging
+- [`docs/v1-canary.md`](docs/v1-canary.md) — opt-in real-provider vertical-slice proof and cleanup
 
 ## Status
 

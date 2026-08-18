@@ -522,7 +522,7 @@ pub async fn start_review<A: AgentChannel>(
         if context.is_empty() { "(no execution context available)" } else { context },
     );
 
-    match agents.start_run(&run, &prompt).await {
+    match agents.start_run(&task.project_id, &run, &prompt).await {
         Ok(session) => {
             run.acp_session_id = Some(session);
             run.begin()?;

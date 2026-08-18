@@ -282,7 +282,12 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
         ) -> Result<ManagerReply, PortError> {
             unimplemented!()
         }
-        async fn start_run(&self, _: &Run, _: &str) -> Result<String, PortError> {
+        async fn start_run(
+            &self,
+            _: &latoile_core::ids::ProjectId,
+            _: &Run,
+            _: &str,
+        ) -> Result<String, PortError> {
             Ok("acp-review".into())
         }
         async fn cancel_run(&self, _: &RunId) -> Result<(), PortError> {
@@ -444,7 +449,12 @@ async fn the_reviewer_is_dispatched_on_a_task_in_review() {
         ) -> Result<ManagerReply, PortError> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, prompt: &str) -> Result<String, PortError> {
+        async fn start_run(
+            &self,
+            _project: &latoile_core::ids::ProjectId,
+            _r: &Run,
+            prompt: &str,
+        ) -> Result<String, PortError> {
             assert!(prompt.contains("endpoint implemented"), "{prompt}");
             Ok("acp-review".into())
         }
@@ -493,6 +503,7 @@ async fn the_reviewer_is_refused_on_a_task_not_in_review() {
         }
         async fn start_run(
             &self,
+            _project: &latoile_core::ids::ProjectId,
             _r: &Run,
             _p: &str,
         ) -> Result<String, latoile_core::ports::PortError> {
@@ -523,6 +534,7 @@ async fn a_reviewer_spawn_failure_is_visible_as_a_fallback_approval() {
         }
         async fn start_run(
             &self,
+            _project: &latoile_core::ids::ProjectId,
             _: &Run,
             _: &str,
         ) -> Result<String, latoile_core::ports::PortError> {

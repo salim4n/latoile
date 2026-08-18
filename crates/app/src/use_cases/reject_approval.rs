@@ -86,7 +86,10 @@ impl<A: ApprovalStore, R: RunStore, T: TaskStore, E: EventLog, C: AgentChannel>
                 executor.role_id.clone(),
                 TriggeredBy::User,
             );
-            let session = self.agents.start_run(&run, &prompt).await?;
+            let session = self
+                .agents
+                .start_run(&task.project_id, &run, &prompt)
+                .await?;
             run.acp_session_id = Some(session);
             run.begin()?;
             approval.attach_corrective_run(run.id.clone())?;
@@ -186,7 +189,12 @@ mod tests {
             unimplemented!()
         }
 
-        async fn start_run(&self, _: &Run, prompt: &str) -> Result<String, PortError> {
+        async fn start_run(
+            &self,
+            _: &latoile_core::ids::ProjectId,
+            _: &Run,
+            prompt: &str,
+        ) -> Result<String, PortError> {
             self.prompts.lock().unwrap().push(prompt.into());
             Ok("acp-correction".into())
         }
@@ -255,7 +263,10 @@ mod tests {
             store.clone(),
             agents.clone(),
         );
-        assert!(uc.execute(&approval.id).await.is_err(), "comment is required");
+        assert!(
+            uc.execute(&approval.id).await.is_err(),
+            "comment is required"
+        );
         let rejected = uc
             .execute_with_comment(
                 &approval.id,
@@ -285,7 +296,10 @@ mod tests {
 
         let events = store.since(&test_fixtures::PROJECT, 0).await.unwrap();
         assert_eq!(
-            events.iter().map(|(_, event)| event.kind).collect::<Vec<_>>(),
+            events
+                .iter()
+                .map(|(_, event)| event.kind)
+                .collect::<Vec<_>>(),
             [EventKind::ApprovalRejected, EventKind::RunStarted]
         );
 
@@ -297,10 +311,16 @@ mod tests {
         assert_eq!(retried.corrective_run_id.as_ref(), Some(&corrective));
         assert_eq!(agents.prompts.lock().unwrap().len(), 1);
         assert_eq!(
-            RunStore::list_for_task(&store, &task.id).await.unwrap().len(),
+            RunStore::list_for_task(&store, &task.id)
+                .await
+                .unwrap()
+                .len(),
             3
         );
-        assert_eq!(store.since(&test_fixtures::PROJECT, 0).await.unwrap().len(), 2);
+        assert_eq!(
+            store.since(&test_fixtures::PROJECT, 0).await.unwrap().len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -323,6 +343,9 @@ mod tests {
             FakeAgents::default(),
         );
         assert!(uc.execute(&approval.id).await.is_err(), "already decided");
-        assert!(uc.execute(&Id::new("ghost").unwrap()).await.is_err(), "unknown");
+        assert!(
+            uc.execute(&Id::new("ghost").unwrap()).await.is_err(),
+            "unknown"
+        );
     }
 }

@@ -72,7 +72,10 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
         );
 
         // The agent channel is the only way a process ever starts.
-        let session = self.agents.start_run(&run, &input.prompt).await?;
+        let session = self
+            .agents
+            .start_run(&input.project_id, &run, &input.prompt)
+            .await?;
         run.acp_session_id = Some(session);
         run.begin()?;
 
@@ -92,10 +95,7 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
             .append(&NewEvent {
                 project_id: input.project_id,
                 kind: EventKind::RunStarted,
-                payload: format!(
-                    "{{\"task_id\":\"{}\",\"run_id\":\"{}\"}}",
-                    task.id, run.id
-                ),
+                payload: format!("{{\"task_id\":\"{}\",\"run_id\":\"{}\"}}", task.id, run.id),
             })
             .await?;
 
@@ -118,7 +118,12 @@ mod tests {
         async fn tell_manager(&self, _p: &ProjectId, _m: &str) -> PortResult<ManagerReply> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, _prompt: &str) -> PortResult<String> {
+        async fn start_run(
+            &self,
+            _project: &ProjectId,
+            _r: &Run,
+            _prompt: &str,
+        ) -> PortResult<String> {
             Ok("acp-session-1".into())
         }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
@@ -149,7 +154,10 @@ mod tests {
             store.clone(),
         );
 
-        let out = uc.execute(input(test_fixtures::PROJECT.clone())).await.unwrap();
+        let out = uc
+            .execute(input(test_fixtures::PROJECT.clone()))
+            .await
+            .unwrap();
 
         assert_eq!(out.task.status, TaskStatus::InProgress);
         assert_eq!(
@@ -183,7 +191,10 @@ mod tests {
             store.clone(),
         );
 
-        assert!(uc.execute(input(test_fixtures::PROJECT.clone())).await.is_err());
+        assert!(uc
+            .execute(input(test_fixtures::PROJECT.clone()))
+            .await
+            .is_err());
         assert!(store
             .list_for_project(&test_fixtures::PROJECT)
             .await

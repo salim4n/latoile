@@ -128,8 +128,10 @@ pub struct PermissionRequest {
 pub trait AgentChannel {
     /// Resume the project's Manager session with a new user message.
     async fn tell_manager(&self, project: &ProjectId, message: &str) -> PortResult<ManagerReply>;
-    /// Spawn an executor run. Returns the ACP session handle.
-    async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String>;
+    /// Spawn an executor run in its project's checkout. The project is
+    /// explicit because a new task/run is intentionally not persisted until
+    /// the ACP handshake succeeds.
+    async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String>;
     /// Resolve the exact pending ACP permission request. Implementations must
     /// consume it at most once; a missing/lost request is an error.
     async fn resolve_permission(

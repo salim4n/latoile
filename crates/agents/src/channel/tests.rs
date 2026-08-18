@@ -212,7 +212,10 @@ async fn a_run_completes_in_the_background() {
     let ch = channel(config, connector, dir.path());
     let r = run("r1");
 
-    let handle = ch.start_run(&r, "implémente le endpoint").await.unwrap();
+    let handle = ch
+        .start_run(&project(), &r, "implémente le endpoint")
+        .await
+        .unwrap();
     assert_eq!(handle, "acp:r1");
 
     let state = wait_for(&ch, &r.id, |s| !matches!(s, RunState::Running)).await;
@@ -235,7 +238,7 @@ async fn a_run_that_dies_mid_stream_records_a_failure_not_a_hang() {
     let ch = channel(config, connector, dir.path());
     let r = run("r2");
 
-    ch.start_run(&r, "travaille").await.unwrap();
+    ch.start_run(&project(), &r, "travaille").await.unwrap();
     let state = wait_for(&ch, &r.id, |s| !matches!(s, RunState::Running)).await;
     assert!(matches!(state, RunState::Failed(_)), "{state:?}");
 }
@@ -254,7 +257,7 @@ async fn cancelling_a_run_kills_its_process() {
     let ch = channel(config, connector, dir.path());
     let r = run("r3");
 
-    ch.start_run(&r, "travaille").await.unwrap();
+    ch.start_run(&project(), &r, "travaille").await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await; // let it start
     ch.cancel_run(&r.id).await.unwrap();
 
@@ -289,7 +292,7 @@ async fn a_run_past_its_time_budget_is_killed() {
     let ch = channel(config, connector, dir.path());
     let r = run("r4");
 
-    ch.start_run(&r, "travaille").await.unwrap();
+    ch.start_run(&project(), &r, "travaille").await.unwrap();
     let state = wait_for(&ch, &r.id, |s| !matches!(s, RunState::Running)).await;
     assert_eq!(state, RunState::Failed("timed out".into()));
 }
@@ -354,7 +357,7 @@ async fn the_session_starts_in_the_project_directory() {
         async fn manager_dir(&self, _p: &ProjectId) -> Option<PathBuf> {
             Some(self.0.clone())
         }
-        async fn run_dir(&self, _r: &Run) -> Option<PathBuf> {
+        async fn run_dir(&self, _project: &ProjectId, _r: &Run) -> Option<PathBuf> {
             Some(self.0.clone())
         }
     }
@@ -366,7 +369,12 @@ async fn the_session_starts_in_the_project_directory() {
         AcpChannel::new(config, connector, FixedDirs(project_dir.clone()), routing);
 
     ch.tell_manager(&project(), "allo").await.unwrap();
-    assert_eq!(workspaces.lock().unwrap().as_slice(), &[project_dir]);
+    let run = run("unpersisted-run");
+    ch.start_run(&project(), &run, "travaille").await.unwrap();
+    assert_eq!(
+        workspaces.lock().unwrap().as_slice(),
+        &[project_dir.clone(), project_dir]
+    );
 }
 
 /// A project directory that doesn't exist is a clear error, before any
