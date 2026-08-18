@@ -89,9 +89,10 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   thresholds — never Reviewer prose — classify invalid, blocking, reservation
   or passed.
 - Every Reviewer run stores one immutable `reviewed_run_id`. Reviewer V2 may
-  cite only the exact server evidence set for that finished executor run and
-  current project/spec, with every artifact hash unchanged. The server rebuilds
-  status and metrics from SQLite, canonicalizes failed gates to
+  submit judgement and visual applicability only. The server loads the complete
+  evidence set for that finished executor run and current project/spec; model
+  echoes cannot select or override it. The server rebuilds ids, hashes, status
+  and metrics from SQLite, canonicalizes failed gates to
   `changes_requested`, and permits a grant only when `trusted_v2` and
   `approvable` are both true. Legacy V1 payloads remain readable but untrusted.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle

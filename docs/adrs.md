@@ -267,7 +267,7 @@ project checkouts.
 # ADR-010 — Architect packages are generated in a confined detached worktree
 
 - **Date**: 2026-08-18
-- **Status**: accepted, hermetically verified
+- **Status**: accepted after real-provider canary failure
 
 ## Context
 
@@ -465,22 +465,27 @@ Authenticated routes expose comparison metadata, render and heatmap bytes.
 
 ## Context
 
-Passing trusted ids to a Reviewer prompt is insufficient if the response may
-substitute an older id, alter a digest, omit a failing scenario or self-report
-an approvable status. Inferring the executor from task chronology is also
-ambiguous after corrective runs. Existing V1 approvals contain synthetic
-target/render frames and must remain readable without gaining V2 trust.
+Passing trusted ids to a Reviewer prompt is useful context but asking the model
+to copy them back is neither proof that it reviewed them nor a safe selector.
+The fourth greenfield canary produced exact `passed` evidence, then failed
+because the model's copied V2 references did not match the server rows. This
+was availability loss without additional trust. Inferring the executor from
+task chronology remains ambiguous after corrective runs. Existing V1 approvals
+contain synthetic target/render frames and must remain readable without gaining
+V2 trust.
 
 ## Decision
 
 Every Reviewer run stores one immutable `reviewed_run_id` foreign key before
 ACP dispatch. V2 output contains judgement plus an explicit visual
-applicability decision and exact evidence ids/hashes; it has no model-writable
-status, metric or gate field. On termination, LaToile reloads the bound
-finished executor, task, current approved spec and complete comparison set.
-It rejects any missing, duplicate, unknown, stale, cross-project, wrong-run,
-wrong-spec or hash-mismatched reference, then reconstructs statuses and metrics
-from server rows.
+applicability decision; new prompts require an empty references array. It has no
+model-writable evidence selector, status, metric or gate field. On termination,
+LaToile reloads the bound finished executor, task, current approved spec and
+complete comparison set. It rejects missing, stale, cross-project, wrong-run or
+wrong-spec server evidence, then reconstructs all trusted ids, hashes, statuses
+and metrics from those rows. Legacy untrusted reference echoes remain accepted
+for wire compatibility but are ignored and never copied into the trusted
+envelope.
 
 Frontend evidence that is missing, invalid or blocking is non-approvable.
 Server reservations must be acknowledged by a reservation verdict. Non-visual
@@ -491,7 +496,9 @@ V1 rows are not rewritten and never pass that check.
 
 ## Rejected alternatives
 
-- Trust ids mentioned in the prompt: the model can omit or alter them.
+- Require the model to echo ids and hashes: copying is brittle and proves no
+  additional relationship beyond the immutable server-owned subject run.
+- Trust ids mentioned by the model: it can omit, substitute or alter them.
 - Infer the reviewed run from the latest task run: retries and corrections make chronology unsafe.
 - Let the Reviewer emit status/metrics: recreates self-reported visual truth.
 - Upgrade V1 rows in place: would falsely confer trust without server evidence.
@@ -500,6 +507,7 @@ V1 rows are not rewritten and never pass that check.
 ## Consequences
 
 + A review approval is cryptographically and relationally tied to the exact run and spec evidence.
++ Model output cannot select, omit or override the server evidence set.
 + Complete blocking evidence stays trusted evidence while remaining impossible to approve.
 + Backend and other non-visual work remains reviewable through an explicit applicability branch.
 + Migration preserves audit history without presenting legacy frames as trusted capture.

@@ -118,6 +118,24 @@ class CanarySafetyTests(unittest.TestCase):
         self.assertEqual(observation["accessibility_changes"], 2)
         self.assertNotIn("failure_message", observation)
 
+    def test_reviewer_observation_keeps_only_server_binding_fields(self):
+        observation = canary.reviewer_observation(
+            {
+                "schema_version": 2,
+                "reviewed_run_id": "run-2",
+                "verdict": "approve",
+                "summary": "provider prose omitted",
+                "gate": {"trusted_v2": True, "approvable": True, "code": "trusted"},
+                "visual_evidence": {
+                    "references": [{"evidence_id": "visual:run-2:home", "status": "passed"}]
+                },
+            }
+        )
+
+        self.assertEqual(observation["gate"]["code"], "trusted")
+        self.assertEqual(observation["evidence_ids"], ["visual:run-2:home"])
+        self.assertNotIn("summary", observation)
+
 
 if __name__ == "__main__":
     unittest.main()

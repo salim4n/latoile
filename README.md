@@ -96,7 +96,7 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Executor supervision with bounded Git evidence and fail-closed ACP permissions
 - [x] Supervised live preview with auto-reload
 - [x] Reviewer-before-human flow, corrective runs and audited decisions
-- [x] Reviewer V2 bound to exact server-produced visual evidence ids and hashes
+- [x] Reviewer V2 bound server-side to the complete exact visual evidence set
 - [x] Decision-grade review with authenticated baseline/render/heatmap, overlay, metrics, provenance and gated correction
 - [x] Owner-controlled push, remote SHA verification and idempotent Pull Request
 - [x] Opt-in real-provider V1 vertical-slice canary

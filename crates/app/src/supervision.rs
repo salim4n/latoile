@@ -583,7 +583,7 @@ pub async fn start_review<A: AgentChannel>(
     }
     run.bind_review_subject(subject.id)?;
     let prompt = format!(
-        "Review the changes produced by run {} on task {:?}.\n\n{}\n\nReturn exactly one fenced `latoile-review` JSON block conforming to schema_version 2. Required fields: schema_version, verdict, summary, findings, suggested_follow_ups, visual_evidence. For a frontend run set visual_evidence.applicability to `required` and echo every server evidence id plus manifest, baseline, render, pixel-diff, heatmap, geometry, accessibility and environment digest exactly. For a non-visual run set it to `not_applicable` with an empty references array. Never emit status, metrics, target/render frames or a trust gate: the server owns those facts.",
+        "Review the changes produced by run {} on task {:?}.\n\n{}\n\nReturn exactly one fenced `latoile-review` JSON block conforming to schema_version 2. Required fields: schema_version, verdict, summary, findings, suggested_follow_ups, visual_evidence. For a frontend run set visual_evidence.applicability to `required` and references to an empty array: the server binds the complete evidence set from this immutable reviewed run, so never copy ids or hashes. For a non-visual run set applicability to `not_applicable` with an empty references array. Never emit status, metrics, target/render frames or a trust gate: the server owns those facts.",
         finished_run.as_str(),
         task.title,
         if context.is_empty() { "(no execution context available)" } else { context },

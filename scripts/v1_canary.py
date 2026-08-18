@@ -168,6 +168,34 @@ def visual_evidence_observation(evidence: dict[str, Any]) -> dict[str, Any]:
     return {field: evidence.get(field) for field in fields}
 
 
+def reviewer_observation(payload: dict[str, Any]) -> dict[str, Any]:
+    """Retain only server-owned gate and reference identifiers."""
+    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
+    visual = (
+        payload.get("visual_evidence")
+        if isinstance(payload.get("visual_evidence"), dict)
+        else {}
+    )
+    references = visual.get("references") if isinstance(visual, dict) else []
+    references = references if isinstance(references, list) else []
+    return {
+        "schema_version": payload.get("schema_version"),
+        "reviewed_run_id": payload.get("reviewed_run_id"),
+        "verdict": payload.get("verdict"),
+        "gate": {
+            "trusted_v2": gate.get("trusted_v2"),
+            "approvable": gate.get("approvable"),
+            "code": gate.get("code"),
+        },
+        "reference_count": len(references),
+        "evidence_ids": [
+            reference.get("evidence_id")
+            for reference in references[:50]
+            if isinstance(reference, dict)
+        ],
+    }
+
+
 def prove_replacement_evidence(
     original: dict[str, Any], corrected: dict[str, Any]
 ) -> None:
@@ -754,6 +782,7 @@ class Canary:
                 verdict = payload.get("verdict")
                 gate = payload.get("gate") or {}
                 references = (payload.get("visual_evidence") or {}).get("references") or []
+                self.data[f"{prefix}_review_observation"] = reviewer_observation(payload)
                 comparisons = api.get(
                     f"/api/runs/{urllib.parse.quote(reviewed_run_id, safe='')}/visual-comparisons"
                 )

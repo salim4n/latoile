@@ -2,8 +2,8 @@
 //!
 //! V1 remains deserializable so historic approvals stay visible, but it can
 //! never be granted as trusted evidence. V2 accepts only Reviewer judgement;
-//! capture facts are reconstructed from the immutable server rows after every
-//! submitted reference has been matched byte-for-byte.
+//! capture facts and their complete binding are reconstructed from immutable
+//! server rows selected by the Reviewer's immutable subject run.
 //! Schemas and gate construction deliberately stay in one module so no caller
 //! can serialize a trusted envelope without traversing the same validation.
 
@@ -97,9 +97,9 @@ pub enum VisualApplicability {
     NotApplicable,
 }
 
-/// What the Reviewer must echo. Optional artefact hashes are needed because
-/// an invalid capture has no render; it remains referenceable but can never
-/// pass the gate.
+/// Deprecated untrusted echo accepted for wire compatibility. These values
+/// never select or override evidence; the server binds the complete set from
+/// the immutable reviewed run. New Reviewer prompts submit an empty list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewEvidenceReference {
@@ -124,6 +124,7 @@ pub struct ReviewEvidenceReference {
 #[serde(deny_unknown_fields)]
 pub struct ReviewEvidenceDecision {
     pub applicability: VisualApplicability,
+    /// Accepted for compatibility but never used as a trust input.
     #[serde(default)]
     pub references: Vec<ReviewEvidenceReference>,
 }
@@ -230,10 +231,9 @@ impl ReviewResultV2 {
             return Err("too many evidence references");
         }
         if self.visual_evidence.references.iter().any(|reference| {
-            reference.evidence_id.trim().is_empty()
-                || reference.evidence_id.len() > 256
-                || !valid_digest(&reference.manifest_digest)
-                || !valid_digest(&reference.baseline_png_digest)
+            reference.evidence_id.len() > 256
+                || reference.manifest_digest.len() > 256
+                || reference.baseline_png_digest.len() > 256
                 || [
                     &reference.render_png_digest,
                     &reference.pixel_diff_digest,
@@ -244,9 +244,9 @@ impl ReviewResultV2 {
                 ]
                 .into_iter()
                 .flatten()
-                .any(|digest| !valid_digest(digest))
+                .any(|value| value.len() > 256)
         }) {
-            return Err("invalid evidence reference");
+            return Err("oversized legacy evidence reference");
         }
         Ok(())
     }
@@ -447,12 +447,6 @@ fn evaluate_gate(result: &ReviewResultV2, context: &ReviewTrustContext<'_>) -> R
                 "Aucune comparaison visuelle serveur n'est disponible pour ce run frontend.",
             );
         }
-        if !references_match(&result.visual_evidence.references, context.evidence) {
-            return deny(
-                "evidence_reference_mismatch",
-                "Les identifiants ou hashes cités ne correspondent pas exactement aux preuves du run revu.",
-            );
-        }
         if context
             .evidence
             .iter()
@@ -511,32 +505,8 @@ fn evaluate_gate(result: &ReviewResultV2, context: &ReviewTrustContext<'_>) -> R
         trusted_v2: true,
         approvable: true,
         code: "trusted".into(),
-        message: "Le verdict V2 est lié aux preuves serveur exactes et peut être décidé.".into(),
+        message: "Le verdict V2 est lié côté serveur aux preuves exactes du run et peut être décidé.".into(),
     }
-}
-
-fn references_match(submitted: &[ReviewEvidenceReference], expected: &[VisualComparison]) -> bool {
-    if submitted.len() != expected.len() {
-        return false;
-    }
-    expected.iter().all(|evidence| {
-        submitted
-            .iter()
-            .filter(|reference| reference.evidence_id == evidence.id.as_str())
-            .count()
-            == 1
-            && submitted.iter().any(|reference| {
-                reference.evidence_id == evidence.id.as_str()
-                    && reference.manifest_digest == evidence.manifest_digest
-                    && reference.baseline_png_digest == evidence.baseline_png_digest
-                    && reference.render_png_digest == evidence.render_png_digest
-                    && reference.pixel_diff_digest == evidence.pixel_diff_digest
-                    && reference.heatmap_png_digest == evidence.heatmap_png_digest
-                    && reference.geometry_diff_digest == evidence.geometry_diff_digest
-                    && reference.accessibility_diff_digest == evidence.accessibility_diff_digest
-                    && reference.environment_digest == evidence.environment_digest
-            })
-    })
 }
 
 fn trusted_evidence(context: &ReviewTrustContext<'_>) -> TrustedEvidenceDecision {
@@ -624,10 +594,6 @@ fn extract_contract(output: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn truncate(value: &str, limit: usize) -> String {
     if value.len() <= limit {
         return value.to_string();
@@ -689,7 +655,7 @@ mod tests {
         })
     }
 
-    fn output(evidence: &VisualComparison, verdict: &str) -> String {
+    fn output(_evidence: &VisualComparison, verdict: &str) -> String {
         let (findings, follow_ups) = if verdict == "approve" {
             (serde_json::json!([]), serde_json::json!([]))
         } else {
@@ -710,7 +676,7 @@ mod tests {
             "suggested_follow_ups": follow_ups,
             "visual_evidence": {
                 "applicability": "required",
-                "references": [reference(evidence)],
+                "references": [],
             }
         })
         .to_string()
@@ -738,13 +704,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_hash_cross_project_stale_spec_and_wrong_run_fail_closed() {
+    fn server_side_project_spec_and_run_provenance_fail_closed() {
         let original = evidence(VisualComparisonStatus::Passed);
-        for mutation in ["hash", "project", "spec", "run"] {
+        for mutation in ["project", "spec", "run"] {
             let mut evidence = vec![original.clone()];
-            let mut submitted = original.clone();
             match mutation {
-                "hash" => submitted.render_png_digest = Some("9".repeat(64)),
                 "project" => evidence[0].project_id = ProjectId::new("other-project").unwrap(),
                 "spec" => evidence[0].spec_version_id = SpecVersionId::new("old-spec").unwrap(),
                 "run" => evidence[0].run_id = RunId::new("other-run").unwrap(),
@@ -760,12 +724,50 @@ mod tests {
                 visual_required: true,
                 evidence: &evidence,
             };
-            let payload = trusted_review_payload(&output(&submitted, "approve"), &context);
+            let payload = trusted_review_payload(&output(&original, "approve"), &context);
             assert!(
                 !review_payload_is_approvable(&payload),
                 "mutation={mutation}"
             );
         }
+    }
+
+    #[test]
+    fn model_echoes_cannot_select_or_override_server_evidence() {
+        let evidence = vec![evidence(VisualComparisonStatus::Passed)];
+        let expected_digest = evidence[0].render_png_digest.clone();
+        let mut invented = evidence[0].clone();
+        invented.render_png_digest = Some("9".repeat(64));
+        let mut untrusted: serde_json::Value =
+            serde_json::from_str(&output(&evidence[0], "approve")).unwrap();
+        untrusted["visual_evidence"]["references"] = serde_json::json!([reference(&invented)]);
+
+        let payload = trusted_review_payload(&untrusted.to_string(), &context(&evidence));
+        let trusted: TrustedReviewResultV2 = serde_json::from_str(&payload).unwrap();
+
+        assert!(trusted.gate.trusted_v2);
+        assert!(trusted.gate.approvable);
+        assert_eq!(
+            trusted.visual_evidence.references[0].render_png_digest,
+            expected_digest
+        );
+        assert!(review_payload_is_approvable(&payload));
+    }
+
+    #[test]
+    fn ignored_legacy_echoes_remain_size_bounded() {
+        let evidence = vec![evidence(VisualComparisonStatus::Passed)];
+        let mut oversized = reference(&evidence[0]);
+        oversized["evidence_id"] = serde_json::Value::String("x".repeat(257));
+        let mut untrusted: serde_json::Value =
+            serde_json::from_str(&output(&evidence[0], "approve")).unwrap();
+        untrusted["visual_evidence"]["references"] = serde_json::json!([oversized]);
+
+        let payload = trusted_review_payload(&untrusted.to_string(), &context(&evidence));
+        let trusted: TrustedReviewResultV2 = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(trusted.gate.code, "invalid_reviewer_output");
+        assert!(!review_payload_is_approvable(&payload));
     }
 
     #[test]

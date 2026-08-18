@@ -359,17 +359,7 @@ async fn a_terminal_reviewer_creates_one_validated_human_approval() {
         "suggested_follow_ups": [],
         "visual_evidence": {
             "applicability": "required",
-            "references": [{
-                "evidence_id": evidence.id.as_str(),
-                "manifest_digest": evidence.manifest_digest,
-                "baseline_png_digest": evidence.baseline_png_digest,
-                "render_png_digest": evidence.render_png_digest,
-                "pixel_diff_digest": evidence.pixel_diff_digest,
-                "heatmap_png_digest": evidence.heatmap_png_digest,
-                "geometry_diff_digest": evidence.geometry_diff_digest,
-                "accessibility_diff_digest": evidence.accessibility_diff_digest,
-                "environment_digest": evidence.environment_digest,
-            }]
+            "references": []
         }
     })
     .to_string();

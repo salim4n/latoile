@@ -32,7 +32,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D16 | Spec approval revalidates a complete machine-readable visual manifest and exact Git/content provenance; approval, supersession, task binding and event are one transaction | Trust validation performed only when the Architect originally generated the draft |
 | D17 | Every required P0 mockup is rendered by isolated Chromium before approval; immutable PNG, DOM geometry, accessibility and environment hashes gate approval and dispatch | Ad-hoc screenshots or Reviewer self-reported measurements |
 | D18 | A finished frontend run is captured from the exact supervised loopback route and compared to its immutable baseline; fixed server thresholds classify real pixel, geometry and accessibility evidence | Reviewer prose, manual screenshots or an unrestricted browser session |
-| D19 | Reviewer V2 is immutably bound to one executor run; only exact server evidence ids/hashes for the current project/spec can produce an approvable gate | Self-reported frames, stale evidence reuse or trusting a model-supplied status |
+| D19 | Reviewer V2 is immutably bound to one executor run; the server selects the complete current project/spec evidence set and model echoes cannot select or override it | Self-reported frames, stale evidence reuse, brittle model hash copying or trusting a model-supplied status |
 | D20 | The owner decides from authenticated immutable artifacts: baseline/render side-by-side, overlay and heatmap with scenario metadata, server metrics and provenance; failed gates disable approval | A model-authored visual summary or unauthenticated image links |
 
 ## 3. Domain model
@@ -122,10 +122,10 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     `blocking`, `reservation` or `passed`; invalid evidence carries no fabricated
     pixel metrics.
 21. A Reviewer run has one immutable `reviewed_run_id`. V2 output declares
-    visual applicability and echoes exact evidence ids/hashes, but cannot emit
-    trusted status, metrics or gate fields. The server matches the complete set
-    against that run, current project and approved task spec, reconstructs the
-    payload from stored evidence and canonicalizes every failed gate to
+    judgement and visual applicability but cannot select evidence or emit
+    trusted ids, hashes, status, metrics or gate fields. The server loads the
+    complete set for that run, current project and approved task spec,
+    reconstructs the payload from stored evidence and canonicalizes every failed gate to
     `changes_requested`. Only trusted approvable V2 payloads may be granted;
     historic V1 approvals stay readable and non-grantable.
 22. The Review UI loads only evidence ids present in the trusted V2 envelope,
@@ -147,7 +147,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | `architect` | complete content-addressed `app-architect-brainstorm` bundle | persistent read-only discovery, then isolated package run | durable Q/A + verified `SpecVersion` and static `design/v…/` package |
 | `backend` | `backend-engineer` | ephemeral ACP run | commits + sanitized evidence |
 | `frontend` | `frontend-engineer` | ephemeral ACP run | commits + sanitized evidence |
-| `reviewer` | `code-reviewer` | ephemeral ACP run bound to one executor | V2 judgement + exact evidence references → server-gated human `Approval` |
+| `reviewer` | `code-reviewer` | ephemeral ACP run bound to one executor | V2 judgement + applicability → server-bound evidence → human `Approval` |
 
 ## 4. Data model (ER)
 
@@ -400,8 +400,8 @@ sequenceDiagram
     C-->>A: render + pixel diff + heatmap + DOM/AX changes + environment
     A->>DB: immutable VISUAL_COMPARISON + server threshold status
     A->>R: task + approved spec + trusted visual ids/hashes + Git evidence
-    R-->>A: V2 judgement + exact evidence ids/hashes
-    A->>A: match run/project/spec/full hash set; rebuild trusted metrics; gate
+    R-->>A: V2 judgement + visual applicability
+    A->>A: load complete run/project/spec evidence; rebuild ids/hashes/metrics; gate
     A->>DB: reviewer RUN finished + gated review APPROVAL requested
     A-->>You: SSE ApprovalRequested (Reviewer evidence attached)
     You->>S: POST /approvals/:id granted

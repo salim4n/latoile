@@ -48,12 +48,14 @@ evidence; a destination change still produces AX drift. A V2 baseline is not
 silently reused under V3: recapture and approve a new architecture version.
 
 The subsequent Reviewer run is permanently bound to that executor run. Its V2
-response must echo the exact evidence ids and hashes shown in the prompt; the
-server reloads project, approved spec and comparison rows before writing the
-approval. A missing, stale, cross-project, hash-mismatched, invalid or blocking
-set yields `changes_requested` and the grant endpoint refuses it. Historic V1
-approval records remain visible after migration but cannot be granted as
-trusted evidence; relaunch the Reviewer to obtain V2.
+response supplies judgement and visual applicability with an empty references
+array. The server reloads project, approved spec and the complete comparison set
+for the immutable reviewed run, then writes its own ids, hashes and metrics into
+the approval. Legacy model echoes are accepted for wire compatibility but never
+select or override evidence. A missing, stale, cross-project, invalid or
+blocking set yields `changes_requested` and the grant endpoint refuses it.
+Historic V1 approval records remain visible after migration but cannot be
+granted as trusted evidence; relaunch the Reviewer to obtain V2.
 
 On the Review screen, inspect every declared scenario before deciding. Switch
 locale and viewport, compare baseline/render side by side, use the keyboard-
