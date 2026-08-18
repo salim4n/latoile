@@ -13,6 +13,7 @@
 use crate::error::GitHubError;
 use latoile_core::ports::{GitHubClient, PortResult, RepoInfo, SecretStore};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// The default secret name in the vault.
 pub const DEFAULT_TOKEN_NAME: &str = "github_token";
@@ -22,6 +23,11 @@ pub struct GitHubConfig {
     /// `https://api.github.com` in production; tests point it at a mock.
     pub api_base: String,
     pub token_name: String,
+    /// Root below which project checkouts are provisioned.
+    pub workspace_root: PathBuf,
+    /// Git smart-HTTP base. Tests use a local file URL; production uses
+    /// GitHub without putting credentials in the URL.
+    pub git_remote_base: String,
 }
 
 impl Default for GitHubConfig {
@@ -29,14 +35,16 @@ impl Default for GitHubConfig {
         Self {
             api_base: "https://api.github.com".into(),
             token_name: DEFAULT_TOKEN_NAME.into(),
+            workspace_root: PathBuf::from("workspace"),
+            git_remote_base: "https://github.com".into(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct GitHub<S> {
-    config: GitHubConfig,
-    secrets: S,
+    pub(crate) config: GitHubConfig,
+    pub(crate) secrets: S,
     http: reqwest::Client,
 }
 
@@ -77,7 +85,7 @@ impl<S: SecretStore> GitHub<S> {
             .expect("a reqwest client with default settings builds")
     }
 
-    async fn token(&self) -> Result<String, GitHubError> {
+    pub(crate) async fn token(&self) -> Result<String, GitHubError> {
         self.secrets
             .get(&self.config.token_name)
             .await

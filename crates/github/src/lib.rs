@@ -6,6 +6,7 @@
 
 mod client;
 mod error;
+mod workspace;
 
 pub use client::{GitHub, GitHubConfig, DEFAULT_TOKEN_NAME};
 pub use error::GitHubError;

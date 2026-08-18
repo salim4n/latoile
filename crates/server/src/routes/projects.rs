@@ -15,9 +15,14 @@ pub struct CreateProjectBody {
     name: String,
     slug: String,
     github_repo: String,
+    #[serde(default = "default_work_branch")]
     work_branch: String,
-    local_path: String,
-    dev_command: String,
+    #[serde(default)]
+    dev_command: Option<String>,
+}
+
+fn default_work_branch() -> String {
+    "work".into()
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProjectDto>>, ApiError> {
@@ -29,13 +34,12 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateProjectBody>,
 ) -> Result<Json<ProjectDto>, ApiError> {
-    let project = CreateProject::new(state.store.clone())
+    let project = CreateProject::new(state.store.clone(), state.github.clone())
         .execute(CreateProjectInput {
             name: body.name,
             slug: body.slug,
             github_repo: body.github_repo,
             work_branch: body.work_branch,
-            local_path: body.local_path,
             dev_command: body.dev_command,
         })
         .await?;

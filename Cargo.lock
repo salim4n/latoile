@@ -1528,10 +1528,12 @@ version = "0.1.0"
 name = "latoile-github"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "latoile-core",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
 ]

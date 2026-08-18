@@ -81,8 +81,7 @@ async fn a_bad_project_shape_gets_the_contract_error() {
             "POST",
             "/api/projects",
             Some(serde_json::json!({
-                "name": "X", "slug": "x", "github_repo": "no-slash",
-                "work_branch": "work", "local_path": "/tmp/x", "dev_command": "dev"
+                "name": "X", "slug": "x", "github_repo": "no-slash"
             })),
         )))
         .await

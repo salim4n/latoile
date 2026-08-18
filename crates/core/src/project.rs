@@ -41,6 +41,22 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn validate_identity(name: &str, slug: &str, github_repo: &str) -> Result<(), DomainError> {
+        if name.trim().is_empty() || slug.trim().is_empty() {
+            return Err(DomainError::Invariant("a project needs a name and a slug"));
+        }
+        let mut parts = github_repo.split('/');
+        if parts.next().is_none_or(str::is_empty)
+            || parts.next().is_none_or(str::is_empty)
+            || parts.next().is_some()
+        {
+            return Err(DomainError::Invariant(
+                "github_repo must look like owner/name",
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ProjectId,
@@ -54,12 +70,7 @@ impl Project {
         let name = name.into();
         let slug = slug.into();
         let github_repo = github_repo.into();
-        if name.trim().is_empty() || slug.trim().is_empty() {
-            return Err(DomainError::Invariant("a project needs a name and a slug"));
-        }
-        if !github_repo.contains('/') {
-            return Err(DomainError::Invariant("github_repo must look like owner/name"));
-        }
+        Self::validate_identity(&name, &slug, &github_repo)?;
         Ok(Self {
             id,
             name,

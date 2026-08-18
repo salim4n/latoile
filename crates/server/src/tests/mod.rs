@@ -148,9 +148,7 @@ pub async fn create_project(app: &axum::Router) -> String {
                 "name": "Mon App",
                 "slug": "mon-app",
                 "github_repo": "salim4n/mon-app",
-                "work_branch": "work",
-                "local_path": "/srv/latoile/mon-app",
-                "dev_command": "pnpm dev --port $PORT"
+                "work_branch": "work"
             })),
         )))
         .await

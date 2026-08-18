@@ -18,7 +18,10 @@ use crate::dirs::StoreDirs;
 use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector, SharedRouting};
 use latoile_app::store::Store;
 use latoile_core::ids::{ProjectId, RunId};
-use latoile_core::ports::{AgentChannel, GitHubClient, ManagerReply, PortResult, RepoInfo};
+use latoile_core::ports::{
+    AgentChannel, GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput,
+    ProvisionedWorkspace, RepoInfo, WorkspaceProvisioner,
+};
 use latoile_core::Run;
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
@@ -109,6 +112,24 @@ impl GitHubClient for GitHubSlot {
     }
 }
 
+impl WorkspaceProvisioner for GitHubSlot {
+    async fn provision(&self, input: &ProvisionWorkspaceInput) -> PortResult<ProvisionedWorkspace> {
+        match self {
+            Self::Real(github) => github.provision(input).await,
+            #[cfg(test)]
+            Self::Stub(_) => Ok(ProvisionedWorkspace {
+                default_branch: "main".into(),
+                work_branch: input.work_branch.clone(),
+                local_path: format!("/srv/latoile/{}", input.slug),
+                dev_command: input
+                    .dev_command
+                    .clone()
+                    .unwrap_or_else(|| "pnpm dev -- --port $PORT".into()),
+            }),
+        }
+    }
+}
+
 impl AgentSlot {
     /// Drop persistent manager sessions (routing changed). The next message
     /// respawns under the new provider; runs are ephemeral and unaffected.
@@ -194,6 +215,7 @@ pub async fn build(
                 .github_api_base
                 .clone()
                 .unwrap_or_else(|| GitHubConfig::default().api_base),
+            workspace_root: config.workspace.clone(),
             ..GitHubConfig::default()
         },
         vault,

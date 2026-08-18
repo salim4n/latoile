@@ -131,6 +131,30 @@ describe("NewProjectScreen visual contract", () => {
       slug: "portail-client-facturation-2026",
       github_repo: "westlabs/portail-client-facturation-2026",
     }));
+    expect(create.mock.calls[0][0]).not.toHaveProperty("local_path");
+    expect(create.mock.calls[0][0]).not.toHaveProperty("dev_command");
     expect(send).toHaveBeenCalledWith(project.id, "Construire le portail client.");
+  });
+
+  it("sends an explicit preview command only when the owner provides one", async () => {
+    vi.spyOn(api, "repos").mockResolvedValue(repos);
+    const create = vi.spyOn(api, "createProject").mockResolvedValue(project);
+    vi.spyOn(api, "sendMessage").mockResolvedValue({ message: {
+      id: "message-1", author: "user", content: "Construire.", actions: null,
+    }, reply: null });
+    renderNewProject();
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Brief initial" }), {
+      target: { value: "Construire." },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Commande de preview (optionnelle)" }), {
+      target: { value: "make dev PORT=$PORT" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le projet" }));
+
+    await screen.findByText("Project created");
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      dev_command: "make dev PORT=$PORT",
+    }));
   });
 });

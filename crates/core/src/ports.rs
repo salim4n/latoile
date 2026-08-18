@@ -141,6 +141,33 @@ pub trait GitHubClient {
     async fn open_pull_request(&self, repo: &str, head: &str, base: &str) -> PortResult<String>;
 }
 
+/// Input for provisioning the one V1 checkout attached to a project.
+/// Filesystem layout and Git authentication stay inside the adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionWorkspaceInput {
+    pub repo: String,
+    pub slug: String,
+    pub work_branch: String,
+    /// Optional owner override. When absent, the adapter detects the command
+    /// from the checked-out repository and falls back to an actionable
+    /// command that explains what must be configured.
+    pub dev_command: Option<String>,
+}
+
+/// Canonical checkout facts discovered by the adapter and persisted on the
+/// project. The browser never supplies host paths or branch truth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionedWorkspace {
+    pub default_branch: String,
+    pub work_branch: String,
+    pub local_path: String,
+    pub dev_command: String,
+}
+
+pub trait WorkspaceProvisioner {
+    async fn provision(&self, input: &ProvisionWorkspaceInput) -> PortResult<ProvisionedWorkspace>;
+}
+
 /// Secret resolution. Values flow to adapters, never to logs or clients.
 pub trait SecretStore {
     async fn get(&self, name: &str) -> PortResult<Option<String>>;

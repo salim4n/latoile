@@ -52,6 +52,7 @@ export function NewProjectScreen() {
   const repos = useAsync(api.repos, []);
   const [selected, setSelected] = useState<string | null>(null);
   const [brief, setBrief] = useState("");
+  const [devCommand, setDevCommand] = useState("");
   const [briefError, setBriefError] = useState(false);
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -72,16 +73,14 @@ export function NewProjectScreen() {
     setBriefError(false);
     try {
       const name = effectiveSelected.split("/").pop() ?? effectiveSelected;
-      const project = await api.createProject({
+      const body: Record<string, string> = {
         name,
         slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
         github_repo: effectiveSelected,
         work_branch: "work",
-        // Repository checkout remains an orchestration concern. The server
-        // persists this identity until that pass resolves the final path.
-        local_path: effectiveSelected,
-        dev_command: "pnpm dev --port $PORT",
-      });
+      };
+      if (devCommand.trim()) body.dev_command = devCommand.trim();
+      const project = await api.createProject(body);
       await api.sendMessage(project.id, brief.trim());
       navigate(`/projects/${project.id}`);
     } catch {
@@ -168,6 +167,22 @@ export function NewProjectScreen() {
                 </p>
               )}
               <p className="hint" id="brief-hint">{t("new.brief.hint")}</p>
+            </div>
+
+            <div className="fieldset">
+              <label className="field-label" htmlFor="dev-command">
+                {t("new.dev.label")}
+              </label>
+              <input
+                className="text-field"
+                id="dev-command"
+                name="dev-command"
+                disabled={sending}
+                value={devCommand}
+                placeholder={t("new.dev.placeholder")}
+                onChange={(event) => setDevCommand(event.target.value)}
+              />
+              <p className="hint">{t("new.dev.hint")}</p>
             </div>
 
             <div className="submitbar new-project-submitbar">
