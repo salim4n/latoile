@@ -77,22 +77,29 @@ The web UI is embedded via rust-embed: **release builds bake `web/dist` into the
 
 ## Status
 
-**Working prototype.** The full backend stack exists — domain core, SQLite store, ACP agent channel, encrypted vault, GitHub client, preview supervisor, HTTP/SSE server, CLI — and the web UI (React + Vite + Tailwind) implements the design mockups' screens. The spec was produced by a structured architecture brainstorm informed by audits of two real codebases (a tmux/PTY-based agent control plane, and an ACP-based agent desktop runtime). Every rule in the architecture contract is a lesson from those audits turned into a starting invariant.
+**V1 vertical slice implemented and canary-verified.** The product provisions a real GitHub checkout, runs the Manager and executor team through authenticated Claude or Codex ACP adapters, blocks for sanitized permission decisions, records bounded Git evidence, refreshes the live preview, runs the Reviewer before asking the owner, and delivers an approved work branch through an idempotent Pull Request. The web UI implements the five design-contract screens in French and English.
+
+The default Rust, web and Python safety suites are hermetic. The separate opt-in [real-provider canary](docs/v1-canary.md) proved the complete journey with Codex ACP, including an exact local/remote SHA and a live Pull Request. This is evidence for the V1 path, not a claim that the deferred V2 scope below exists.
 
 ### Roadmap
 
 - [x] Cargo workspace skeleton with a pure `core` from commit one
-- [x] Agent channel over ACP with permission policy
-- [x] Project + Manager chat + task board
+- [x] Real GitHub checkout provisioning and one project work branch
+- [x] Native provider login/status/logout and persisted role routing
+- [x] Project + persistent Manager chat + executable action blocks
+- [x] Dedicated Manager, Architect, Backend, Frontend and Reviewer skills
+- [x] Executor supervision with bounded Git evidence and fail-closed ACP permissions
 - [x] Supervised live preview with auto-reload
-- [x] Review screen skeleton: verdict + approve/request-changes
-- [ ] Role skills: manager, backend, frontend, reviewer playbooks
-- [ ] Orchestrator pass: execute Manager actions, run/review loop, approval side-effects
-- [ ] Review screen: diff + verdict + mockup side-by-side (needs reviewer output)
+- [x] Reviewer-before-human flow, corrective runs and audited decisions
+- [x] Review screen with verdict, findings, diff and spec/render comparison
+- [x] Owner-controlled push, remote SHA verification and idempotent Pull Request
+- [x] Opt-in real-provider V1 vertical-slice canary
+
+Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) also call out the unwired automatic Architect pass, fresh Manager context assembly, project status promotion and screenshot/pixel-diff review.
 
 ## Contributing
 
-Not open yet — the codebase doesn't exist. Design feedback via issues is welcome.
+The repository is active. Run [`scripts/guardian.sh`](scripts/guardian.sh) before proposing a change; architecture or product feedback belongs in GitHub issues. LaToile never merges a delivered Pull Request automatically.
 
 ## License
 

@@ -1,5 +1,6 @@
-//! The domain. Zero I/O, zero async, zero external dependencies — this crate
-//! must compile for any target and never know how it is persisted or served.
+//! The domain. Zero I/O and zero external dependencies — native async port
+//! signatures declare adapter contracts without owning a runtime. This crate
+//! never knows how it is persisted or served.
 //!
 //! Owns: entities (`Project`, `SpecVersion`, `Task`, `Run`, `Approval`,
 //! `Preview`, `Conversation`, `Message`), the state machines with their

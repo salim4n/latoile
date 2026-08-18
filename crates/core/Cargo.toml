@@ -1,6 +1,6 @@
 [package]
 name = "latoile-core"
-description = "Pure domain: entities, state machines, events, ports. Zero I/O, zero async."
+description = "Pure domain: entities, state machines, events, and dependency-free async ports."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

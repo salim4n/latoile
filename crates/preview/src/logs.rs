@@ -1,5 +1,5 @@
 //! A bounded ring of log lines. The dev server's stdout/stderr stream here;
-//! the server crate will later expose a snapshot over SSE. Bounded, because a
+//! the server crate exposes through preview status. Bounded, because a
 //! vite server left running for a week must not become a memory leak.
 
 use std::collections::VecDeque;

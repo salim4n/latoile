@@ -13,9 +13,8 @@
 //!
 //! What the port does NOT carry: run completion. `start_run` returns the
 //! session handle and the turn continues in the background; the outcome is
-//! recorded here (`run_state`) for the app layer to pick up, because the
-//! port has no completion callback. That is the one seam a future wiring
-//! step should close.
+//! recorded here (`run_state`) for the supervision driver to poll and apply
+//! through the app layer. The poll boundary is the deliberate V1 contract.
 
 use crate::config::{AgentCommand, ChannelConfig};
 use crate::error::AgentError;

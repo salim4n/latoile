@@ -63,3 +63,23 @@ only the remote disposable repository and updates, rather than deletes, the
 local evidence. This preserves the PR while making the fixture read-only. Pass
 `--delete` only when permanent removal is wanted and the authenticated GitHub
 token has the `delete_repo` scope.
+
+## Verified V1 evidence
+
+The completion claim in the README is backed by this retained run, not by the
+hermetic test doubles:
+
+| Field | Evidence |
+|---|---|
+| Date | 2026-08-18 |
+| LaToile commit | `303503fa84960f349f8e7c7036631c6667d86cf6` |
+| Provider | Codex through `codex-acp` |
+| Result | `success`, Reviewer verdict `approve`, preview `ready` |
+| Event cursor | `24` |
+| Local SHA | `7438ccd02adc35468aa29f99b6e034469f8af163` |
+| Remote SHA | `7438ccd02adc35468aa29f99b6e034469f8af163` |
+| Pull Request | [disposable canary PR #1](https://github.com/salim4n/latoile-v1-canary-20260818-130417-98dbb1/pull/1) |
+
+The repository remains private and disposable. The local evidence artifact is
+ignored by Git because it also carries cleanup state; the table above is the
+bounded, reviewable release proof.

@@ -10,9 +10,6 @@
 //!
 //! Methods take and return domain types or plain data. Nothing here knows
 //! about HTTP, SQL, or ACP frames.
-//!
-//! Methods take and return domain types or plain data. Nothing here knows
-//! about HTTP, SQL, or ACP frames.
 
 use crate::approval::Approval;
 use crate::conversation::{Conversation, Message};

@@ -9,7 +9,7 @@ LaToile shares roughly 80% of its technical DNA with AionCore (local Rust daemon
 
 ## Decision
 
-Rewrite as a modular monolith in a Cargo workspace, with selective reuse: the official `agent-client-protocol` crate, the `aionui-process` supervision pattern (identity-gated orphan reaping), and the spawn builder policy (env scrubbing, kill_on_drop, process-tree kill).
+Rewrite as a modular monolith in a Cargo workspace, with selective reuse: the official `agent-client-protocol` crate and the process-supervision patterns observed in AionCore (`kill_on_drop`, dedicated process groups and bounded shutdown).
 
 ## Rationale
 
@@ -36,7 +36,7 @@ Three observed approaches: PTY/tmux (Firetower — heuristics-based status, docu
 
 ## Decision
 
-All agents go through the `agent-client-protocol` v2 crate behind an `agents/` port defined in `core`. The Manager holds a persistent session per project (resumed on each message); executors are ephemeral runs (spawn → task → exit). Permissions follow the AionCore pattern: allow/approval/reject heuristics (auto-reject: `.env`, absolute paths, `docker`), then a human approval queue.
+All agents go through the `agent-client-protocol` v2 crate behind an `agents/` port defined in `core`. The Manager holds a persistent session per project (resumed on each message); executors are ephemeral runs (spawn → task → exit). Permissions follow a fail-closed allow/ask/reject policy: `.env`, Docker and paths outside the project checkout are hard-denied; executor mutations create a sanitized human approval; Manager mutations are rejected.
 
 Each fixed role is routed to either Claude or Codex through a persisted
 setting. The provider's native CLI owns login/status/logout; LaToile only
@@ -93,3 +93,89 @@ One project = one `work_branch`; all runs commit to it; the preview serves it. S
 
 + Preview is never ambiguous; no intermediate merge step; trivial mental model.
 − Collision risk if two runs touch the same files — accepted and monitored; if the pain shows up, a new ADR switches to branch-per-run.
+
+---
+
+# ADR-005 — Reviewer evidence precedes the human decision
+
+- **Date**: 2026-08-18
+- **Status**: accepted and canary-verified
+
+## Context
+
+An executor saying “done” is not decision-grade evidence. Asking the owner at that point makes the owner perform the review and turns the approval inbox into a status feed. The product has a dedicated Reviewer role and a visual contract, so the machine review must happen before human attention is requested.
+
+## Decision
+
+When an executor finishes, LaToile persists bounded Git evidence, moves the task to `review`, refreshes the preview, and starts a fresh Reviewer run. The Reviewer receives the task, approved spec excerpts, visual-contract references, base/head SHAs and sanitized artifacts. Only a terminal, schema-validated Reviewer result creates the human review approval.
+
+A granted review moves the task to `done`. A rejected review requires an owner comment and starts exactly one corrective run linked from the immutable decision. Reviewer spawn/transport failure creates an honest fallback `changes_requested` approval instead of silently skipping review.
+
+## Rejected alternatives
+
+- Ask the owner directly after executor completion: cheaper in tokens, but makes every owner a manual reviewer.
+- Let the Reviewer modify code: collapses executor and judge into one authority and destroys the value of an independent verdict.
+- Drop malformed Reviewer output: hides a failed control; the fallback approval keeps the failure visible and non-deliverable.
+
+## Consequences
+
++ The owner decides from a localized verdict, diff excerpt and spec/render comparison.
++ No approved task can bypass the Reviewer-before-human ordering.
+− Every executor run pays Reviewer latency and provider usage, accepted because owner attention is the scarcer resource.
+
+---
+
+# ADR-006 — GitHub delivery is explicit, verified and never merges
+
+- **Date**: 2026-08-18
+- **Status**: accepted and canary-verified
+
+## Context
+
+A green task board does not prove that the checkout being pushed is the code the owner approved. A dirty worktree, wrong branch, mismatched origin, missing executor commit or retry after a partial GitHub failure can publish different code or create duplicate PRs.
+
+## Decision
+
+Delivery is one explicit owner action after all selected tasks are `done`. The app supplies the approved executor SHAs to a dedicated `WorkBranchPublisher` port. The GitHub adapter verifies the canonical checkout, stored origin, exact work branch, clean worktree and SHA ancestry, pushes without force, then reads the remote ref and requires `local_sha = remote_sha`.
+
+The app persists `Delivery(status = pushed)` before calling the PR API. It then finds an existing open PR for the stored head/base pair or creates one and upgrades the same delivery to `pull_request_open`. A retry re-verifies the push and reuses the PR. No port or route exposes merge.
+
+## Rejected alternatives
+
+- Push automatically after review: removes the owner-controlled publication boundary.
+- Trust `git push` exit status: does not prove the ref GitHub now serves equals the selected local commit.
+- Open a new PR on every retry: turns network ambiguity into duplicate owner work.
+- Merge from LaToile: expands an evidence and orchestration tool into a deployment authority.
+
+## Consequences
+
++ The UI can show a durable PR URL and the exact verified SHA.
++ A PR API outage leaves truthful `pushed` evidence that a retry can complete.
+− V1 delivers the whole project work branch; selecting a subset of commits needs branch-per-run integration in a later ADR.
+
+---
+
+# ADR-007 — New runs carry explicit project context before persistence
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The initial implementation resolved an executor directory by loading its run, task and project from SQLite. `DispatchTask` intentionally starts the ACP handshake before saving a new task/run so a failed spawn cannot leave an active database ghost. The first real-provider canary exposed the cycle: the channel needed a row that correctly did not exist yet.
+
+## Decision
+
+`AgentChannel::start_run` receives both `ProjectId` and the transient `Run`. Directory resolution uses the persisted project checkout directly. The new task and run are saved only after the handshake succeeds. Reviewer and corrective runs use the same explicit context.
+
+## Rejected alternatives
+
+- Persist `starting` rows before spawn: requires compensating writes and exposes transient ghosts to the board and restart recovery.
+- Put `project_id` permanently on `RUN`: duplicates the `RUN → TASK → PROJECT` relation only to solve a pre-persistence concern.
+- Let the agent choose a working directory: crosses the adapter trust boundary and permits workspace escape.
+
+## Consequences
+
++ Adapter startup has the context it needs without weakening persistence atomicity.
++ The project path remains server-owned and is checked before any process spawn.
+− The agent port carries one extra identifier that is derivable after persistence but necessary before it.
