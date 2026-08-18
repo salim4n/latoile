@@ -702,19 +702,30 @@ class Canary:
                 "role_id": "frontend",
                 "title": title,
                 "description": (
-                    "Implement the approved P0 visual contract exactly. The deliberate "
-                    "canary regression in the first execution prompt is intermediate test "
-                    "setup and must not remain in the deliverable."
+                    "Implement the approved P0 visual contract exactly as a no-dependency "
+                    "loopback Node server. Final acceptance: validate the configured port; "
+                    "serve only GET/HEAD / with HTML, nosniff and no-store headers; return "
+                    "404 for other paths and 405 with Allow for other methods; handle startup "
+                    "read/listen errors; keep a clean committed worktree with no regression "
+                    "marker or injection code. The deliberate canary regression in the first "
+                    "execution prompt is intermediate test setup only."
                 ),
                 "prompt": (
                     "This repository has no application source. Read the approved architecture "
                     "package without changing any design/ file. It declares exactly one "
-                    "self-contained mockups/*.html P0 page. Create package.json and server.mjs "
-                    "for a no-dependency Node HTTP server. For every request, server.mjs must "
-                    "read that approved mockup at runtime and return its HTML, but deliberately "
+                    "self-contained mockups/*.html P0 page at route /. Create package.json and "
+                    "server.mjs for a no-dependency Node HTTP server. Validate the --port value "
+                    "as an integer from 1 through 65535 and listen only on 127.0.0.1. Read the "
+                    "approved mockup as UTF-8 before listening and fail startup clearly if it "
+                    "cannot be read. Serve only GET and HEAD at `/`; set Content-Type to "
+                    "`text/html; charset=utf-8`, X-Content-Type-Options to `nosniff`, and "
+                    "Cache-Control to `no-store`; HEAD returns the same headers with no body. "
+                    "Return 404 for every other path and 405 with `Allow: GET, HEAD` for every "
+                    "other method. Handle server listen errors. For the first run only, "
+                    "deliberately "
                     "inject exactly `<style id=\"canary-regression\">html { position: relative; "
                     "left: 16px !important; }</style>` immediately before </head>. Parse the "
-                    "port from `--port` and listen only on 127.0.0.1. Keep the visible title "
+                    "port from `--port`. Keep the visible title "
                     "'Contrat visuel LaToile'. Commit every implementation change with message "
                     "'feat: introduce visual canary regression'. Finish with a clean worktree "
                     "and changed HEAD. Do not touch secrets, Docker or the approved design package."
@@ -875,10 +886,13 @@ class Canary:
     ) -> str:
         self.stage("owner rejects the measured visual regression")
         comment = (
-            "Remove only the `<style id=\"canary-regression\">` injection from server.mjs. "
-            "Serve the exact approved mockup bytes unchanged for every route, keep design/ "
-            "immutable, verify the title 'Contrat visuel LaToile', commit the correction and "
-            "finish with a clean worktree."
+            "Remove every regression artifact and code path from server.mjs, including the "
+            "`canary-regression` marker, 16px style, template/replacement variable and injection "
+            "logic. The final GET / body must be the exact approved mockup UTF-8 bytes. Preserve "
+            "the validated port, loopback bind, GET/HEAD routing, 404/405 behavior, Allow, HTML, "
+            "nosniff and no-store headers, and startup/listen error handling required by the "
+            "task. Keep design/ immutable, verify the title 'Contrat visuel LaToile', address "
+            "every blocking Reviewer finding, commit the correction and finish clean."
         )
         decided = api.post(
             f"/api/approvals/{review['id']}",
