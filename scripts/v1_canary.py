@@ -43,6 +43,7 @@ CAPTURE_BROWSER_CANDIDATES = (
     "chromium",
     "chromium-browser",
 )
+MAX_POST_VISUAL_REVIEW_CORRECTIONS = 2
 
 
 class CanaryFailure(RuntimeError):
@@ -216,6 +217,18 @@ def baseline_observations(payload: Any) -> list[dict[str, Any]]:
         for row in payload[:50]
         if isinstance(row, dict)
     ]
+
+
+def review_is_approvable(review: dict[str, Any]) -> bool:
+    with contextlib.suppress(json.JSONDecodeError):
+        payload = json.loads(review.get("payload") or "{}")
+        gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
+        return bool(
+            gate.get("trusted_v2") is True
+            and gate.get("approvable") is True
+            and payload.get("verdict") in {"approve", "approve_with_reservations"}
+        )
+    return False
 
 
 def prove_replacement_evidence(
@@ -808,7 +821,7 @@ class Canary:
         api: Api,
         project_id: str,
         reviewed_run_id: str,
-        expected_approvable: bool,
+        expected_approvable: bool | None,
         prefix: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self.stage(f"{prefix} Reviewer result")
@@ -837,7 +850,7 @@ class Canary:
                     self.data[f"{prefix}_visual_observation"] = (
                         visual_evidence_observation(comparisons[0])
                     )
-                expected_status = "passed" if expected_approvable else "blocking"
+                expected_status = "blocking" if expected_approvable is False else "passed"
                 evidence = one_visual_comparison(
                     comparisons, reviewed_run_id, expected_status
                 )
@@ -845,20 +858,23 @@ class Canary:
                     payload.get("schema_version") != 2
                     or payload.get("reviewed_run_id") != reviewed_run_id
                     or gate.get("trusted_v2") is not True
-                    or gate.get("approvable") is not expected_approvable
+                    or (
+                        expected_approvable is not None
+                        and gate.get("approvable") is not expected_approvable
+                    )
                     or len(references) != 1
                     or references[0].get("evidence_id") != evidence.get("id")
                     or references[0].get("baseline_png_digest")
                     != evidence.get("baseline_png_digest")
                 ):
                     raise CanaryFailure("Reviewer V2 gate is not bound to the exact evidence")
-                if expected_approvable:
+                if gate.get("approvable") is True:
                     if verdict not in {"approve", "approve_with_reservations"}:
                         raise CanaryFailure(
                             f"corrected Reviewer returned non-deliverable verdict {verdict!r}"
                         )
                 elif verdict != "changes_requested":
-                    raise CanaryFailure("blocking evidence did not canonicalize the verdict")
+                    raise CanaryFailure("non-approvable evidence did not canonicalize the verdict")
                 reviewer_run = api.get(f"/api/runs/{review['run_id']}")
                 if reviewer_run.get("status") != "finished":
                     raise CanaryFailure("Reviewer approval appeared before a finished reviewer run")
@@ -917,6 +933,47 @@ class Canary:
         self.data["rejected_review_id"] = review["id"]
         self.data["corrective_run_id"] = corrective_run_id
         self.data["owner_rejection_recorded"] = True
+        return str(corrective_run_id)
+
+    def reject_for_review_findings(
+        self,
+        api: Api,
+        review: dict[str, Any],
+        evidence: dict[str, Any],
+        attempt: int,
+    ) -> str:
+        self.stage(f"owner rejects blocking code findings {attempt}")
+        comment = (
+            f"Bounded canary code-correction cycle {attempt}/"
+            f"{MAX_POST_VISUAL_REVIEW_CORRECTIONS}: address every blocking Reviewer finding "
+            "with the smallest compliant code change. The trusted visual evidence already "
+            "passes; preserve the exact approved GET / bytes, immutable design/, loopback bind, "
+            "validated port, GET/HEAD behavior, 404/405 responses, Allow, HTML, nosniff and "
+            "no-store headers, and startup/listen error handling. Run relevant checks, commit "
+            "the correction and finish with a clean worktree."
+        )
+        decided = api.post(
+            f"/api/approvals/{review['id']}",
+            {"granted": False, "comment": comment},
+        )
+        corrective_run_id = decided.get("corrective_run_id")
+        if (
+            decided.get("status") != "rejected"
+            or decided.get("decision_comment") != comment
+            or not corrective_run_id
+        ):
+            raise CanaryFailure("code review rejection did not start one corrective run")
+        detail = api.get(f"/api/approvals/{review['id']}")
+        payload = json.loads(detail.get("payload") or "{}")
+        references = (payload.get("visual_evidence") or {}).get("references") or []
+        if (
+            detail.get("corrective_run_id") != corrective_run_id
+            or len(references) != 1
+            or references[0].get("evidence_id") != evidence.get("id")
+        ):
+            raise CanaryFailure("code review rejection lost its passed visual evidence")
+        self.data[f"review_fix_{attempt}_rejected_review_id"] = review["id"]
+        self.data[f"review_fix_{attempt}_run_id"] = corrective_run_id
         return str(corrective_run_id)
 
     def approve_corrected_review(self, api: Api, review: dict[str, Any]) -> None:
@@ -1165,14 +1222,33 @@ class Canary:
             api, initial_review, original_evidence
         )
         self.wait_for_executor(api, corrective_run, "corrected")
-        corrected_review, corrected_evidence = self.wait_for_review(
-            api, project["id"], corrective_run, True, "corrected"
+        final_review, final_evidence = self.wait_for_review(
+            api, project["id"], corrective_run, None, "corrected"
         )
+        review_corrections = 0
+        while (
+            not review_is_approvable(final_review)
+            and review_corrections < MAX_POST_VISUAL_REVIEW_CORRECTIONS
+        ):
+            review_corrections += 1
+            review_fix_run = self.reject_for_review_findings(
+                api, final_review, final_evidence, review_corrections
+            )
+            prefix = f"review_fix_{review_corrections}"
+            self.wait_for_executor(api, review_fix_run, prefix)
+            final_review, final_evidence = self.wait_for_review(
+                api, project["id"], review_fix_run, None, prefix
+            )
+        if not review_is_approvable(final_review):
+            raise CanaryFailure(
+                "Reviewer still reports blocking code findings after bounded corrections"
+            )
+        self.data["post_visual_review_corrections"] = review_corrections
         self.prove_spec_and_baseline_unchanged(
-            api, project, spec, original_evidence, corrected_evidence
+            api, project, spec, original_evidence, final_evidence
         )
         self.prove_preview(api, project["id"])
-        self.approve_corrected_review(api, corrected_review)
+        self.approve_corrected_review(api, final_review)
         self.deliver(api, project, repo)
         self.data["permission_decisions"] = self.permission_decisions
 

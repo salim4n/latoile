@@ -41,10 +41,13 @@ and exercises:
 4. a frontend executor that serves the approved mockup with a deliberate 16 px regression;
 5. server evidence that classifies that regression as `blocking`;
 6. a finished Reviewer V2 run before the first human approval request;
-7. an explicit owner rejection and exactly one linked corrective run;
+7. an explicit owner rejection and one linked visual corrective run;
 8. distinct corrective evidence classified `passed` against the same baseline;
-9. unchanged approved design bytes, a corrected live preview and a second Reviewer-before-human cycle;
-10. explicit approval, exact pushed SHA and a live Pull Request.
+9. up to two additional, auditable code-review correction cycles when a real
+   Reviewer still reports a concrete blocking finding after visual parity;
+10. unchanged approved design bytes, a corrected live preview and
+    Reviewer-before-human ordering for every cycle;
+11. explicit approval, exact pushed SHA and a live Pull Request.
 
 Success prints the PR URL, the exact local/remote SHA and the path to a bounded
 `evidence.json`. The artifact contains only identifiers, counts, statuses,

@@ -164,6 +164,25 @@ class CanarySafetyTests(unittest.TestCase):
         self.assertNotIn("failure_message", observation[0])
         self.assertNotIn("html", observation[0])
 
+    def test_review_approvability_requires_trusted_gate_and_deliverable_verdict(self):
+        review = {
+            "payload": json.dumps(
+                {
+                    "verdict": "approve_with_reservations",
+                    "gate": {"trusted_v2": True, "approvable": True},
+                }
+            )
+        }
+        self.assertTrue(canary.review_is_approvable(review))
+        for mutation in [
+            {"verdict": "changes_requested", "gate": {"trusted_v2": True, "approvable": False}},
+            {"verdict": "approve", "gate": {"trusted_v2": False, "approvable": True}},
+            {"verdict": "approve", "gate": {"trusted_v2": True, "approvable": False}},
+        ]:
+            self.assertFalse(
+                canary.review_is_approvable({"payload": json.dumps(mutation)})
+            )
+
     def test_architecture_diagnostic_is_bounded_and_excludes_owner_content(self):
         with tempfile.TemporaryDirectory() as artifact_root:
             runner = canary.Canary(
