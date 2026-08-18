@@ -13,7 +13,9 @@ use latoile_agents::RunState;
 use latoile_app::supervision::{self, Observed};
 use latoile_app::use_cases::EnsurePreview;
 use latoile_core::ids::RunId;
-use latoile_core::ports::RunStore;
+use latoile_core::ports::{ProjectStore, RunStore, SpecStore, TaskStore};
+use latoile_core::Run;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
@@ -44,7 +46,7 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
         let applied = supervision::apply(&state.store, &run.id, &observed).await?;
 
         if let Some(project) = applied.project_id.clone() {
-            if applied.review_approval.is_some() {
+            if applied.reviewer_dispatch_requested {
                 // §5.2, in order: refresh the preview, then dispatch the
                 // reviewer. Both best-effort — a dead dev server or a
                 // missing adapter must not break supervision.
@@ -60,16 +62,17 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
                     tracing::warn!(error = %e, "preview refresh after run failed");
                 }
 
-                // The reviewer needs the finished run's summary.
+                // The reviewer gets task, approved spec references/excerpts,
+                // visual-contract paths and sanitized Git evidence.
                 let finished = RunStore::get(&state.store, &run.id).await?;
                 if let Some(finished) = finished {
-                    let summary = finished.summary.clone().unwrap_or_default();
+                    let context = review_context(state, &finished).await?;
                     let reviewed = supervision::start_review(
                         &state.store,
                         &state.agents,
                         &finished.task_id,
                         &finished.id,
-                        &summary,
+                        &context,
                     )
                     .await;
                     if let Err(e) = reviewed {
@@ -80,6 +83,155 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
         }
     }
     Ok(())
+}
+
+async fn review_context(
+    state: &AppState,
+    finished: &Run,
+) -> Result<String, latoile_app::use_cases::UseCaseError> {
+    let task = TaskStore::get(&state.store, &finished.task_id)
+        .await?
+        .ok_or(latoile_app::use_cases::UseCaseError::NotFound("task"))?;
+    let spec = SpecStore::approved_for_project(&state.store, &task.project_id).await?;
+    let project = ProjectStore::get(&state.store, &task.project_id)
+        .await?
+        .ok_or(latoile_app::use_cases::UseCaseError::NotFound("project"))?;
+
+    let (spec_reference, excerpts, visual_references) = match spec {
+        Some(spec) => {
+            let (excerpts, visuals) = design_evidence(&project.local_path, &spec.design_dir);
+            (
+                format!(
+                    "spec {} v{} (approved), directory `{}`",
+                    spec.id.as_str(),
+                    spec.version,
+                    spec.design_dir
+                ),
+                excerpts,
+                visuals,
+            )
+        }
+        None => (
+            "approved spec unavailable".into(),
+            "(no approved spec excerpt available)".into(),
+            "(no visual-contract reference available)".into(),
+        ),
+    };
+    let base = finished.base_sha.as_deref().unwrap_or("unknown");
+    let head = finished.head_sha.as_deref().unwrap_or("unknown");
+    let artifacts = finished.artifacts.as_deref().unwrap_or("{}");
+
+    Ok(format!(
+        "TASK\n- id: {}\n- role: {}\n- title: {}\n- description: {}\n\nAPPROVED SPEC\n{}\n\nSPEC EXCERPTS\n{}\n\nVISUAL CONTRACT REFERENCES\n{}\n\nEXECUTION EVIDENCE\n- summary: {}\n- base SHA: {}\n- head SHA: {}\n- sanitized artifacts: {}\n\nInspect the repository diff between the two SHAs (plus working-tree changes). For frontend work, compare the live render with the visual references before issuing the verdict.",
+        task.id.as_str(),
+        task.role_id.as_str(),
+        task.title,
+        task.description,
+        spec_reference,
+        excerpts,
+        visual_references,
+        finished.summary.as_deref().unwrap_or("(none)"),
+        base,
+        head,
+        truncate(artifacts, 32 * 1024),
+    ))
+}
+
+/// Read only bounded, text-shaped spec evidence under the project's
+/// checkout. A stale or escaping design path degrades to metadata only.
+fn design_evidence(local_path: &str, design_dir: &str) -> (String, String) {
+    let Ok(root) = std::fs::canonicalize(local_path) else {
+        return unavailable_design_evidence();
+    };
+    let Ok(design) = std::fs::canonicalize(root.join(design_dir)) else {
+        return unavailable_design_evidence();
+    };
+    if !design.starts_with(&root) {
+        return unavailable_design_evidence();
+    }
+
+    let mut files = collect_design_files(&design);
+    files.sort();
+    let mut excerpts = String::new();
+    let mut visuals = Vec::new();
+    for path in files.into_iter().take(40) {
+        let relative = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+        match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+            "md" | "txt" | "json" | "yaml" | "yml" if excerpts.len() < 16 * 1024 => {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    excerpts.push_str(&format!(
+                        "\n### `{relative}`\n{}\n",
+                        truncate(&content, 4 * 1024)
+                    ));
+                }
+            }
+            "png" | "jpg" | "jpeg" | "webp" | "svg" => visuals.push(relative),
+            _ => {}
+        }
+    }
+
+    if excerpts.is_empty() {
+        excerpts.push_str("(no readable text spec file found)");
+    }
+    let visuals = if visuals.is_empty() {
+        "(no image reference found; inspect the design directory directly)".into()
+    } else {
+        visuals
+            .into_iter()
+            .take(20)
+            .map(|path| format!("- `{path}`"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    (truncate(&excerpts, 20 * 1024), visuals)
+}
+
+fn collect_design_files(root: &Path) -> Vec<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    let mut visited_dirs = 0usize;
+    while let Some(dir) = pending.pop() {
+        visited_dirs += 1;
+        if visited_dirs > 40 || files.len() >= 100 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() && visited_dirs + pending.len() < 40 {
+                pending.push(path);
+            } else if file_type.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+fn unavailable_design_evidence() -> (String, String) {
+    (
+        "(spec files unavailable; inspect the approved design directory in the workspace)".into(),
+        "(visual references unavailable)".into(),
+    )
+}
+
+fn truncate(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_string();
+    }
+    let mut boundary = limit;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}…", &value[..boundary])
 }
 
 async fn observe(state: &AppState, run: &RunId) -> Observed {
@@ -106,5 +258,43 @@ async fn observe(state: &AppState, run: &RunId) -> Observed {
             },
         },
         Some(RunState::Failed(reason)) => Observed::Failed { reason },
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn design_evidence_includes_bounded_text_and_visual_references() {
+        let checkout = tempfile::tempdir().unwrap();
+        let design = checkout.path().join("design");
+        std::fs::create_dir_all(&design).unwrap();
+        std::fs::write(
+            design.join("spec.md"),
+            "# Login\n\nLe bouton primaire respecte un espacement de 16 px.",
+        )
+        .unwrap();
+        std::fs::write(design.join("login.png"), b"not-a-real-image").unwrap();
+
+        let (excerpts, visuals) =
+            design_evidence(checkout.path().to_str().unwrap(), "design");
+        assert!(excerpts.contains("Le bouton primaire"));
+        assert!(excerpts.contains("design/spec.md"));
+        assert!(visuals.contains("design/login.png"));
+    }
+
+    #[test]
+    fn an_escaping_design_path_is_never_read() {
+        let checkout = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "must not leak").unwrap();
+
+        let (excerpts, _) = design_evidence(
+            checkout.path().to_str().unwrap(),
+            outside.path().to_str().unwrap(),
+        );
+        assert!(!excerpts.contains("must not leak"));
+        assert!(excerpts.contains("unavailable"));
     }
 }

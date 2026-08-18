@@ -7,6 +7,7 @@
 //! place SQL lives outside the vault.
 
 pub mod manager_actions;
+pub mod review_result;
 pub mod store;
 pub mod supervision;
 pub mod use_cases;

@@ -10,6 +10,7 @@
 
 use crate::store::Store;
 use crate::use_cases::UseCaseError;
+use crate::review_result::{review_failure_payload, review_payload};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RoleId, RunId, TaskId};
 use latoile_core::ports::{AgentChannel, ApprovalStore, EventLog, RunStore, TaskStore};
@@ -60,8 +61,10 @@ pub enum Step {
     FailRun,
     CancelRun,
     SubmitForReview,
-    /// Create the review approval for the human (§5.2's reviewer surface).
-    RequestReviewApproval,
+    /// Tell the server driver to start the Reviewer after preview refresh.
+    DispatchReviewer,
+    /// Create the human approval from a terminal Reviewer result.
+    RequestReviewApproval { payload: String },
     /// The run died: the task goes back to the board (`Task::fail_run`).
     RequeueTask,
     Journal(EventKind, String),
@@ -135,11 +138,10 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
                 EventKind::RunFinished,
                 format!("{run_payload}finished\"}}"),
             ));
-            // The task goes to review only from in_progress — and a review
-            // approval is requested exactly once.
-            if task.status == TaskStatus::InProgress {
-                steps.push(Step::SubmitForReview);
-                steps.push(Step::RequestReviewApproval);
+            if run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review {
+                steps.push(Step::RequestReviewApproval {
+                    payload: review_payload(summary),
+                });
                 steps.push(Step::Journal(
                     EventKind::ApprovalRequested,
                     format!(
@@ -147,6 +149,11 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
                         run.id.as_str()
                     ),
                 ));
+            } else if task.status == TaskStatus::InProgress {
+                // Executor finished: enter review and dispatch the Reviewer.
+                // No human approval exists until that run terminates.
+                steps.push(Step::SubmitForReview);
+                steps.push(Step::DispatchReviewer);
             }
             steps
         }
@@ -158,6 +165,7 @@ pub fn plan(run: &Run, task: &Task, observed: &Observed) -> Vec<Step> {
                     format!("{run_payload}cancelled\"}}"),
                 ));
             }
+            finish_failed_review(run, task, &mut steps, "Reviewer run cancelled");
             requeue(task, &mut steps);
             steps
         }
@@ -177,8 +185,24 @@ fn fail_plan(run: &Run, task: &Task, run_payload: &str, reason: &str) -> Vec<Ste
             ),
         ));
     }
+    finish_failed_review(run, task, &mut steps, reason);
     requeue(task, &mut steps);
     steps
+}
+
+fn finish_failed_review(run: &Run, task: &Task, steps: &mut Vec<Step>, reason: &str) {
+    if !steps.is_empty() && run.role_id.as_str() == "reviewer" && task.status == TaskStatus::Review {
+        steps.push(Step::RequestReviewApproval {
+            payload: review_failure_payload(reason),
+        });
+        steps.push(Step::Journal(
+            EventKind::ApprovalRequested,
+            format!(
+                "{{\"run_id\":\"{}\",\"kind\":\"review\",\"fallback\":true}}",
+                run.id.as_str()
+            ),
+        ));
+    }
 }
 
 /// After a dead run, an in-progress task goes back to `ready` — and the
@@ -198,6 +222,7 @@ fn requeue(task: &Task, steps: &mut Vec<Step>) {
 pub struct Applied {
     pub steps: usize,
     pub review_approval: Option<ApprovalId>,
+    pub reviewer_dispatch_requested: bool,
     /// The run's project — the driver needs it for the §5.2 EnsurePreview
     /// step. None when the run was unknown.
     pub project_id: Option<latoile_core::ids::ProjectId>,
@@ -209,6 +234,7 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
     let empty = |project_id| Applied {
         steps: 0,
         review_approval: None,
+        reviewer_dispatch_requested: false,
         project_id,
     };
     let Some(run) = RunStore::get(store, run_id).await? else {
@@ -226,6 +252,7 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
     let mut run = run;
     let mut task = task;
     let mut review_approval = None;
+    let mut reviewer_dispatch_requested = false;
     let mut applied = 0;
     for step in steps {
         match step {
@@ -243,16 +270,19 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
             Step::FailRun => run.fail()?,
             Step::CancelRun => run.cancel()?,
             Step::SubmitForReview => task.submit_for_review()?,
+            Step::DispatchReviewer => reviewer_dispatch_requested = true,
             Step::RequeueTask => task.fail_run()?,
-            Step::RequestReviewApproval => {
+            Step::RequestReviewApproval { payload } => {
+                // Persist the Reviewer's terminal state before exposing its
+                // approval. The deterministic id makes a retry an upsert,
+                // never a second decision card.
+                RunStore::save(store, &run).await?;
+                TaskStore::save(store, &task).await?;
                 let approval = Approval::new(
-                    ApprovalId::new(ulid::Ulid::new().to_string())?,
+                    review_approval_id(&run.id)?,
                     run.id.clone(),
                     ApprovalKind::Review,
-                    serde_json::json!({
-                        "summary": run.summary.clone().unwrap_or_default(),
-                    })
-                    .to_string(),
+                    payload,
                 );
                 ApprovalStore::save(store, &approval).await?;
                 review_approval = Some(approval.id);
@@ -276,23 +306,28 @@ pub async fn apply(store: &Store, run_id: &RunId, observed: &Observed) -> Result
     Ok(Applied {
         steps: applied,
         review_approval,
+        reviewer_dispatch_requested,
         project_id: Some(project_id),
     })
 }
 
+fn review_approval_id(run_id: &RunId) -> Result<ApprovalId, UseCaseError> {
+    Ok(ApprovalId::new(format!("review-{}", run_id.as_str()))?)
+}
+
 /// Dispatch the reviewer run on a task that just entered review (§5.2).
 /// `Task::start_review` is the guard: review status, reviewer role. The
-/// prompt carries the finished run's summary — the reviewer never sees the
-/// conversation.
+/// prompt carries a bounded, repository-grounded context assembled by the
+/// server — the reviewer never needs the private Manager conversation.
 ///
-/// A spawn failure is journaled, not raised: the review approval already
-/// exists and the human can decide without the reviewer.
+/// A spawn failure is terminal and creates an honest fallback approval tied
+/// to the failed Reviewer run.
 pub async fn start_review<A: AgentChannel>(
     store: &Store,
     agents: &A,
     task_id: &TaskId,
     finished_run: &RunId,
-    summary: &str,
+    context: &str,
 ) -> Result<Run, UseCaseError> {
     let task = TaskStore::get(store, task_id)
         .await?
@@ -307,10 +342,10 @@ pub async fn start_review<A: AgentChannel>(
         TriggeredBy::Manager,
     );
     let prompt = format!(
-        "Review the changes produced by run {} on task {:?}. Summary of the work:\n{}",
+        "Review the changes produced by run {} on task {:?}.\n\n{}\n\nReturn exactly one fenced `latoile-review` JSON block conforming to schema_version 1.",
         finished_run.as_str(),
         task.title,
-        if summary.is_empty() { "(none)" } else { summary },
+        if context.is_empty() { "(no execution context available)" } else { context },
     );
 
     match agents.start_run(&run, &prompt).await {
@@ -330,6 +365,26 @@ pub async fn start_review<A: AgentChannel>(
                         "{{\"run_id\":\"{}\",\"outcome\":\"error\",\"reason\":{}}}",
                         run.id.as_str(),
                         serde_json::Value::String(format!("reviewer spawn failed: {e}"))
+                    ),
+                },
+            )
+            .await?;
+            let payload = review_failure_payload(&format!("Reviewer spawn failed: {e}"));
+            let approval = Approval::new(
+                review_approval_id(&run.id)?,
+                run.id.clone(),
+                ApprovalKind::Review,
+                payload,
+            );
+            ApprovalStore::save(store, &approval).await?;
+            EventLog::append(
+                store,
+                &NewEvent {
+                    project_id: task.project_id.clone(),
+                    kind: EventKind::ApprovalRequested,
+                    payload: format!(
+                        "{{\"run_id\":\"{}\",\"kind\":\"review\",\"fallback\":true}}",
+                        run.id.as_str()
                     ),
                 },
             )

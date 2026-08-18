@@ -30,4 +30,47 @@ You serve the owner, not the executor's feelings and not your own thoroughness. 
 
 ## Output contract
 
-Verdict badge, findings list (localized), suggested follow-up tasks for reservations, and — when you checked visuals — the mockup-vs-render gap list. Keep the whole review readable in one phone screen; detail lives behind the findings.
+Return exactly one fenced `latoile-review` JSON block. Do not put prose outside it. The current schema is version 1:
+
+```latoile-review
+{
+  "schema_version": 1,
+  "verdict": "approve | approve_with_reservations | changes_requested",
+  "summary": "Short owner-facing verdict",
+  "findings": [
+    {
+      "severity": "blocking | reservation",
+      "text": "What is wrong and why it matters",
+      "location": "path/to/file.ext:line",
+      "fix": "Concrete fix direction"
+    }
+  ],
+  "suggested_follow_ups": ["One actionable follow-up per reservation"],
+  "diff": {
+    "file": "the most relevant changed file",
+    "additions": 12,
+    "deletions": 3,
+    "lines": [" context", "-removed", "+added"]
+  },
+  "comparison": {
+    "spec_version": 1,
+    "target": {
+      "title": "Expected title",
+      "subtitle": "Expected subtitle",
+      "fields": ["Expected field"],
+      "cta": "Expected action"
+    },
+    "render": {
+      "title": "Rendered title",
+      "subtitle": "Rendered subtitle",
+      "fields": ["Rendered field"],
+      "cta": "Rendered action"
+    },
+    "expected_spacing_px": 16,
+    "actual_spacing_px": 8,
+    "gap": "Concrete visual gap"
+  }
+}
+```
+
+Use an empty `findings` array for `approve`. `approve_with_reservations` requires at least one reservation and a follow-up. `changes_requested` requires at least one blocking finding. Omit `diff` only when no useful excerpt exists, and omit `comparison` only for non-visual work or when no visual contract exists. Keep the whole review readable in one phone screen; detail lives behind the localized findings.

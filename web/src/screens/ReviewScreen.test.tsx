@@ -20,6 +20,7 @@ const richPayload = JSON.stringify({
       location: "web/src/components/LoginForm.tsx:36",
     },
   ],
+  suggested_follow_ups: ["Ajouter un test de soumission pendant le chargement."],
   diff: {
     file: "web/src/components/LoginForm.tsx",
     additions: 15,
@@ -88,6 +89,8 @@ describe("ReviewScreen visual contract", () => {
     expect(await screen.findByText("Approuver avec réserve")).toBeTruthy();
     expect(screen.getByText("Findings (2)")).toBeTruthy();
     expect(screen.getByText("web/src/components/LoginForm.tsx:34")).toBeTruthy();
+    expect(screen.getByText("Suites suggérées (1)")).toBeTruthy();
+    expect(screen.getByText("Ajouter un test de soumission pendant le chargement.")).toBeTruthy();
     const diff = screen.getByRole("region", {
       name: "Diff du fichier web/src/components/LoginForm.tsx",
     });

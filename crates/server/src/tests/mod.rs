@@ -26,6 +26,8 @@ pub struct StubAgents {
     pub manager_reply: Arc<Mutex<String>>,
     /// Scripted supervision answers, keyed by run id.
     pub run_states: Arc<Mutex<std::collections::HashMap<String, latoile_agents::RunState>>>,
+    /// Role and prompt for every spawned run, used to prove review context.
+    pub run_prompts: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Default for StubAgents {
@@ -34,6 +36,7 @@ impl Default for StubAgents {
             manager_messages: Arc::new(Mutex::new(Vec::new())),
             manager_reply: Arc::new(Mutex::new("Bien reçu, je m'en occupe.".into())),
             run_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            run_prompts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -49,13 +52,17 @@ impl AgentChannel for StubAgents {
             actions: None,
         })
     }
-    async fn start_run(&self, r: &Run, _p: &str) -> PortResult<String> {
+    async fn start_run(&self, r: &Run, prompt: &str) -> PortResult<String> {
         // Registered as running so the supervision driver can be scripted:
         // tests flip the entry to Done/Failed when the "agent" is done.
         self.run_states
             .lock()
             .unwrap()
             .insert(r.id.as_str().to_string(), latoile_agents::RunState::Running);
+        self.run_prompts
+            .lock()
+            .unwrap()
+            .push((r.role_id.as_str().to_string(), prompt.to_string()));
         Ok("acp-stub".into())
     }
     async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {

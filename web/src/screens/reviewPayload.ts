@@ -32,9 +32,11 @@ export interface ComparisonPayload {
 }
 
 export interface VerdictPayload {
+  schema_version?: number;
   verdict?: string;
   summary?: string;
   findings: Finding[];
+  suggested_follow_ups: string[];
   diff?: DiffPayload;
   comparison?: ComparisonPayload;
 }
@@ -70,7 +72,7 @@ function parseFrame(value: unknown): ReviewFramePayload | undefined {
 export function parseReviewPayload(raw: string): VerdictPayload {
   try {
     const payload = record(JSON.parse(raw));
-    if (!payload) return { findings: [] };
+    if (!payload) return { findings: [], suggested_follow_ups: [] };
 
     const findings: Finding[] = Array.isArray(payload.findings)
       ? payload.findings.flatMap((item) => {
@@ -120,13 +122,19 @@ export function parseReviewPayload(raw: string): VerdictPayload {
       : undefined;
 
     return {
+      schema_version: finiteNumber(payload.schema_version),
       verdict: text(payload.verdict),
       summary: text(payload.summary),
       findings,
+      suggested_follow_ups: Array.isArray(payload.suggested_follow_ups)
+        ? payload.suggested_follow_ups.filter(
+            (item): item is string => typeof item === "string" && item.trim().length > 0,
+          )
+        : [],
       diff,
       comparison,
     };
   } catch {
-    return { findings: [] };
+    return { findings: [], suggested_follow_ups: [] };
   }
 }

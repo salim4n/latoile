@@ -113,9 +113,8 @@ async fn a_finished_run_drives_review_and_journals() {
         .unwrap()
         .unwrap();
     assert_eq!(task.status, TaskStatus::Review);
-    let pending = store.list_pending().await.unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].kind, latoile_core::ApprovalKind::Review);
+    // Executor completion alone never creates the human decision.
+    assert!(store.list_pending().await.unwrap().is_empty());
 
     let kinds: Vec<_> = store
         .events_since(0)
@@ -125,7 +124,7 @@ async fn a_finished_run_drives_review_and_journals() {
         .map(|(_, e)| e.kind)
         .collect();
     assert!(kinds.contains(&EventKind::RunFinished));
-    assert!(kinds.contains(&EventKind::ApprovalRequested));
+    assert!(!kinds.contains(&EventKind::ApprovalRequested));
 
     // §5.2: the reviewer run is dispatched on the task — after the preview
     // step, so give the tick a moment to get there.
@@ -140,6 +139,48 @@ async fn a_finished_run_drives_review_and_journals() {
     }
     let reviewer = reviewer.expect("a reviewer run should have been dispatched");
     assert_eq!(reviewer.status, RunStatus::Running);
+    assert!(store.list_pending().await.unwrap().is_empty());
+
+    let prompt = {
+        let prompts = agents.run_prompts.lock().unwrap();
+        prompts
+            .iter()
+            .find(|(role, _)| role == "reviewer")
+            .map(|(_, prompt)| prompt.clone())
+            .expect("the Reviewer prompt was recorded")
+    };
+    assert!(prompt.contains("Page de connexion"), "{prompt}");
+    assert!(prompt.contains("spec s1 v1 (approved)"), "{prompt}");
+    assert!(prompt.contains("1111111"), "{prompt}");
+    assert!(prompt.contains("2222222"), "{prompt}");
+    assert!(prompt.contains("src/endpoint.rs"), "{prompt}");
+    assert!(prompt.contains("latoile-review"), "{prompt}");
+    let reviewer_result = serde_json::json!({
+        "schema_version": 1,
+        "verdict": "approve_with_reservations",
+        "summary": "Conforme avec une réserve non bloquante.",
+        "findings": [{
+            "severity": "reservation",
+            "text": "Ajouter un état de chargement.",
+            "location": "web/src/Login.tsx:42",
+            "fix": "Désactiver le bouton pendant la requête."
+        }],
+        "suggested_follow_ups": ["Ajouter le test de double clic."]
+    })
+    .to_string();
+    agents.run_states.lock().unwrap().insert(
+        reviewer.id.as_str().into(),
+        RunState::Done(RunReport::terminal(RunOutcome::Finished, reviewer_result)),
+    );
+    assert_eq!(wait_terminal(&store, &reviewer.id).await, RunStatus::Finished);
+
+    let pending = store.list_pending().await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, latoile_core::ApprovalKind::Review);
+    assert_eq!(pending[0].run_id, reviewer.id);
+    let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["verdict"], "approve_with_reservations");
     // Re-read: the reviewer's RunStarted lands after the snapshot above.
     let later: Vec<_> = store
         .events_since(0)
@@ -149,6 +190,7 @@ async fn a_finished_run_drives_review_and_journals() {
         .map(|(_, e)| e.kind)
         .collect();
     assert!(later.contains(&EventKind::RunStarted));
+    assert!(later.contains(&EventKind::ApprovalRequested));
     handle.abort();
 }
 

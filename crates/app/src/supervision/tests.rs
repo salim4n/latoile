@@ -77,7 +77,10 @@ fn a_blocked_run_is_resumed_before_it_finishes() {
         }
     );
     assert!(steps.contains(&Step::SubmitForReview));
-    assert!(steps.contains(&Step::RequestReviewApproval));
+    assert!(steps.contains(&Step::DispatchReviewer));
+    assert!(!steps
+        .iter()
+        .any(|step| matches!(step, Step::RequestReviewApproval { .. })));
 }
 
 #[test]
@@ -100,7 +103,10 @@ fn a_task_already_past_in_progress_gets_no_second_review() {
         &Observed::finished("s"),
     );
     assert!(!steps.contains(&Step::SubmitForReview));
-    assert!(!steps.contains(&Step::RequestReviewApproval));
+    assert!(!steps.contains(&Step::DispatchReviewer));
+    assert!(!steps
+        .iter()
+        .any(|step| matches!(step, Step::RequestReviewApproval { .. })));
     assert!(steps.iter().any(|s| matches!(
         s,
         Step::Journal(EventKind::RunFinished, _)
@@ -108,7 +114,7 @@ fn a_task_already_past_in_progress_gets_no_second_review() {
 }
 
 #[tokio::test]
-async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
+async fn a_finished_executor_enters_review_without_requesting_human_approval() {
     let (store, run, _) = store_with_running_run().await;
     let applied = apply(
         &store,
@@ -118,15 +124,14 @@ async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
     .await
     .unwrap();
 
-    assert!(applied.review_approval.is_some());
+    assert!(applied.review_approval.is_none());
+    assert!(applied.reviewer_dispatch_requested);
     let run = RunStore::get(&store, &run.id).await.unwrap().unwrap();
     assert_eq!(run.status, RunStatus::Finished);
     let task = TaskStore::get(&store, &run.task_id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Review);
 
-    let pending = ApprovalStore::list_pending(&store).await.unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].kind, ApprovalKind::Review);
+    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
 
     let kinds: Vec<_> = store
         .events_since(0)
@@ -135,7 +140,7 @@ async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
         .iter()
         .map(|(_, e)| e.kind)
         .collect();
-    assert_eq!(kinds, [EventKind::RunFinished, EventKind::ApprovalRequested]);
+    assert_eq!(kinds, [EventKind::RunFinished]);
 
     // A second tick is a no-op.
     let again = apply(
@@ -146,6 +151,101 @@ async fn a_finished_run_drives_the_task_to_review_and_requests_approval() {
     .await
     .unwrap();
     assert_eq!(again.steps, 0);
+    assert!(!again.reviewer_dispatch_requested);
+}
+
+#[tokio::test]
+async fn a_terminal_reviewer_creates_one_validated_human_approval() {
+    use latoile_core::ports::{ManagerReply, PortError};
+    struct FakeAgents;
+    impl latoile_core::ports::AgentChannel for FakeAgents {
+        async fn tell_manager(
+            &self,
+            _: &latoile_core::ids::ProjectId,
+            _: &str,
+        ) -> Result<ManagerReply, PortError> {
+            unimplemented!()
+        }
+        async fn start_run(&self, _: &Run, _: &str) -> Result<String, PortError> {
+            Ok("acp-review".into())
+        }
+        async fn cancel_run(&self, _: &RunId) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    let (store, executor, _) = store_with_running_run().await;
+    apply(&store, &executor.id, &Observed::finished("endpoint implemented"))
+        .await
+        .unwrap();
+    assert!(ApprovalStore::list_pending(&store).await.unwrap().is_empty());
+
+    let reviewer = start_review(&store, &FakeAgents, &executor.task_id, &executor.id, "context")
+        .await
+        .unwrap();
+    let output = serde_json::json!({
+        "schema_version": 1,
+        "verdict": "approve",
+        "summary": "Le changement respecte la tâche et la spec.",
+        "findings": [],
+        "suggested_follow_ups": []
+    })
+    .to_string();
+    let applied = apply(&store, &reviewer.id, &Observed::finished(output))
+        .await
+        .unwrap();
+
+    assert!(!applied.reviewer_dispatch_requested);
+    let expected_approval_id = format!("review-{}", reviewer.id.as_str());
+    assert_eq!(
+        applied.review_approval.as_ref().map(|id| id.as_str()),
+        Some(expected_approval_id.as_str())
+    );
+    let pending = ApprovalStore::list_pending(&store).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].run_id, reviewer.id);
+    assert_eq!(pending[0].kind, ApprovalKind::Review);
+    let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["verdict"], "approve");
+
+    let again = apply(&store, &reviewer.id, &Observed::finished("ignored"))
+        .await
+        .unwrap();
+    assert_eq!(again.steps, 0);
+    assert_eq!(ApprovalStore::list_pending(&store).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_reviewer_creates_an_actionable_fallback_approval() {
+    let (store, executor, _) = store_with_running_run().await;
+    apply(&store, &executor.id, &Observed::finished("done"))
+        .await
+        .unwrap();
+
+    let mut reviewer = Run::new(
+        RunId::new("reviewer-failed").unwrap(),
+        executor.task_id,
+        RoleId::new("reviewer").unwrap(),
+        TriggeredBy::Manager,
+    );
+    reviewer.begin().unwrap();
+    RunStore::save(&store, &reviewer).await.unwrap();
+    apply(
+        &store,
+        &reviewer.id,
+        &Observed::Failed {
+            reason: "provider unavailable".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let pending = ApprovalStore::list_pending(&store).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
+    assert_eq!(payload["verdict"], "changes_requested");
+    assert!(payload["summary"].as_str().unwrap().contains("provider unavailable"));
 }
 
 #[tokio::test]
@@ -266,4 +366,56 @@ async fn the_reviewer_is_refused_on_a_task_not_in_review() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn a_reviewer_spawn_failure_is_visible_as_a_fallback_approval() {
+    struct BrokenAgents;
+    impl latoile_core::ports::AgentChannel for BrokenAgents {
+        async fn tell_manager(
+            &self,
+            _: &latoile_core::ids::ProjectId,
+            _: &str,
+        ) -> Result<latoile_core::ports::ManagerReply, latoile_core::ports::PortError> {
+            unimplemented!()
+        }
+        async fn start_run(
+            &self,
+            _: &Run,
+            _: &str,
+        ) -> Result<String, latoile_core::ports::PortError> {
+            Err(latoile_core::ports::PortError("binary missing".into()))
+        }
+        async fn cancel_run(&self, _: &RunId) -> Result<(), latoile_core::ports::PortError> {
+            Ok(())
+        }
+    }
+
+    let (store, executor, _) = store_with_running_run().await;
+    apply(&store, &executor.id, &Observed::finished("done"))
+        .await
+        .unwrap();
+    let reviewer = start_review(
+        &store,
+        &BrokenAgents,
+        &executor.task_id,
+        &executor.id,
+        "context",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reviewer.status, RunStatus::Error);
+    let pending = ApprovalStore::list_pending(&store).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].run_id, reviewer.id);
+    assert!(pending[0].payload.contains("binary missing"));
+    let kinds: Vec<_> = store
+        .events_since(0)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(_, event)| event.kind)
+        .collect();
+    assert!(kinds.ends_with(&[EventKind::RunFinished, EventKind::ApprovalRequested]));
 }

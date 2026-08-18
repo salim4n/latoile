@@ -106,6 +106,16 @@ export function VerdictCard({
           ))}
         </div>
       )}
+      {payload.suggested_follow_ups.length > 0 && (
+        <div className="findings review-followups">
+          <h3>{t("review.followups")} ({payload.suggested_follow_ups.length})</h3>
+          <ul>
+            {payload.suggested_follow_ups.map((followUp, index) => (
+              <li key={`${index}-${followUp}`}>{followUp}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
