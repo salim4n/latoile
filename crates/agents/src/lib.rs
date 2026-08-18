@@ -19,6 +19,7 @@
 //! - [`channel`] — the `AgentChannel` implementation itself.
 
 mod auth;
+mod architecture_package;
 mod channel;
 mod config;
 mod error;

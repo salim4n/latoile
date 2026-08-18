@@ -208,7 +208,7 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
     assert!(answered["reply"]["content"]
         .as_str()
         .unwrap()
-        .contains("découverte est complète"));
+        .contains("paquet confiné et vérifié"));
     assert!(agents.manager_messages.lock().unwrap().is_empty());
     assert_eq!(
         agents.architecture_messages.lock().unwrap().as_slice(),
@@ -219,6 +219,7 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
     );
 
     let architecture = app
+        .clone()
         .oneshot(authed(request(
             "GET",
             &format!("/api/projects/{project}/architecture"),
@@ -229,10 +230,39 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
     let architecture = body_json(architecture).await;
     assert_eq!(architecture["status"], "ready_to_draft");
     assert_eq!(architecture["phase"], "ready_to_draft");
+    assert_eq!(architecture["package_status"], "draft_ready");
+    assert_eq!(architecture["skill_name"], "app-architect-brainstorm");
+    assert_eq!(architecture["skill_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(architecture["operating_mode"], "greenfield");
+    assert_eq!(
+        architecture["package"]["head_sha"],
+        "2222222222222222222222222222222222222222"
+    );
     assert_eq!(architecture["questions"][0]["status"], "answered");
     assert_eq!(
         architecture["questions"][0]["answer"],
         "Les relances manuelles et les erreurs de suivi."
+    );
+
+    let specs = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/spec-versions"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let specs = body_json(specs).await;
+    assert_eq!(specs.as_array().unwrap().len(), 1);
+    assert_eq!(specs[0]["status"], "draft");
+    assert_eq!(specs[0]["skill_digest"], architecture["skill_digest"]);
+    assert_eq!(
+        specs[0]["package_digest"],
+        architecture["package"]["package_digest"]
+    );
+    assert_eq!(
+        specs[0]["package_commit_sha"],
+        architecture["package"]["head_sha"]
     );
 }
 

@@ -9,8 +9,13 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use latoile_app::store::Store;
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
-use latoile_core::ports::{AgentChannel, ArchitectReply, ManagerReply, PortResult, RepoInfo};
-use latoile_core::Run;
+use latoile_core::ports::{
+    AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
+    ManagerReply, PortResult, RepoInfo,
+};
+use latoile_core::{
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, Run, ARCHITECT_SKILL_NAME,
+};
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
@@ -82,6 +87,9 @@ impl AgentChannel for StubAgents {
                 .pop_front()
                 .unwrap_or_else(|| "missing scripted Architect reply".into()),
             acp_session_id: format!("acp-architecture:{}", session.as_str()),
+            skill_name: ARCHITECT_SKILL_NAME.into(),
+            skill_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            operating_mode: ArchitectureOperatingMode::Greenfield,
         })
     }
     async fn continue_architecture(
@@ -102,6 +110,29 @@ impl AgentChannel for StubAgents {
                 .pop_front()
                 .unwrap_or_else(|| "missing scripted Architect reply".into()),
             acp_session_id: format!("acp-architecture:{}", session.as_str()),
+            skill_name: ARCHITECT_SKILL_NAME.into(),
+            skill_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            operating_mode: ArchitectureOperatingMode::Greenfield,
+        })
+    }
+    async fn generate_architecture_package(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+        request: &ArchitecturePackageRequest,
+    ) -> PortResult<ArchitecturePackageReply> {
+        Ok(ArchitecturePackageReply {
+            evidence: ArchitecturePackageEvidence {
+                design_dir: request.design_dir.clone(),
+                base_sha: "1111111111111111111111111111111111111111".into(),
+                head_sha: "2222222222222222222222222222222222222222".into(),
+                tree_sha: "3333333333333333333333333333333333333333".into(),
+                package_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+                changed_files: vec![format!("{}architecture-spec.md", request.design_dir)],
+                diff_stat: "14 files changed".into(),
+            },
+            summary: "Package complete".into(),
         })
     }
     async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {

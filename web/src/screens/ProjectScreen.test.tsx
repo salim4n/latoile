@@ -124,6 +124,10 @@ describe("ProjectScreen visual contract", () => {
       project_id: project.id,
       status: "awaiting_answer",
       phase: "requirements",
+      skill_name: "app-architect-brainstorm",
+      skill_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      operating_mode: "greenfield",
+      package_status: "not_started",
       questions: [
         {
           id: "question-1",

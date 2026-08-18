@@ -68,7 +68,13 @@ impl<A: AgentChannel> StartArchitecture<A> {
                 return Err(error.into());
             }
         };
-        session.attach_agent(reply.acp_session_id)?;
+        if let Err(error) = session.attach_agent(reply.acp_session_id).and_then(|_| {
+            session.record_skill(reply.skill_name, reply.skill_digest, reply.operating_mode)
+        }) {
+            session.fail("Architect provider returned invalid session or skill provenance")?;
+            ArchitectureSessionStore::save(&self.store, &session).await?;
+            return Err(error.into());
+        }
         let turn = match parse_architecture_turn(&reply.content) {
             Ok(turn) => turn,
             Err(reason) => {
@@ -77,7 +83,17 @@ impl<A: AgentChannel> StartArchitecture<A> {
                 return Err(latoile_core::ports::PortError(reason.into()).into());
             }
         };
-        apply_turn(&mut session, &turn)?;
+        if turn.kind == ArchitectureTurnKind::ReadyToDraft {
+            let reason = "the Architect tried to draft without challenging an owner decision";
+            session.fail(reason)?;
+            ArchitectureSessionStore::save(&self.store, &session).await?;
+            return Err(latoile_core::DomainError::Invariant(reason).into());
+        }
+        if let Err(error) = apply_turn(&mut session, &turn) {
+            session.fail(format!("invalid Architect discovery transition: {error}"))?;
+            ArchitectureSessionStore::save(&self.store, &session).await?;
+            return Err(error);
+        }
         let question = question_for(&session, &turn, 1)?;
         self.store
             .save_turn(&session, None, question.as_ref())

@@ -70,6 +70,10 @@ pub trait Connector: Send + Sync {
 pub struct PermissionContext {
     pub role_id: String,
     pub run_id: Option<RunId>,
+    /// Architect package sessions are the only non-executor sessions with a
+    /// write grant. The policy allows static artifacts under this exact root
+    /// and rejects every other mutation.
+    pub write_root: Option<PathBuf>,
     pub broker: PermissionBroker,
     pub timeout: Duration,
 }
@@ -216,6 +220,7 @@ async fn answer_permission(
         title,
         request.tool_call.fields.raw_input.as_ref(),
         &workspace,
+        context.write_root.as_deref(),
     );
     let wanted = match decision {
         crate::policy::Decision::AllowOnce => Some(PermissionOptionKind::AllowOnce),

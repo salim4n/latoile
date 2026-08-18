@@ -12,7 +12,10 @@
 //! about HTTP, SQL, or ACP frames.
 
 use crate::approval::Approval;
-use crate::architecture::{ArchitectureQuestion, ArchitectureSession};
+use crate::architecture::{
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitectureQuestion,
+    ArchitectureSession,
+};
 use crate::conversation::{Conversation, Message};
 use crate::delivery::Delivery;
 use crate::event::NewEvent;
@@ -153,6 +156,30 @@ pub struct ManagerReply {
 pub struct ArchitectReply {
     pub content: String,
     pub acp_session_id: String,
+    pub skill_name: String,
+    pub skill_digest: String,
+    pub operating_mode: ArchitectureOperatingMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectureDecision {
+    pub sequence: u32,
+    pub prompt: String,
+    pub answer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitecturePackageRequest {
+    pub design_dir: String,
+    pub skill_digest: String,
+    pub operating_mode: ArchitectureOperatingMode,
+    pub decisions: Vec<ArchitectureDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitecturePackageReply {
+    pub evidence: ArchitecturePackageEvidence,
+    pub summary: String,
 }
 
 /// A sanitized ACP permission request. Raw tool input deliberately stays in
@@ -184,6 +211,16 @@ pub trait AgentChannel {
         _answer: &str,
     ) -> PortResult<ArchitectReply> {
         Err(PortError("architecture sessions are not supported".into()))
+    }
+    async fn generate_architecture_package(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+        _request: &ArchitecturePackageRequest,
+    ) -> PortResult<ArchitecturePackageReply> {
+        Err(PortError(
+            "architecture package generation is not supported".into(),
+        ))
     }
     async fn cancel_architecture(&self, _session: &ArchitectureSessionId) -> PortResult<()> {
         Ok(())

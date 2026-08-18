@@ -5,6 +5,7 @@
 use super::{unknown_variant, Store, StoreError};
 use latoile_core::ports::{ArchitectureSessionStore, PortResult};
 use latoile_core::{
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageStatus,
     ArchitecturePhase, ArchitectureQuestion, ArchitectureQuestionId, ArchitectureQuestionStatus,
     ArchitectureSession, ArchitectureSessionId, ArchitectureStatus, ProjectId,
 };
@@ -39,13 +40,62 @@ fn question_status(raw: &str) -> Result<ArchitectureQuestionStatus, StoreError> 
     })
 }
 
+fn operating_mode(raw: &str) -> Result<ArchitectureOperatingMode, StoreError> {
+    Ok(match raw {
+        "greenfield" => ArchitectureOperatingMode::Greenfield,
+        "reverse_engineering" => ArchitectureOperatingMode::ReverseEngineering,
+        other => return Err(unknown_variant("architecture operating mode", other)),
+    })
+}
+
+fn package_status(raw: &str) -> Result<ArchitecturePackageStatus, StoreError> {
+    Ok(match raw {
+        "not_started" => ArchitecturePackageStatus::NotStarted,
+        "generating" => ArchitecturePackageStatus::Generating,
+        "draft_ready" => ArchitecturePackageStatus::DraftReady,
+        other => return Err(unknown_variant("architecture package status", other)),
+    })
+}
+
 fn map_session(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureSession, StoreError> {
+    let package_design_dir = row.try_get::<Option<String>, _>("package_design_dir")?;
+    let package = match package_design_dir {
+        Some(design_dir) => {
+            let changed_files = serde_json::from_str::<Vec<String>>(
+                &row.try_get::<String, _>("package_changed_files")?,
+            )
+            .map_err(|error| {
+                StoreError::CorruptRow(format!(
+                    "invalid architecture changed-files evidence: {error}"
+                ))
+            })?;
+            Some(ArchitecturePackageEvidence {
+                design_dir,
+                base_sha: row.try_get::<String, _>("package_base_sha")?,
+                head_sha: row.try_get::<String, _>("package_head_sha")?,
+                tree_sha: row.try_get::<String, _>("package_tree_sha")?,
+                package_digest: row.try_get::<String, _>("package_digest")?,
+                changed_files,
+                diff_stat: row.try_get::<String, _>("package_diff_stat")?,
+            })
+        }
+        None => None,
+    };
     Ok(ArchitectureSession {
         id: ArchitectureSessionId::new(row.try_get::<String, _>("id")?)?,
         project_id: ProjectId::new(row.try_get::<String, _>("project_id")?)?,
         status: status(&row.try_get::<String, _>("status")?)?,
         phase: phase(&row.try_get::<String, _>("phase")?)?,
         acp_session_id: row.try_get("acp_session_id")?,
+        skill_name: row.try_get("skill_name")?,
+        skill_digest: row.try_get("skill_digest")?,
+        operating_mode: row
+            .try_get::<Option<String>, _>("operating_mode")?
+            .as_deref()
+            .map(operating_mode)
+            .transpose()?,
+        package_status: package_status(&row.try_get::<String, _>("package_status")?)?,
+        package,
         failure_reason: row.try_get("failure_reason")?,
     })
 }
@@ -63,14 +113,18 @@ fn map_question(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureQuestion, S
     })
 }
 
-const SESSION_COLUMNS: &str = "id, project_id, status, phase, acp_session_id, failure_reason";
+const SESSION_COLUMNS: &str = "id, project_id, status, phase, acp_session_id, skill_name, \
+    skill_digest, operating_mode, package_status, package_design_dir, package_base_sha, \
+    package_head_sha, package_tree_sha, package_digest, package_changed_files, \
+    package_diff_stat, failure_reason";
 const QUESTION_COLUMNS: &str = "id, session_id, sequence, prompt, status, answer";
 
 impl Store {
     pub async fn active_architecture_sessions(&self) -> PortResult<Vec<ArchitectureSession>> {
         let rows = sqlx::query(&format!(
             "SELECT {SESSION_COLUMNS} FROM architecture_session
-             WHERE status IN ('discovering', 'awaiting_answer', 'ready_to_draft')
+             WHERE status IN ('discovering', 'awaiting_answer')
+                OR (status = 'ready_to_draft' AND package_status != 'draft_ready')
              ORDER BY created_at ASC"
         ))
         .fetch_all(self.pool())
@@ -136,14 +190,29 @@ impl ArchitectureSessionStore for Store {
     }
 
     async fn save(&self, session: &ArchitectureSession) -> PortResult<()> {
+        let package = session.package.as_ref();
         sqlx::query(
             "INSERT INTO architecture_session
-               (id, project_id, status, phase, acp_session_id, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?)
+               (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
+                operating_mode, package_status, package_design_dir, package_base_sha,
+                package_head_sha, package_tree_sha, package_digest, package_changed_files,
+                package_diff_stat, failure_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
                acp_session_id = excluded.acp_session_id,
+               skill_name = excluded.skill_name,
+               skill_digest = excluded.skill_digest,
+               operating_mode = excluded.operating_mode,
+               package_status = excluded.package_status,
+               package_design_dir = excluded.package_design_dir,
+               package_base_sha = excluded.package_base_sha,
+               package_head_sha = excluded.package_head_sha,
+               package_tree_sha = excluded.package_tree_sha,
+               package_digest = excluded.package_digest,
+               package_changed_files = excluded.package_changed_files,
+               package_diff_stat = excluded.package_diff_stat,
                failure_reason = excluded.failure_reason,
                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         )
@@ -152,6 +221,22 @@ impl ArchitectureSessionStore for Store {
         .bind(session.status.as_str())
         .bind(session.phase.as_str())
         .bind(&session.acp_session_id)
+        .bind(&session.skill_name)
+        .bind(&session.skill_digest)
+        .bind(session.operating_mode.map(|mode| mode.as_str()))
+        .bind(session.package_status.as_str())
+        .bind(package.map(|value| value.design_dir.as_str()))
+        .bind(package.map(|value| value.base_sha.as_str()))
+        .bind(package.map(|value| value.head_sha.as_str()))
+        .bind(package.map(|value| value.tree_sha.as_str()))
+        .bind(package.map(|value| value.package_digest.as_str()))
+        .bind(
+            package
+                .map(|value| serde_json::to_string(&value.changed_files))
+                .transpose()
+                .map_err(|error| StoreError::CorruptRow(error.to_string()))?,
+        )
+        .bind(package.map(|value| value.diff_stat.as_str()))
         .bind(&session.failure_reason)
         .execute(self.pool())
         .await
@@ -257,14 +342,29 @@ impl ArchitectureSessionStore for Store {
             .await
             .map_err(StoreError::from)?;
         }
+        let package = session.package.as_ref();
         sqlx::query(
             "INSERT INTO architecture_session
-               (id, project_id, status, phase, acp_session_id, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?)
+               (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
+                operating_mode, package_status, package_design_dir, package_base_sha,
+                package_head_sha, package_tree_sha, package_digest, package_changed_files,
+                package_diff_stat, failure_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
                acp_session_id = excluded.acp_session_id,
+               skill_name = excluded.skill_name,
+               skill_digest = excluded.skill_digest,
+               operating_mode = excluded.operating_mode,
+               package_status = excluded.package_status,
+               package_design_dir = excluded.package_design_dir,
+               package_base_sha = excluded.package_base_sha,
+               package_head_sha = excluded.package_head_sha,
+               package_tree_sha = excluded.package_tree_sha,
+               package_digest = excluded.package_digest,
+               package_changed_files = excluded.package_changed_files,
+               package_diff_stat = excluded.package_diff_stat,
                failure_reason = excluded.failure_reason,
                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         )
@@ -273,6 +373,22 @@ impl ArchitectureSessionStore for Store {
         .bind(session.status.as_str())
         .bind(session.phase.as_str())
         .bind(&session.acp_session_id)
+        .bind(&session.skill_name)
+        .bind(&session.skill_digest)
+        .bind(session.operating_mode.map(|mode| mode.as_str()))
+        .bind(session.package_status.as_str())
+        .bind(package.map(|value| value.design_dir.as_str()))
+        .bind(package.map(|value| value.base_sha.as_str()))
+        .bind(package.map(|value| value.head_sha.as_str()))
+        .bind(package.map(|value| value.tree_sha.as_str()))
+        .bind(package.map(|value| value.package_digest.as_str()))
+        .bind(
+            package
+                .map(|value| serde_json::to_string(&value.changed_files))
+                .transpose()
+                .map_err(|error| StoreError::CorruptRow(error.to_string()))?,
+        )
+        .bind(package.map(|value| value.diff_stat.as_str()))
         .bind(&session.failure_reason)
         .execute(&mut *transaction)
         .await

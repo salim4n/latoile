@@ -31,6 +31,8 @@ run the paid, stateful real-provider canary.
 | 17 | Restart state is fail-safe | Server tests prove pre-listener run/permission/preview recovery and runtime preview death reconciliation |
 | 18 | Production artifact is executable | CI and release sign-off run `scripts/release-smoke.sh` against disposable state |
 | 19 | Backup pairs database and key | CLI tests prove integrity, key verification, no overwrite and workspace preservation |
+| 20 | Architect skill input is complete and pinned | Bundle tests require every reference and prove any byte change changes the SHA-256 |
+| 21 | Architect output cannot escape | ACP adapter tests prove package-only permission scope, mandatory static inventory, rejected source mutation, unchanged live HEAD on refusal and exact fast-forward on success |
 
 ## Anti-drift rules
 

@@ -16,6 +16,7 @@ mod dispatch_task;
 mod ensure_preview;
 mod grant_approval;
 mod manager_turn;
+mod produce_architecture_package;
 mod reject_approval;
 mod routing;
 mod send_message;

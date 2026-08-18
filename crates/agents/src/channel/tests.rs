@@ -5,11 +5,16 @@ use crate::config::{AgentCommand, AgentTimeouts};
 use crate::transport::TurnResult;
 use crate::updates::AgentUpdate;
 use latoile_core::ids::{RoleId, TaskId};
+use latoile_core::ports::{ArchitectureDecision, ArchitecturePackageRequest};
+use latoile_core::ArchitectureOperatingMode;
 use latoile_core::TriggeredBy;
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+
+type PermissionContextLog = Arc<StdMutex<Vec<(String, Option<PathBuf>)>>>;
 
 /// A scripted connection. `pend` makes prompt wait forever — the
 /// cancellation and timeout tests' wedge.
@@ -63,6 +68,7 @@ struct FakeConnector {
     spawned: AtomicUsize,
     commands: Arc<StdMutex<Vec<String>>>,
     workspaces: Arc<StdMutex<Vec<PathBuf>>>,
+    permission_contexts: PermissionContextLog,
 }
 
 impl FakeConnector {
@@ -78,7 +84,7 @@ impl Connector for FakeConnector {
         &'a self,
         command: &'a AgentCommand,
         workspace: &'a Path,
-        _permissions: PermissionContext,
+        permissions: PermissionContext,
     ) -> impl std::future::Future<Output = Result<FakeConn, AgentError>> + Send + 'a {
         async move {
             self.commands.lock().unwrap().push(command.program.clone());
@@ -86,6 +92,10 @@ impl Connector for FakeConnector {
                 .lock()
                 .unwrap()
                 .push(workspace.to_path_buf());
+            self.permission_contexts
+                .lock()
+                .unwrap()
+                .push((permissions.role_id.clone(), permissions.write_root.clone()));
             self.spawned.fetch_add(1, Ordering::SeqCst);
             Ok(self.conns.lock().unwrap().pop_front().unwrap_or(FakeConn {
                 log: Arc::new(StdMutex::new(vec![])),
@@ -103,8 +113,30 @@ fn fixture() -> (tempfile::TempDir, ChannelConfig) {
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(skill.join("SKILL.md"), "SKILL MANAGER").unwrap();
     let architect = dir.path().join("app-architect-brainstorm");
-    std::fs::create_dir_all(&architect).unwrap();
-    std::fs::write(architect.join("SKILL.md"), "SKILL ARCHITECT").unwrap();
+    for relative in crate::preamble::ARCHITECT_SKILL_FILES {
+        let path = architect.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("SKILL ARCHITECT — {relative}")).unwrap();
+    }
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "fixture",
+    ]);
     let config = ChannelConfig {
         skills_dir: dir.path().to_path_buf(),
         ..ChannelConfig::default()
@@ -215,10 +247,237 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
         .unwrap();
 
     let prompts = log.lock().unwrap();
-    assert!(prompts[0].starts_with("SKILL ARCHITECT\n\n---\n\n"));
+    assert!(prompts[0].contains("PINNED SKILL BUNDLE"));
+    assert!(prompts[0].contains("references/ui-ux-design.md"));
     assert!(prompts[0].contains("DISCOVERY-ONLY CONTRACT"));
     assert!(prompts[1].starts_with("OWNER ANSWER\n"));
     assert_eq!(ch.connector.spawned.load(Ordering::SeqCst), 1);
+}
+
+struct PackageConn {
+    workspace: PathBuf,
+    log: Arc<StdMutex<Vec<String>>>,
+    escape: bool,
+}
+
+impl Connection for PackageConn {
+    async fn new_session(&mut self, cwd: &Path) -> Result<(), AgentError> {
+        assert_eq!(cwd, self.workspace);
+        Ok(())
+    }
+
+    async fn prompt(&mut self, text: &str) -> Result<TurnResult, AgentError> {
+        self.log.lock().unwrap().push(text.to_string());
+        if self.escape {
+            std::fs::create_dir_all(self.workspace.join("src")).unwrap();
+            std::fs::write(self.workspace.join("src/forbidden.rs"), "fn escaped() {}\n").unwrap();
+            return Ok(TurnResult {
+                outcome: RunOutcome::Finished,
+                text: "I also changed production source".into(),
+                updates: vec![],
+            });
+        }
+        let root = self.workspace.join("design/v0001-as1/");
+        std::fs::create_dir_all(root.join("adrs")).unwrap();
+        std::fs::create_dir_all(root.join("mockups")).unwrap();
+        let tokens = b"# Design tokens\n\n- color-accent: #7c5cff\n";
+        std::fs::write(root.join("design-tokens.md"), tokens).unwrap();
+        let token_digest = format!("{:x}", Sha256::digest(tokens));
+        let skill_digest = text
+            .split("Pinned skill SHA-256: ")
+            .nth(1)
+            .and_then(|tail| tail.lines().next())
+            .unwrap();
+        let manifest = format!(
+            "```latoile-package\n{{\"schema_version\":1,\"skill_digest\":\"{skill_digest}\",\"operating_mode\":\"greenfield\",\"p0_scenarios\":[{{\"id\":\"P0-home\",\"screen\":\"Home\",\"mockup\":\"mockups/home.html\"}}]}}\n```\n"
+        );
+        std::fs::write(root.join("package-manifest.md"), manifest).unwrap();
+        for file in [
+            "architecture-spec.md",
+            "domain-model.md",
+            "data-model.md",
+            "api-contract.md",
+            "architecture-blueprint.md",
+            "component-specification.md",
+            "stack-decisions.md",
+            "architecture-contract.md",
+            "guardian-checklist.md",
+            "user-flows.md",
+        ] {
+            std::fs::write(
+                root.join(file),
+                format!("# {file}\n\nDecision-backed content.\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.join("screen-inventory.md"),
+            "# Screens\n\n- P0-home — Home\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("adrs/ADR-001-boundary.md"), "# ADR-001\n").unwrap();
+        std::fs::write(
+            root.join("mockups/home.html"),
+            format!(
+                "<!doctype html><html data-latoile-token-digest=\"{token_digest}\"><body>Home</body></html>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("gallery.html"),
+            format!(
+                "<!doctype html><html data-latoile-token-digest=\"{token_digest}\"><body><a href=\"mockups/home.html\">Home</a></body></html>"
+            ),
+        )
+        .unwrap();
+        Ok(TurnResult {
+            outcome: RunOutcome::Finished,
+            text: "Verified package ready".into(),
+            updates: vec![],
+        })
+    }
+
+    async fn cancel(&mut self) -> Result<(), AgentError> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct PackageConnector {
+    log: Arc<StdMutex<Vec<String>>>,
+    contexts: PermissionContextLog,
+    escape: bool,
+}
+
+impl Connector for PackageConnector {
+    type Conn = PackageConn;
+
+    async fn connect(
+        &self,
+        _command: &AgentCommand,
+        workspace: &Path,
+        permissions: PermissionContext,
+    ) -> Result<Self::Conn, AgentError> {
+        self.contexts
+            .lock()
+            .unwrap()
+            .push((permissions.role_id, permissions.write_root));
+        Ok(PackageConn {
+            workspace: workspace.to_path_buf(),
+            log: self.log.clone(),
+            escape: self.escape,
+        })
+    }
+}
+
+#[tokio::test]
+async fn the_acp_adapter_rejects_and_does_not_integrate_an_escape() {
+    let (dir, config) = fixture();
+    let bundle = Preambles::new(config.skills_dir.clone())
+        .architect_bundle()
+        .unwrap();
+    let base = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap().trim().to_string();
+    let connector = PackageConnector {
+        escape: true,
+        ..PackageConnector::default()
+    };
+    let routing = config.clone();
+    let channel: AcpChannel<PackageConnector, RootDirs, ChannelConfig> = AcpChannel::new(
+        config,
+        connector,
+        RootDirs(dir.path().to_path_buf()),
+        routing,
+    );
+    let result = channel
+        .generate_architecture_package(
+            &project(),
+            &architecture_session(),
+            &ArchitecturePackageRequest {
+                design_dir: "design/v0001-as1/".into(),
+                skill_digest: bundle.digest,
+                operating_mode: ArchitectureOperatingMode::Greenfield,
+                decisions: vec![ArchitectureDecision {
+                    sequence: 1,
+                    prompt: "Who?".into(),
+                    answer: "Owner".into(),
+                }],
+            },
+        )
+        .await;
+    assert!(result
+        .unwrap_err()
+        .0
+        .contains("outside the static package scope"));
+    assert!(!dir.path().join("src/forbidden.rs").exists());
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), base);
+}
+
+#[tokio::test]
+async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
+    let (dir, config) = fixture();
+    let bundle = Preambles::new(config.skills_dir.clone())
+        .architect_bundle()
+        .unwrap();
+    let connector = PackageConnector::default();
+    let log = connector.log.clone();
+    let contexts = connector.contexts.clone();
+    let routing = config.clone();
+    let channel: AcpChannel<PackageConnector, RootDirs, ChannelConfig> = AcpChannel::new(
+        config,
+        connector,
+        RootDirs(dir.path().to_path_buf()),
+        routing,
+    );
+
+    let generated = channel
+        .generate_architecture_package(
+            &project(),
+            &architecture_session(),
+            &ArchitecturePackageRequest {
+                design_dir: "design/v0001-as1/".into(),
+                skill_digest: bundle.digest.clone(),
+                operating_mode: ArchitectureOperatingMode::Greenfield,
+                decisions: vec![ArchitectureDecision {
+                    sequence: 1,
+                    prompt: "Who is the user?".into(),
+                    answer: "A product team".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(generated.evidence.package_digest.len(), 64);
+    assert!(generated
+        .evidence
+        .changed_files
+        .iter()
+        .all(|path| path.starts_with("design/v0001-as1/")));
+    assert!(dir
+        .path()
+        .join("design/v0001-as1/mockups/home.html")
+        .is_file());
+    let prompt = &log.lock().unwrap()[0];
+    assert!(prompt.contains("references/brainstorming-method.md"));
+    assert!(prompt.contains("assets/templates/arch-spec-template.md"));
+    assert!(prompt.contains(&bundle.digest));
+    let contexts = contexts.lock().unwrap();
+    assert_eq!(contexts[0].0, "architect_package");
+    assert!(contexts[0]
+        .1
+        .as_ref()
+        .unwrap()
+        .ends_with("design/v0001-as1"));
 }
 
 #[tokio::test]
@@ -264,10 +523,14 @@ async fn a_run_completes_in_the_background() {
     assert_eq!(handle, "acp:r1");
 
     let state = wait_for(&ch, &r.id, |s| !matches!(s, RunState::Running)).await;
-    assert_eq!(
+    assert!(matches!(
         state,
-        RunState::Done(RunReport::terminal(RunOutcome::Finished, "réponse"))
-    );
+        RunState::Done(RunReport {
+            outcome: RunOutcome::Finished,
+            ref summary,
+            ..
+        }) if summary == "réponse"
+    ));
 }
 
 #[tokio::test]

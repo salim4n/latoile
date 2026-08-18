@@ -13,6 +13,7 @@
 
 mod approval;
 mod architecture;
+mod architecture_draft;
 mod conversation;
 mod delivery;
 mod event;

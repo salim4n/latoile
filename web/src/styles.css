@@ -181,6 +181,11 @@ main { flex: 1; min-width: 0; padding: var(--space-4); padding-bottom: calc(72px
 .architecture-heading h3 { font-size: var(--text-md); }
 .architecture-eyebrow { display: block; margin-bottom: 2px; color: var(--accent); font-size: var(--text-xs); font-weight: 700; }
 .architecture-phase { margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--text-xs); }
+.architecture-provenance { margin-top: var(--space-1); color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.architecture-package { display: grid; gap: 2px; margin-top: var(--space-3); padding: var(--space-3); background: rgba(62, 184, 120, .06); border: 1px solid rgba(62, 184, 120, .28); border-radius: var(--radius-sm); font-size: var(--text-xs); }
+.architecture-package strong { color: var(--success); }
+.architecture-package code { color: var(--text-primary); }
+.architecture-package span { color: var(--text-secondary); font-family: var(--font-mono); }
 .architecture-current { margin-top: var(--space-3); padding: var(--space-3); background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .architecture-current strong { color: var(--accent); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; }
 .architecture-current p { margin-top: var(--space-1); font-size: var(--text-sm); }

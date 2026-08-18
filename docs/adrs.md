@@ -261,3 +261,45 @@ project checkouts.
 + Restore failure is non-destructive and wrong-key backups fail validation.
 + Existing repositories survive restore drills unchanged.
 − Unpushed repository work needs delivery to GitHub or a separate workspace snapshot.
+
+---
+
+# ADR-010 — Architect packages are generated in a confined detached worktree
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+Injecting only `SKILL.md` does not prove that the Architect saw its mandatory
+references. Letting the agent write directly in the project checkout makes an
+after-the-fact path check too late: production source may already be damaged,
+and a directory alone cannot identify the approved bytes.
+
+## Decision
+
+Discovery loads every mandatory `app-architect-brainstorm` reference, hashes
+the ordered bundle and embeds it read-only in the ACP prompt. The detected
+greenfield or reverse-engineering mode and digest are persisted on the session.
+
+Generation uses a fresh ACP session in a detached temporary worktree at the
+recorded project HEAD. Its permission scope permits only `.md` and `.html`
+writes under one server-chosen `design/v…/` directory and never permits shell.
+LaToile verifies the complete inventory, manifest-to-P0 traceability,
+self-contained HTML, shared token digest, file/byte bounds and Git diff. It
+then creates the commit itself and fast-forwards the live checkout only when
+its HEAD still equals the base. The draft pins package digest, commit and tree.
+
+## Rejected alternatives
+
+- Trust a prompt-only “write only in design/” rule: advisory, not authority.
+- Validate the live checkout after generation: detects damage after mutation.
+- Store mockups in SQLite: loses Git identity and makes visual artifacts opaque.
+- Allow the Architect to commit or run scripts: exceeds a specification role.
+
+## Consequences
+
++ An out-of-scope agent write never reaches the project branch.
++ A draft identifies exact skill inputs and exact Git output.
++ A concurrent project HEAD change refuses integration instead of merging stale architecture.
+− Package generation uses an extra worktree and a second ACP process after discovery.

@@ -164,6 +164,19 @@ export interface ArchitectureSession {
     | "requirements"
     | "ux_discovery"
     | "ready_to_draft";
+  skill_name?: string;
+  skill_digest?: string;
+  operating_mode?: "greenfield" | "reverse_engineering";
+  package_status: "not_started" | "generating" | "draft_ready";
+  package?: {
+    design_dir: string;
+    base_sha: string;
+    head_sha: string;
+    tree_sha: string;
+    package_digest: string;
+    changed_files: string[];
+    diff_stat: string;
+  };
   failure_reason?: string;
   questions: ArchitectureQuestion[];
 }

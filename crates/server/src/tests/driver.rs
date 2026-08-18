@@ -420,7 +420,14 @@ async fn a_finished_run_drives_review_and_journals() {
         RunStatus::Finished
     );
 
-    let pending = store.list_pending().await.unwrap();
+    let mut pending = Vec::new();
+    for _ in 0..100 {
+        pending = store.list_pending().await.unwrap();
+        if !pending.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].kind, latoile_core::ApprovalKind::Review);
     assert_eq!(pending[0].run_id, reviewer.id);

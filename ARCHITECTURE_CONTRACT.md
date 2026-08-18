@@ -41,6 +41,14 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   may run once; executor mutations create a sanitized, exact-once `Approval`.
   Timeout, cancellation and restart close pending permission decisions.
 - The Manager never receives destructive execution permissions; it does not write code.
+- Architect discovery is read-only and receives the complete ordered
+  `app-architect-brainstorm` bundle. The session persists its SHA-256 and
+  operating mode; a missing reference is a hard failure, never a thin fallback.
+- Architect generation runs only in a detached worktree. Its permission scope
+  permits static `.md`/`.html` files under one server-selected `design/v…/`
+  root and rejects shell, path traversal and every production/config mutation.
+  Only a bounded, inventory-complete package commit may fast-forward the live
+  checkout (ADR-010).
 - Raw ACP tool input and hidden reasoning never enter events, run artifacts,
   approval payloads, logs or canary evidence.
 
@@ -50,6 +58,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Partial-unique invariants (active run/task, preview/project, approved spec/project) are DB indexes **and** state-machine guards.
 - `EVENT` is append-only; `seq` is the only SSE cursor.
 - Design artifacts never go into the DB (ADR-003).
+- Architecture metadata pins skill digest, operating mode, package digest,
+  commit SHA and tree SHA. Package bytes remain in Git; session + draft +
+  creation event persist atomically.
 - Finished runs may store only bounded evidence: base/head SHA, lifecycle
   activity, commits, changed paths and diff statistics. Raw diffs stay in Git.
 - A review rejection has an immutable owner comment and at most one linked

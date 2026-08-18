@@ -232,7 +232,15 @@ function ArchitecturePanel({
   if (!session) return null;
 
   const openQuestion = session.questions.find((question) => question.status === "open");
-  const active = !["failed", "cancelled"].includes(session.status);
+  const active =
+    !["failed", "cancelled"].includes(session.status) &&
+    session.package_status !== "draft_ready";
+  const statusLabel =
+    session.package_status === "draft_ready"
+      ? t("architecture.package.ready")
+      : session.package_status === "generating"
+        ? t("architecture.package.generating")
+        : t(ARCHITECTURE_STATUS_KEYS[session.status]);
   return (
     <section className="architecture-card" aria-label={t("architecture.aria")}>
       <div className="architecture-heading">
@@ -243,12 +251,30 @@ function ArchitecturePanel({
         <span
           className={`badge ${session.status === "failed" ? "badge--danger" : session.status === "ready_to_draft" ? "badge--success" : "badge--neutral"}`}
         >
-          {t(ARCHITECTURE_STATUS_KEYS[session.status])}
+          {statusLabel}
         </span>
       </div>
       <p className="architecture-phase">
         {t("architecture.phase.label")} {t(ARCHITECTURE_PHASE_KEYS[session.phase])}
       </p>
+      {session.skill_digest && (
+        <p className="architecture-provenance">
+          {session.skill_name} · {t("architecture.skill.sha")} {session.skill_digest.slice(0, 12)} ·{" "}
+          {session.operating_mode === "reverse_engineering"
+            ? t("architecture.mode.reverse_engineering")
+            : t("architecture.mode.greenfield")}
+        </p>
+      )}
+      {session.package && (
+        <div className="architecture-package">
+          <strong>{t("architecture.package.evidence")}</strong>
+          <code>{session.package.design_dir}</code>
+          <span>
+            {session.package.changed_files.length} {t("architecture.package.files")} · commit{" "}
+            {session.package.head_sha.slice(0, 12)} · tree {session.package.tree_sha.slice(0, 12)}
+          </span>
+        </div>
+      )}
       {openQuestion && (
         <div className="architecture-current">
           <strong>{t("architecture.current_question")}</strong>

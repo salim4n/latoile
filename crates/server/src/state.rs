@@ -19,9 +19,10 @@ use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector,
 use latoile_app::store::Store;
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
-    AgentChannel, ArchitectReply, GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput,
-    ProvisionedWorkspace, PublishWorkBranchInput, PublishedWorkBranch, RepoInfo,
-    WorkBranchPublisher, WorkspaceProvisioner,
+    AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
+    GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace,
+    PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, WorkBranchPublisher,
+    WorkspaceProvisioner,
 };
 use latoile_core::Run;
 use latoile_github::{GitHub, GitHubConfig};
@@ -107,6 +108,25 @@ impl AgentChannel for AgentSlot {
             Self::Real(channel) => channel.cancel_architecture(session).await,
             #[cfg(test)]
             Self::Stub(stub) => stub.cancel_architecture(session).await,
+        }
+    }
+    async fn generate_architecture_package(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        request: &ArchitecturePackageRequest,
+    ) -> PortResult<ArchitecturePackageReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .generate_architecture_package(project, session, request)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.generate_architecture_package(project, session, request)
+                    .await
+            }
         }
     }
     async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {

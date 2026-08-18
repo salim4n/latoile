@@ -3,8 +3,20 @@
 //! status only. One approved spec per project — the application layer
 //! supersedes the previous one when a new draft is approved.
 
+use crate::architecture::ArchitectureOperatingMode;
 use crate::error::{DomainError, TransitionError};
-use crate::ids::{ProjectId, RunId, SpecVersionId};
+use crate::ids::{ArchitectureSessionId, ProjectId, RunId, SpecVersionId};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecProvenance {
+    pub architecture_session_id: ArchitectureSessionId,
+    pub skill_name: String,
+    pub skill_digest: String,
+    pub operating_mode: ArchitectureOperatingMode,
+    pub package_digest: String,
+    pub package_commit_sha: String,
+    pub package_tree_sha: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecStatus {
@@ -31,6 +43,7 @@ pub struct SpecVersion {
     pub status: SpecStatus,
     pub design_dir: String,
     pub architect_run_id: Option<RunId>,
+    pub provenance: Option<SpecProvenance>,
 }
 
 impl SpecVersion {
@@ -52,7 +65,28 @@ impl SpecVersion {
             status: SpecStatus::Draft,
             design_dir,
             architect_run_id,
+            provenance: None,
         })
+    }
+
+    pub fn attach_provenance(&mut self, provenance: SpecProvenance) -> Result<(), DomainError> {
+        if self.status != SpecStatus::Draft || self.provenance.is_some() {
+            return Err(DomainError::Invariant(
+                "architecture provenance attaches exactly once to a draft",
+            ));
+        }
+        if provenance.skill_name.trim().is_empty()
+            || provenance.skill_digest.len() != 64
+            || provenance.package_digest.len() != 64
+            || provenance.package_commit_sha.trim().is_empty()
+            || provenance.package_tree_sha.trim().is_empty()
+        {
+            return Err(DomainError::Invariant(
+                "spec provenance must pin the skill and immutable package",
+            ));
+        }
+        self.provenance = Some(provenance);
+        Ok(())
     }
 
     /// The owner approves this spec. Only a draft can be approved; approving

@@ -18,6 +18,7 @@
 //! recorded here (`run_state`) for the supervision driver to poll and apply
 //! through the app layer. The poll boundary is the deliberate V1 contract.
 
+use crate::architecture_package;
 use crate::config::{AgentCommand, ChannelConfig};
 use crate::error::AgentError;
 use crate::permissions::PermissionBroker;
@@ -25,8 +26,11 @@ use crate::preamble::Preambles;
 use crate::transport::{Connection, Connector, PermissionContext};
 use crate::updates::{AgentUpdate, RunOutcome};
 use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
-use latoile_core::ports::{AgentChannel, ArchitectReply, ManagerReply, PortResult};
-use latoile_core::Run;
+use latoile_core::ports::{
+    AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
+    ManagerReply, PortResult,
+};
+use latoile_core::{ArchitectureOperatingMode, Run};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -200,6 +204,9 @@ type ManagerSlot<C> = Arc<Mutex<ManagerEntry<C>>>;
 
 struct ArchitectEntry<C> {
     conn: C,
+    skill_name: String,
+    skill_digest: String,
+    operating_mode: ArchitectureOperatingMode,
 }
 
 type ArchitectSlot<C> = Arc<Mutex<ArchitectEntry<C>>>;
@@ -283,6 +290,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
                 PermissionContext {
                     role_id: "manager".into(),
                     run_id: None,
+                    write_root: None,
                     broker: self.permissions.clone(),
                     timeout: self.config.timeouts.permission,
                 },
@@ -324,6 +332,9 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AcpChannel<C, D, R> {
         Ok(ArchitectReply {
             content: turn.text,
             acp_session_id: format!("acp-architecture:{}", session.as_str()),
+            skill_name: guard.skill_name.clone(),
+            skill_digest: guard.skill_digest.clone(),
+            operating_mode: guard.operating_mode,
         })
     }
 }
@@ -395,26 +406,35 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
             .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
             .and_then(checked_dir)?;
         let command = self.routing.command_for("architect");
+        let bundle = self.preambles.architect_bundle().map_err(|error| {
+            AgentError::Prompt(format!("loading complete Architect skill bundle: {error}"))
+        })?;
+        let operating_mode = architecture_package::detect_operating_mode(&dir).await?;
         let mut conn = self
             .connector
             .connect(
                 &command,
                 &dir,
                 PermissionContext {
-                    role_id: "architect".into(),
+                    role_id: "architect_discovery".into(),
                     run_id: None,
+                    write_root: None,
                     broker: self.permissions.clone(),
                     timeout: self.config.timeouts.permission,
                 },
             )
             .await?;
         conn.new_session(&dir).await?;
-        let entry = Arc::new(Mutex::new(ArchitectEntry { conn }));
-        let preamble = self.preambles.for_role(
-            &latoile_core::ids::RoleId::new("architect").expect("a fixed role id is non-empty"),
-        );
+        let entry = Arc::new(Mutex::new(ArchitectEntry {
+            conn,
+            skill_name: bundle.name.clone(),
+            skill_digest: bundle.digest.clone(),
+            operating_mode,
+        }));
         let prompt = format!(
-            "{preamble}\n\n---\n\nDISCOVERY-ONLY CONTRACT\nDo not write files or execute commands yet. Ask one decision-rich question at a time. Return exactly one fenced `latoile-architecture` JSON object with schema_version 1, kind `question` or `ready_to_draft`, phase `domain_discovery`, `requirements`, `ux_discovery` or `ready_to_draft`, and message. Never invent an owner answer.\n\nINITIAL BRIEF\n{brief}"
+            "{}\n\n---\n\nDISCOVERY-ONLY CONTRACT\nPinned operating mode: {}. Do not write files or execute commands yet. Ask one decision-rich question at a time. Return exactly one fenced `latoile-architecture` JSON object with schema_version 1, kind `question` or `ready_to_draft`, phase `domain_discovery`, `requirements`, `ux_discovery` or `ready_to_draft`, and message. Never invent an owner answer.\n\nINITIAL BRIEF\n{brief}",
+            bundle.render(),
+            operating_mode.as_str(),
         );
         let reply = self.architecture_prompt(&entry, session, &prompt).await?;
         self.architects
@@ -460,6 +480,45 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
         Ok(())
     }
 
+    async fn generate_architecture_package(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        request: &ArchitecturePackageRequest,
+    ) -> PortResult<ArchitecturePackageReply> {
+        // Discovery is complete. The generation turn starts from the durable
+        // decisions in a separate, package-confined worktree.
+        self.architects.lock().await.remove(session.as_str());
+        let dir = self
+            .dirs
+            .manager_dir(project)
+            .await
+            .ok_or_else(|| AgentError::NoWorkspace(format!("project {}", project.as_str())))
+            .and_then(checked_dir)?;
+        let bundle = self.preambles.architect_bundle().map_err(|error| {
+            AgentError::Prompt(format!("loading complete Architect skill bundle: {error}"))
+        })?;
+        let command = self.routing.command_for("architect");
+        architecture_package::generate(
+            &self.connector,
+            &command,
+            &dir,
+            session,
+            request,
+            &bundle,
+            PermissionContext {
+                role_id: "architect_package".into(),
+                run_id: None,
+                write_root: None,
+                broker: self.permissions.clone(),
+                timeout: self.config.timeouts.permission,
+            },
+            self.config.timeouts,
+        )
+        .await
+        .map_err(Into::into)
+    }
+
     async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {
         let dir = self
             .dirs
@@ -476,6 +535,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
                 PermissionContext {
                     role_id: run.role_id.as_str().to_string(),
                     run_id: Some(run.id.clone()),
+                    write_root: None,
                     broker: self.permissions.clone(),
                     timeout: self.config.timeouts.permission,
                 },

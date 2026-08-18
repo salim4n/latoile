@@ -68,8 +68,28 @@ pub struct ArchitectureSessionDto {
     pub status: &'static str,
     pub phase: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operating_mode: Option<&'static str>,
+    pub package_status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<ArchitecturePackageDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
     pub questions: Vec<ArchitectureQuestionDto>,
+}
+
+#[derive(Serialize)]
+pub struct ArchitecturePackageDto {
+    pub design_dir: String,
+    pub base_sha: String,
+    pub head_sha: String,
+    pub tree_sha: String,
+    pub package_digest: String,
+    pub changed_files: Vec<String>,
+    pub diff_stat: String,
 }
 
 impl ArchitectureSessionDto {
@@ -79,6 +99,22 @@ impl ArchitectureSessionDto {
             project_id: session.project_id.as_str().to_string(),
             status: session.status.as_str(),
             phase: session.phase.as_str(),
+            skill_name: session.skill_name.clone(),
+            skill_digest: session.skill_digest.clone(),
+            operating_mode: session.operating_mode.map(|mode| mode.as_str()),
+            package_status: session.package_status.as_str(),
+            package: session
+                .package
+                .as_ref()
+                .map(|package| ArchitecturePackageDto {
+                    design_dir: package.design_dir.clone(),
+                    base_sha: package.base_sha.clone(),
+                    head_sha: package.head_sha.clone(),
+                    tree_sha: package.tree_sha.clone(),
+                    package_digest: package.package_digest.clone(),
+                    changed_files: package.changed_files.clone(),
+                    diff_stat: package.diff_stat.clone(),
+                }),
             failure_reason: session.failure_reason.clone(),
             questions: questions
                 .iter()
@@ -137,16 +173,39 @@ pub struct SpecDto {
     pub version: u32,
     pub status: &'static str,
     pub design_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operating_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_tree_sha: Option<String>,
 }
 
 impl From<&SpecVersion> for SpecDto {
     fn from(s: &SpecVersion) -> Self {
+        let provenance = s.provenance.as_ref();
         Self {
             id: s.id.as_str().to_string(),
             project_id: s.project_id.as_str().to_string(),
             version: s.version,
             status: s.status.as_str(),
             design_dir: s.design_dir.clone(),
+            architecture_session_id: provenance
+                .map(|value| value.architecture_session_id.as_str().to_string()),
+            skill_name: provenance.map(|value| value.skill_name.clone()),
+            skill_digest: provenance.map(|value| value.skill_digest.clone()),
+            operating_mode: provenance.map(|value| value.operating_mode.as_str()),
+            package_digest: provenance.map(|value| value.package_digest.clone()),
+            package_commit_sha: provenance.map(|value| value.package_commit_sha.clone()),
+            package_tree_sha: provenance.map(|value| value.package_tree_sha.clone()),
         }
     }
 }

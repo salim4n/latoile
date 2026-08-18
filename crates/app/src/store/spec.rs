@@ -3,7 +3,10 @@
 
 use super::{unknown_variant, Store, StoreError};
 use latoile_core::ports::{PortResult, SpecStore};
-use latoile_core::{ProjectId, RunId, SpecStatus, SpecVersion, SpecVersionId};
+use latoile_core::{
+    ArchitectureOperatingMode, ArchitectureSessionId, ProjectId, RunId, SpecProvenance, SpecStatus,
+    SpecVersion, SpecVersionId,
+};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
@@ -18,6 +21,25 @@ fn parse_status(raw: &str) -> Result<SpecStatus, StoreError> {
 
 fn row_to_spec(row: &SqliteRow) -> Result<SpecVersion, StoreError> {
     let architect = row.try_get::<Option<String>, _>("architect_run_id")?;
+    let architecture_session = row.try_get::<Option<String>, _>("architecture_session_id")?;
+    let provenance = architecture_session
+        .map(|architecture_session_id| {
+            let mode = match row.try_get::<String, _>("operating_mode")?.as_str() {
+                "greenfield" => ArchitectureOperatingMode::Greenfield,
+                "reverse_engineering" => ArchitectureOperatingMode::ReverseEngineering,
+                other => return Err(unknown_variant("spec operating mode", other)),
+            };
+            Ok(SpecProvenance {
+                architecture_session_id: ArchitectureSessionId::new(architecture_session_id)?,
+                skill_name: row.try_get("skill_name")?,
+                skill_digest: row.try_get("skill_digest")?,
+                operating_mode: mode,
+                package_digest: row.try_get("package_digest")?,
+                package_commit_sha: row.try_get("package_commit_sha")?,
+                package_tree_sha: row.try_get("package_tree_sha")?,
+            })
+        })
+        .transpose()?;
     Ok(SpecVersion {
         id: SpecVersionId::new(row.try_get::<String, _>("id")?)?,
         project_id: ProjectId::new(row.try_get::<String, _>("project_id")?)?,
@@ -26,17 +48,16 @@ fn row_to_spec(row: &SqliteRow) -> Result<SpecVersion, StoreError> {
         status: parse_status(&row.try_get::<String, _>("status")?)?,
         design_dir: row.try_get("design_dir")?,
         architect_run_id: architect.map(RunId::new).transpose()?,
+        provenance,
     })
 }
 
 const COLUMNS: &str =
-    "id, project_id, version, status, design_dir, architect_run_id";
+    "id, project_id, version, status, design_dir, architect_run_id, architecture_session_id, \
+     skill_name, skill_digest, operating_mode, package_digest, package_commit_sha, package_tree_sha";
 
 impl SpecStore for Store {
-    async fn approved_for_project(
-        &self,
-        project: &ProjectId,
-    ) -> PortResult<Option<SpecVersion>> {
+    async fn approved_for_project(&self, project: &ProjectId) -> PortResult<Option<SpecVersion>> {
         let row = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM spec_version WHERE project_id = ? AND status = 'approved'"
         ))
@@ -44,20 +65,28 @@ impl SpecStore for Store {
         .fetch_optional(self.pool())
         .await
         .map_err(StoreError::from)?;
-        row.map(|r| row_to_spec(&r))
-            .transpose()
-            .map_err(Into::into)
+        row.map(|r| row_to_spec(&r)).transpose().map_err(Into::into)
     }
 
     async fn save(&self, spec: &SpecVersion) -> PortResult<()> {
+        let provenance = spec.provenance.as_ref();
         sqlx::query(
             "INSERT INTO spec_version
-               (id, project_id, version, status, design_dir, architect_run_id)
-             VALUES (?, ?, ?, ?, ?, ?)
+               (id, project_id, version, status, design_dir, architect_run_id,
+                architecture_session_id, skill_name, skill_digest, operating_mode,
+                package_digest, package_commit_sha, package_tree_sha)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                design_dir = excluded.design_dir,
-               architect_run_id = excluded.architect_run_id",
+               architect_run_id = excluded.architect_run_id,
+               architecture_session_id = excluded.architecture_session_id,
+               skill_name = excluded.skill_name,
+               skill_digest = excluded.skill_digest,
+               operating_mode = excluded.operating_mode,
+               package_digest = excluded.package_digest,
+               package_commit_sha = excluded.package_commit_sha,
+               package_tree_sha = excluded.package_tree_sha",
         )
         .bind(spec.id.as_str())
         .bind(spec.project_id.as_str())
@@ -65,6 +94,13 @@ impl SpecStore for Store {
         .bind(spec.status.as_str())
         .bind(&spec.design_dir)
         .bind(spec.architect_run_id.as_ref().map(|r| r.as_str()))
+        .bind(provenance.map(|value| value.architecture_session_id.as_str()))
+        .bind(provenance.map(|value| value.skill_name.as_str()))
+        .bind(provenance.map(|value| value.skill_digest.as_str()))
+        .bind(provenance.map(|value| value.operating_mode.as_str()))
+        .bind(provenance.map(|value| value.package_digest.as_str()))
+        .bind(provenance.map(|value| value.package_commit_sha.as_str()))
+        .bind(provenance.map(|value| value.package_tree_sha.as_str()))
         .execute(self.pool())
         .await
         .map_err(StoreError::from)?;

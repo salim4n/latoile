@@ -28,8 +28,9 @@ pub mod task;
 
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
 pub use architecture::{
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageStatus,
     ArchitecturePhase, ArchitectureQuestion, ArchitectureQuestionStatus, ArchitectureSession,
-    ArchitectureStatus,
+    ArchitectureStatus, ARCHITECT_SKILL_NAME,
 };
 pub use conversation::{Author, Conversation, Message};
 pub use delivery::{Delivery, DeliveryStatus};
@@ -42,5 +43,5 @@ pub use ids::{
 pub use preview::{Preview, PreviewStatus};
 pub use project::{Project, ProjectStatus};
 pub use run::{Run, RunStatus, TriggeredBy};
-pub use spec::{SpecStatus, SpecVersion};
+pub use spec::{SpecProvenance, SpecStatus, SpecVersion};
 pub use task::{Task, TaskStatus};

@@ -37,7 +37,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | Context | Responsibility | Entities |
 |---|---|---|
 | Project | lifecycle, repo link, state | `Project` |
-| Design | versioned spec, artifacts | `SpecVersion` |
+| Design | Socratic discovery, versioned spec, artifacts | `ArchitectureSession`, `ArchitectureQuestion`, `SpecVersion` |
 | Orchestration | roles, tasks, runs, approvals | `Role`, `Task`, `Run`, `Approval` |
 | Conversation | the Manager thread | `Conversation`, `Message` |
 | Preview | dev server, port, state | `Preview` |
@@ -74,6 +74,17 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     Reviewer decision, no pending approval or active run, a clean checkout on
     the stored work branch, and every approved executor SHA to be an ancestor
     of the pushed HEAD. `local_sha = remote_sha` is a domain and SQL invariant.
+13. One active architecture session exists per project. It pins the complete
+    `app-architect-brainstorm` SHA-256 and detected operating mode before the
+    first question; every answer is durable before the next provider turn.
+14. Architecture generation runs in a detached worktree at a recorded base
+    SHA. The Architect has no shell and can mutate only one versioned
+    `design/v…/` directory. LaToile rejects any other path, validates the
+    mandatory spec/ADR/guardian/flow/token/gallery/P0 inventory, commits the
+    package itself and integrates only that verified commit by fast-forward.
+15. A generated draft pins architecture-session id, skill digest, operating
+    mode, package digest, commit SHA and tree SHA. Session, draft and
+    `SpecVersionCreated` event become visible in one SQLite transaction.
 
 ### 3.3 Domain events
 
@@ -84,7 +95,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | id | Dedicated skill | Lifecycle | Output |
 |----|----------------|-----------|--------|
 | `manager` | `project-manager` | persistent ACP session, resumed per message | messages + executable action block |
-| `architect` | `app-architect-brainstorm` | ephemeral run | `SpecVersion` + `design/` files |
+| `architect` | complete content-addressed `app-architect-brainstorm` bundle | persistent read-only discovery, then isolated package run | durable Q/A + verified `SpecVersion` and static `design/v…/` package |
 | `backend` | `backend-engineer` | ephemeral ACP run | commits + sanitized evidence |
 | `frontend` | `frontend-engineer` | ephemeral ACP run | commits + sanitized evidence |
 | `reviewer` | `code-reviewer` | ephemeral ACP run | structured verdict → human `Approval` |
@@ -94,6 +105,9 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 ```mermaid
 erDiagram
     PROJECT ||--o{ SPEC_VERSION : "has spec versions"
+    PROJECT ||--o{ ARCHITECTURE_SESSION : "discovers architecture"
+    ARCHITECTURE_SESSION ||--o{ ARCHITECTURE_QUESTION : "records decisions"
+    ARCHITECTURE_SESSION ||--o| SPEC_VERSION : "produces draft"
     PROJECT ||--o{ TASK : "split into"
     PROJECT ||--o| PREVIEW : "one active preview max"
     PROJECT ||--o{ EVENT : "emits"
@@ -127,7 +141,37 @@ erDiagram
         text status "draft | approved | superseded"
         text design_dir "path to design/ in the repo"
         text architect_run_id FK "nullable"
+        text architecture_session_id FK "nullable"
+        text skill_digest "nullable for legacy drafts"
+        text operating_mode "greenfield | reverse_engineering"
+        text package_digest
+        text package_commit_sha
+        text package_tree_sha
         text created_at
+    }
+    ARCHITECTURE_SESSION {
+        text id PK "ulid"
+        text project_id FK
+        text status "discovering | awaiting_answer | ready_to_draft | failed | cancelled"
+        text phase
+        text acp_session_id
+        text skill_name
+        text skill_digest "sha256"
+        text operating_mode "greenfield | reverse_engineering"
+        text package_status "not_started | generating | draft_ready"
+        text package_design_dir
+        text package_base_sha
+        text package_head_sha
+        text package_tree_sha
+        text package_digest
+    }
+    ARCHITECTURE_QUESTION {
+        text id PK "ulid"
+        text session_id FK
+        integer sequence
+        text prompt
+        text status "open | answered"
+        text answer
     }
     ROLE {
         text id PK "manager | architect | backend | frontend | reviewer"
@@ -329,7 +373,7 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 1. **Inbox** — pending approvals + blocked runs
 2. **Project** — Manager chat / task board / preview (mobile viewport default, desktop toggle)
 3. **Review** (P0) — verdict, findings, diff excerpt and structured spec/render comparison supplied by the Reviewer
-4. **New project** — pick repo → initial brief to the Manager
+4. **New project** — pick repo → initial brief to the persistent Architect discovery
 5. **Settings** — provider connections + fixed-role provider routing
 
 ## 6. Stack decision record
@@ -359,15 +403,17 @@ Errors: `{code, message}`; domain refusals use 422, wrong-state conflicts use 40
 
 ### 7.1 Verified V1 limits
 
-The real-provider canary proves the documented vertical slice with a
-pre-existing `design/` contract. It does not erase these current limits:
+The real-provider canary proves the documented vertical slice. The default
+hermetic suites additionally prove persistent Architect discovery and isolated
+package confinement. These current limits remain:
 
 - The Manager receives its persistent conversation plus the current user
   message, not a freshly assembled task/run/approval context payload on every
   turn.
-- `propose_spec` registers spec metadata; the automatic initial Architect run
-  that creates and commits a greenfield `design/` package is not wired. The
-  approved-directory-to-commit link remains a workflow rule (ADR-003).
+- Initial briefs now drive the content-addressed Architect discovery and a
+  committed `design/v…/` draft automatically. A live paid-provider canary for
+  this longer generation turn is still required before calling the provider
+  path production-proven; hermetic ACP adapter tests are not provider evidence.
 - Project status reaches `specced`; automatic promotion to `building` and
   `live` is not yet connected to orchestration/deployment events.
 - Preview proxying streams HTTP bodies but not WebSocket upgrades. Executor

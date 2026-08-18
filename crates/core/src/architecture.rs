@@ -6,6 +6,51 @@
 use crate::error::{DomainError, TransitionError};
 use crate::ids::{ArchitectureQuestionId, ArchitectureSessionId, ProjectId};
 
+pub const ARCHITECT_SKILL_NAME: &str = "app-architect-brainstorm";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchitectureOperatingMode {
+    Greenfield,
+    ReverseEngineering,
+}
+
+impl ArchitectureOperatingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Greenfield => "greenfield",
+            Self::ReverseEngineering => "reverse_engineering",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchitecturePackageStatus {
+    NotStarted,
+    Generating,
+    DraftReady,
+}
+
+impl ArchitecturePackageStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::Generating => "generating",
+            Self::DraftReady => "draft_ready",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitecturePackageEvidence {
+    pub design_dir: String,
+    pub base_sha: String,
+    pub head_sha: String,
+    pub tree_sha: String,
+    pub package_digest: String,
+    pub changed_files: Vec<String>,
+    pub diff_stat: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArchitecturePhase {
     DomainDiscovery,
@@ -60,6 +105,11 @@ pub struct ArchitectureSession {
     pub status: ArchitectureStatus,
     pub phase: ArchitecturePhase,
     pub acp_session_id: Option<String>,
+    pub skill_name: Option<String>,
+    pub skill_digest: Option<String>,
+    pub operating_mode: Option<ArchitectureOperatingMode>,
+    pub package_status: ArchitecturePackageStatus,
+    pub package: Option<ArchitecturePackageEvidence>,
     pub failure_reason: Option<String>,
 }
 
@@ -71,6 +121,11 @@ impl ArchitectureSession {
             status: ArchitectureStatus::Discovering,
             phase: ArchitecturePhase::DomainDiscovery,
             acp_session_id: None,
+            skill_name: None,
+            skill_digest: None,
+            operating_mode: None,
+            package_status: ArchitecturePackageStatus::NotStarted,
+            package: None,
             failure_reason: None,
         }
     }
@@ -88,6 +143,39 @@ impl ArchitectureSession {
             ));
         }
         self.acp_session_id = Some(session_id);
+        Ok(())
+    }
+
+    pub fn record_skill(
+        &mut self,
+        name: impl Into<String>,
+        digest: impl Into<String>,
+        mode: ArchitectureOperatingMode,
+    ) -> Result<(), DomainError> {
+        if self.status != ArchitectureStatus::Discovering
+            || self.skill_name.is_some()
+            || self.skill_digest.is_some()
+            || self.operating_mode.is_some()
+        {
+            return Err(DomainError::Invariant(
+                "an Architect skill identity is recorded exactly once when discovery starts",
+            ));
+        }
+        let name = name.into();
+        let digest = digest.into();
+        if name != ARCHITECT_SKILL_NAME {
+            return Err(DomainError::Invariant(
+                "architecture discovery requires app-architect-brainstorm",
+            ));
+        }
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(DomainError::Invariant(
+                "an Architect skill digest must be a SHA-256 hex digest",
+            ));
+        }
+        self.skill_name = Some(name);
+        self.skill_digest = Some(digest.to_ascii_lowercase());
+        self.operating_mode = Some(mode);
         Ok(())
     }
 
@@ -135,6 +223,68 @@ impl ArchitectureSession {
         self.phase = ArchitecturePhase::ReadyToDraft;
         self.status = ArchitectureStatus::ReadyToDraft;
         Ok(())
+    }
+
+    pub fn begin_package(&mut self) -> Result<(), DomainError> {
+        if self.status != ArchitectureStatus::ReadyToDraft
+            || self.package_status != ArchitecturePackageStatus::NotStarted
+            || self.skill_name.is_none()
+            || self.skill_digest.is_none()
+            || self.operating_mode.is_none()
+        {
+            return Err(DomainError::Invariant(
+                "an architecture package starts once, after discovery and with pinned skill provenance",
+            ));
+        }
+        self.package_status = ArchitecturePackageStatus::Generating;
+        Ok(())
+    }
+
+    pub fn finish_package(
+        &mut self,
+        evidence: ArchitecturePackageEvidence,
+    ) -> Result<(), DomainError> {
+        if self.status != ArchitectureStatus::ReadyToDraft
+            || self.package_status != ArchitecturePackageStatus::Generating
+        {
+            return Err(DomainError::Invariant(
+                "an architecture package can finish only from its generating state",
+            ));
+        }
+        if evidence.design_dir.trim().is_empty()
+            || evidence.base_sha.trim().is_empty()
+            || evidence.head_sha.trim().is_empty()
+            || evidence.tree_sha.trim().is_empty()
+            || evidence.package_digest.len() != 64
+            || evidence.changed_files.is_empty()
+            || evidence
+                .changed_files
+                .iter()
+                .any(|path| !path.starts_with(&evidence.design_dir))
+        {
+            return Err(DomainError::Invariant(
+                "architecture package evidence must be complete and confined to its design directory",
+            ));
+        }
+        self.package = Some(evidence);
+        self.package_status = ArchitecturePackageStatus::DraftReady;
+        Ok(())
+    }
+
+    pub fn needs_live_process(&self) -> bool {
+        matches!(
+            (self.status, self.package_status),
+            (ArchitectureStatus::Discovering, _)
+                | (ArchitectureStatus::AwaitingAnswer, _)
+                | (
+                    ArchitectureStatus::ReadyToDraft,
+                    ArchitecturePackageStatus::NotStarted
+                )
+                | (
+                    ArchitectureStatus::ReadyToDraft,
+                    ArchitecturePackageStatus::Generating
+                )
+        )
     }
 
     pub fn fail(&mut self, reason: impl Into<String>) -> Result<(), DomainError> {
@@ -255,6 +405,13 @@ mod tests {
     fn discovery_questions_move_forward_and_finish_before_drafting() {
         let mut session = session();
         session.attach_agent("acp:as1").unwrap();
+        session
+            .record_skill(
+                ARCHITECT_SKILL_NAME,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ArchitectureOperatingMode::Greenfield,
+            )
+            .unwrap();
         session.ask(ArchitecturePhase::DomainDiscovery).unwrap();
         assert!(session.ready_to_draft().is_err());
         session.receive_answer().unwrap();
@@ -263,6 +420,25 @@ mod tests {
         session.ready_to_draft().unwrap();
         assert_eq!(session.status, ArchitectureStatus::ReadyToDraft);
         assert!(session.ask(ArchitecturePhase::UxDiscovery).is_err());
+
+        session.begin_package().unwrap();
+        session
+            .finish_package(ArchitecturePackageEvidence {
+                design_dir: "design/v1/".into(),
+                base_sha: "base".into(),
+                head_sha: "head".into(),
+                tree_sha: "tree".into(),
+                package_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .into(),
+                changed_files: vec!["design/v1/architecture-spec.md".into()],
+                diff_stat: "1 file changed".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            session.package_status,
+            ArchitecturePackageStatus::DraftReady
+        );
+        assert!(!session.needs_live_process());
     }
 
     #[test]
