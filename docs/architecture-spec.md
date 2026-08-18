@@ -106,6 +106,9 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     DOM geometry and browser accessibility snapshots are content-addressed;
     successful evidence is immutable. Approval and dispatch require one ready
     baseline matching every scenario and the exact spec manifest/commit.
+    Accessibility canonicalization excludes only the root document transport
+    URL (`about:blank` versus the supervised loopback URL); link destinations
+    and every other semantic AX property remain compared.
 20. A finished frontend run replays the same route, fixture, locale, theme,
     viewport, readiness, selector and approved-mask contract. The fresh browser
     runs only after a ready preview has transitioned to `stale` and its dev

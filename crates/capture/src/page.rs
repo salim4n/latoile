@@ -232,30 +232,44 @@ pub(super) async fn capture_accessibility(cdp: &mut CdpClient) -> Result<Value, 
         .ok_or_else(|| CaptureError::Protocol("accessibility tree is missing".into()))?;
     let canonical = nodes
         .iter()
-        .map(|node| {
-            let mut properties = node
-                .get("properties")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|property| {
-                    Some(json!({
-                        "name": property.get("name")?.as_str()?,
-                        "value": property.pointer("/value/value").cloned().unwrap_or(Value::Null),
-                    }))
-                })
-                .collect::<Vec<_>>();
-            properties.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
-            json!({
-                "ignored": node.get("ignored").and_then(Value::as_bool).unwrap_or(false),
-                "role": node.pointer("/role/value").and_then(Value::as_str).unwrap_or(""),
-                "name": node.pointer("/name/value").and_then(Value::as_str).unwrap_or(""),
-                "description": node.pointer("/description/value").and_then(Value::as_str).unwrap_or(""),
-                "properties": properties,
-            })
-        })
+        .map(canonical_accessibility_node)
         .collect::<Vec<_>>();
     Ok(Value::Array(canonical))
+}
+
+fn canonical_accessibility_node(node: &Value) -> Value {
+    let role = node
+        .pointer("/role/value")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut properties = node
+        .get("properties")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|property| {
+            let name = property.get("name")?.as_str()?;
+            // Baselines are installed with Page.setDocumentContent (`about:blank`),
+            // whereas live evidence navigates to an isolated loopback origin. That
+            // transport URL is not product accessibility content. Link URLs remain
+            // part of the evidence and are therefore intentionally preserved.
+            if role == "RootWebArea" && name == "url" {
+                return None;
+            }
+            Some(json!({
+                "name": name,
+                "value": property.pointer("/value/value").cloned().unwrap_or(Value::Null),
+            }))
+        })
+        .collect::<Vec<_>>();
+    properties.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    json!({
+        "ignored": node.get("ignored").and_then(Value::as_bool).unwrap_or(false),
+        "role": role,
+        "name": node.pointer("/name/value").and_then(Value::as_str).unwrap_or(""),
+        "description": node.pointer("/description/value").and_then(Value::as_str).unwrap_or(""),
+        "properties": properties,
+    })
 }
 
 pub(super) async fn capture_font_probe(
@@ -376,4 +390,42 @@ fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
         u32::from_be_bytes(png[16..20].try_into().ok()?),
         u32::from_be_bytes(png[20..24].try_into().ok()?),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ax_node(role: &str, url: &str) -> Value {
+        json!({
+            "ignored": false,
+            "role": {"value": role},
+            "name": {"value": ""},
+            "properties": [
+                {"name": "url", "value": {"value": url}},
+                {"name": "focusable", "value": {"value": true}}
+            ]
+        })
+    }
+
+    #[test]
+    fn the_root_transport_url_is_not_accessibility_content() {
+        let baseline = canonical_accessibility_node(&ax_node("RootWebArea", "about:blank"));
+        let live = canonical_accessibility_node(&ax_node(
+            "RootWebArea",
+            "http://127.0.0.1:7711/?fixture=default",
+        ));
+
+        assert_eq!(baseline, live);
+        assert_eq!(baseline["properties"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn semantic_link_urls_remain_in_accessibility_evidence() {
+        let first = canonical_accessibility_node(&ax_node("link", "/first"));
+        let second = canonical_accessibility_node(&ax_node("link", "/second"));
+
+        assert_ne!(first, second);
+        assert_eq!(first["properties"].as_array().unwrap().len(), 2);
+    }
 }

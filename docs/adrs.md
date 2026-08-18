@@ -583,3 +583,50 @@ after this refresh attempt, so corrective evidence observes the current commit.
 + Corrective capture measures the corrected commit rather than cached code.
 + `PreviewStale → PreviewReady` is explicit and auditable for every frontend run.
 − Frontend completion pays one bounded dev-server restart before review.
+
+---
+
+# ADR-017 — Normalize only the accessibility root transport URL
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The second greenfield canary recycled the corrected preview and produced an
+exact PNG and geometry match, but the comparison remained `reservation` with
+two accessibility changes. A direct installed-Chromium reproduction showed
+that Chrome reports the baseline root as `about:blank` after
+`Page.setDocumentContent`, and the identical live document root as its
+supervised loopback URL after navigation. The removed and added `RootWebArea`
+records were the entire difference.
+
+## Decision
+
+Canonical accessibility evidence omits the `url` property only when the node
+role is `RootWebArea`. Every other root property and every URL on semantic
+nodes such as links remains in the snapshot. An installed-Chromium contract
+test requires identical HTML served over HTTP to classify `passed` with zero
+pixel, geometry and accessibility drift; the real 16 px regression test must
+continue to classify `blocking`.
+
+The opt-in canary also writes a bounded observation of decision metrics before
+asserting the expected state, so a failed run retains its measured seam without
+storing provider prose or unbounded payloads.
+
+## Rejected alternatives
+
+- Treat two AX changes as passing: weakens the global accessibility gate and
+  could hide a real semantic change.
+- Remove every AX `url` property: would stop detecting changed link targets.
+- Capture the baseline through a temporary HTTP server: adds another mutable
+  process and origin to approval when the mockup is already bounded bytes.
+- Accept `reservation` in the canary: would not prove exact mockup fidelity.
+
+## Consequences
+
++ Identical approved bytes now produce exact visual and accessibility evidence
+  across baseline installation and supervised live navigation.
++ Link destination regressions remain measurable.
++ Failed canaries retain bounded comparison metrics for diagnosis.
+− Canonicalization carries one explicit Chrome transport normalization rule.

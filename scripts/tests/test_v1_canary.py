@@ -99,6 +99,25 @@ class CanarySafetyTests(unittest.TestCase):
                 original, {**corrected, "baseline_png_digest": "f" * 64}
             )
 
+    def test_visual_observation_keeps_metrics_without_unbounded_payloads(self):
+        evidence = {
+            "id": "visual:run-2:home",
+            "run_id": "run-2",
+            "status": "reservation",
+            "changed_pixels": 0,
+            "total_pixels": 329_160,
+            "pixel_ratio_micros": 0,
+            "max_geometry_delta_milli": 0,
+            "accessibility_changes": 2,
+            "failure_message": "agent-controlled and intentionally omitted",
+        }
+
+        observation = canary.visual_evidence_observation(evidence)
+
+        self.assertEqual(observation["status"], "reservation")
+        self.assertEqual(observation["accessibility_changes"], 2)
+        self.assertNotIn("failure_message", observation)
+
 
 if __name__ == "__main__":
     unittest.main()

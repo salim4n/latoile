@@ -38,6 +38,11 @@ environment, allows HTTP requests only to the exact supervised
 WebSocket. A browser/font mismatch records an invalid, actionable comparison
 rather than calculating a misleading similarity score.
 
+Baseline installation uses `Page.setDocumentContent`, while live evidence uses
+loopback navigation. Chrome therefore exposes `about:blank` versus the preview
+URL on the AX `RootWebArea`. LaToile removes only that transport property before
+comparison; URL properties on links remain part of the immutable evidence.
+
 The subsequent Reviewer run is permanently bound to that executor run. Its V2
 response must echo the exact evidence ids and hashes shown in the prompt; the
 server reloads project, approved spec and comparison rows before writing the

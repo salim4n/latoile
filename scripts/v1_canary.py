@@ -146,6 +146,28 @@ def one_visual_comparison(
     return evidence
 
 
+def visual_evidence_observation(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Keep the bounded decision metrics even when the next assertion fails."""
+    fields = (
+        "id",
+        "run_id",
+        "comparison_id",
+        "status",
+        "changed_pixels",
+        "total_pixels",
+        "pixel_ratio_micros",
+        "max_geometry_delta_milli",
+        "accessibility_changes",
+        "baseline_png_digest",
+        "render_png_digest",
+        "pixel_diff_digest",
+        "heatmap_png_digest",
+        "browser_version",
+        "failure_code",
+    )
+    return {field: evidence.get(field) for field in fields}
+
+
 def prove_replacement_evidence(
     original: dict[str, Any], corrected: dict[str, Any]
 ) -> None:
@@ -735,6 +757,14 @@ class Canary:
                 comparisons = api.get(
                     f"/api/runs/{urllib.parse.quote(reviewed_run_id, safe='')}/visual-comparisons"
                 )
+                if (
+                    isinstance(comparisons, list)
+                    and len(comparisons) == 1
+                    and isinstance(comparisons[0], dict)
+                ):
+                    self.data[f"{prefix}_visual_observation"] = (
+                        visual_evidence_observation(comparisons[0])
+                    )
                 expected_status = "passed" if expected_approvable else "blocking"
                 evidence = one_visual_comparison(
                     comparisons, reviewed_run_id, expected_status

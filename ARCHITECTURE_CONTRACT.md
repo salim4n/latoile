@@ -74,6 +74,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   browser/font/environment hashes under the LaToile home. SQLite stores only
   bounded hashes/status; a ready baseline is immutable and missing or failed
   required baselines block approval and executor dispatch.
+- Accessibility canonicalization removes only the `RootWebArea` transport URL
+  that necessarily changes from `about:blank` baseline installation to the
+  loopback live route; semantic link URLs remain measured evidence.
 - After a finished frontend run, the live route is replayed with that exact
   scenario contract. Any ready preview is first marked stale and its process is
   recycled, including after corrective runs, so capture cannot observe code
