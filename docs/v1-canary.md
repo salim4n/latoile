@@ -35,7 +35,7 @@ The canary refuses a dirty LaToile checkout, records its exact commit, creates a
 private `latoile-v1-canary-*` repository whose initial Git tree has no files,
 and exercises:
 
-1. a real persistent Socratic Architect discovery through the Manager surface;
+1. a real persistent Socratic Architect discovery through the Manager surface, including the mandatory first owner challenge;
 2. the complete pinned `app-architect-brainstorm` package and manifest;
 3. immutable spec validation, Git commit/tree proof and real Chromium baseline;
 4. a frontend executor that serves the approved mockup with a deliberate 16 px regression;

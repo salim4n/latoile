@@ -56,7 +56,7 @@ impl<A: AgentChannel> StartArchitecture<A> {
         );
         ArchitectureSessionStore::save(&self.store, &session).await?;
 
-        let reply = match self
+        let mut reply = match self
             .agents
             .start_architecture(project, &session.id, brief)
             .await
@@ -68,14 +68,21 @@ impl<A: AgentChannel> StartArchitecture<A> {
                 return Err(error.into());
             }
         };
-        if let Err(error) = session.attach_agent(reply.acp_session_id).and_then(|_| {
-            session.record_skill(reply.skill_name, reply.skill_digest, reply.operating_mode)
-        }) {
+        if let Err(error) = session
+            .attach_agent(reply.acp_session_id.clone())
+            .and_then(|_| {
+                session.record_skill(
+                    reply.skill_name.clone(),
+                    reply.skill_digest.clone(),
+                    reply.operating_mode,
+                )
+            })
+        {
             session.fail("Architect provider returned invalid session or skill provenance")?;
             ArchitectureSessionStore::save(&self.store, &session).await?;
             return Err(error.into());
         }
-        let turn = match parse_architecture_turn(&reply.content) {
+        let mut turn = match parse_architecture_turn(&reply.content) {
             Ok(turn) => turn,
             Err(reason) => {
                 session.fail(reason)?;
@@ -84,10 +91,45 @@ impl<A: AgentChannel> StartArchitecture<A> {
             }
         };
         if turn.kind == ArchitectureTurnKind::ReadyToDraft {
-            let reason = "the Architect tried to draft without challenging an owner decision";
-            session.fail(reason)?;
-            ArchitectureSessionStore::save(&self.store, &session).await?;
-            return Err(latoile_core::DomainError::Invariant(reason).into());
+            reply = match self
+                .agents
+                .retry_architecture_question(project, &session.id)
+                .await
+            {
+                Ok(reply) => reply,
+                Err(error) => {
+                    session.fail(
+                        "Architect skipped the mandatory first challenge and could not be recentered",
+                    )?;
+                    ArchitectureSessionStore::save(&self.store, &session).await?;
+                    return Err(error.into());
+                }
+            };
+            if session.acp_session_id.as_deref() != Some(reply.acp_session_id.as_str())
+                || session.skill_name.as_deref() != Some(reply.skill_name.as_str())
+                || session.skill_digest.as_deref() != Some(reply.skill_digest.as_str())
+                || session.operating_mode != Some(reply.operating_mode)
+            {
+                let reason =
+                    "Architect context or pinned skill provenance changed during discovery guard";
+                session.fail(reason)?;
+                ArchitectureSessionStore::save(&self.store, &session).await?;
+                return Err(latoile_core::ports::PortError(reason.into()).into());
+            }
+            turn = match parse_architecture_turn(&reply.content) {
+                Ok(turn) => turn,
+                Err(reason) => {
+                    session.fail(reason)?;
+                    ArchitectureSessionStore::save(&self.store, &session).await?;
+                    return Err(latoile_core::ports::PortError(reason.into()).into());
+                }
+            };
+            if turn.kind == ArchitectureTurnKind::ReadyToDraft {
+                let reason = "the Architect ignored the mandatory first owner challenge twice";
+                session.fail(reason)?;
+                ArchitectureSessionStore::save(&self.store, &session).await?;
+                return Err(latoile_core::DomainError::Invariant(reason).into());
+            }
         }
         if let Err(error) = apply_turn(&mut session, &turn) {
             session.fail(format!("invalid Architect discovery transition: {error}"))?;

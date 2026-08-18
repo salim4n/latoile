@@ -433,7 +433,7 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
             operating_mode,
         }));
         let prompt = format!(
-            "{}\n\n---\n\nDISCOVERY-ONLY CONTRACT\nPinned operating mode: {}. Do not write files or execute commands yet. Ask one decision-rich question at a time. Return exactly one fenced `latoile-architecture` JSON object with schema_version 1, kind `question` or `ready_to_draft`, phase `domain_discovery`, `requirements`, `ux_discovery` or `ready_to_draft`, and message. Never invent an owner answer.\n\nINITIAL BRIEF\n{brief}",
+            "{}\n\n---\n\nDISCOVERY-ONLY CONTRACT\nPinned operating mode: {}. Do not write files or execute commands yet. Ask one decision-rich question at a time. On this first turn, kind MUST be `question`; `ready_to_draft` is forbidden even if the brief appears complete. Return exactly one fenced `latoile-architecture` JSON object with schema_version 1, kind `question`, phase `domain_discovery`, `requirements` or `ux_discovery`, and message. Never invent an owner answer.\n\nINITIAL BRIEF\n{brief}",
             bundle.render(),
             operating_mode.as_str(),
         );
@@ -443,6 +443,32 @@ impl<C: Connector, D: ProjectDirs, R: RoutingSource> AgentChannel for AcpChannel
             .await
             .insert(session.as_str().to_string(), entry);
         Ok(reply)
+    }
+
+    async fn retry_architecture_question(
+        &self,
+        _project: &ProjectId,
+        session: &ArchitectureSessionId,
+    ) -> PortResult<ArchitectReply> {
+        let entry = self
+            .architects
+            .lock()
+            .await
+            .get(session.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                latoile_core::ports::PortError(
+                    "the live Architect session is unavailable; restart discovery".into(),
+                )
+            })?;
+        let prompt = "DISCOVERY GUARD\nNo owner answer was supplied. Your first turn cannot be `ready_to_draft`. Identify one consequential unresolved owner decision and ask exactly one question. Return only the fenced `latoile-architecture` JSON contract with kind `question`; do not write files or execute commands.";
+        match self.architecture_prompt(&entry, session, prompt).await {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                self.architects.lock().await.remove(session.as_str());
+                Err(error.into())
+            }
+        }
     }
 
     async fn continue_architecture(

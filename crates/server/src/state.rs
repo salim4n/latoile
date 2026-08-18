@@ -108,6 +108,19 @@ impl AgentChannel for AgentSlot {
             Self::Stub(stub) => stub.continue_architecture(project, session, answer).await,
         }
     }
+    async fn retry_architecture_question(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel.retry_architecture_question(project, session).await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => stub.retry_architecture_question(project, session).await,
+        }
+    }
     async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
         match self {
             Self::Real(channel) => channel.cancel_architecture(session).await,

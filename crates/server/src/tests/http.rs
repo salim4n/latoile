@@ -277,6 +277,103 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
 }
 
 #[tokio::test]
+async fn a_first_turn_ready_signal_is_recentered_into_a_real_question() {
+    let (state, _, agents) = state().await;
+    {
+        let mut replies = agents.architecture_replies.lock().unwrap();
+        replies.push_front(
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"question\",\"phase\":\"domain_discovery\",\"message\":\"Quelle décision métier doit rester sous contrôle humain ?\"}\n```"
+                .into(),
+        );
+        replies.push_front(
+            "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ready_to_draft\",\"message\":\"Le brief semble complet.\"}\n```"
+                .into(),
+        );
+    }
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let started = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un produit au brief très détaillé.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    assert_eq!(
+        agents.architecture_messages.lock().unwrap().as_slice(),
+        [
+            "brief:Construire un produit au brief très détaillé.",
+            "guard:first-question-required"
+        ]
+    );
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "awaiting_answer");
+    assert_eq!(architecture["questions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        architecture["questions"][0]["prompt"],
+        "Quelle décision métier doit rester sous contrôle humain ?"
+    );
+}
+
+#[tokio::test]
+async fn an_architect_that_skips_the_first_challenge_twice_fails_closed() {
+    let (state, _, agents) = state().await;
+    let ready = "```latoile-architecture\n{\"schema_version\":1,\"kind\":\"ready_to_draft\",\"phase\":\"ready_to_draft\",\"message\":\"Le brief semble complet.\"}\n```";
+    {
+        let mut replies = agents.architecture_replies.lock().unwrap();
+        replies.push_front(ready.into());
+        replies.push_front(ready.into());
+    }
+    let app = router(state);
+    let project = create_project(&app).await;
+
+    let refused = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/messages"),
+            Some(serde_json::json!({
+                "content": "Construire un produit au brief très détaillé.",
+                "intent": "architecture_brief"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let architecture = app
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/architecture"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let architecture = body_json(architecture).await;
+    assert_eq!(architecture["status"], "failed");
+    assert!(architecture["failure_reason"]
+        .as_str()
+        .unwrap()
+        .contains("ignored the mandatory first owner challenge twice"));
+}
+
+#[tokio::test]
 async fn architecture_discovery_can_be_cancelled_and_stays_observable() {
     let (state, _, agents) = state().await;
     let app = router(state);

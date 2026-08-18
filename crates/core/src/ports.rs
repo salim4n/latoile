@@ -232,6 +232,13 @@ pub trait AgentChannel {
     ) -> PortResult<ArchitectReply> {
         Err(PortError("architecture sessions are not supported".into()))
     }
+    async fn retry_architecture_question(
+        &self,
+        _project: &ProjectId,
+        _session: &ArchitectureSessionId,
+    ) -> PortResult<ArchitectReply> {
+        Err(PortError("architecture sessions are not supported".into()))
+    }
     async fn continue_architecture(
         &self,
         _project: &ProjectId,

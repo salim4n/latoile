@@ -233,6 +233,11 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
                 text: "question suivante".into(),
                 updates: vec![],
             }),
+            Ok(TurnResult {
+                outcome: RunOutcome::Finished,
+                text: "question imposée".into(),
+                updates: vec![],
+            }),
         ]),
         pend: false,
         dropped: Arc::new(AtomicBool::new(false)),
@@ -240,6 +245,9 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
     let ch = channel(config, connector, dir.path());
 
     ch.start_architecture(&project(), &architecture_session(), "Un outil agentique")
+        .await
+        .unwrap();
+    ch.retry_architecture_question(&project(), &architecture_session())
         .await
         .unwrap();
     ch.continue_architecture(&project(), &architecture_session(), "Une équipe produit")
@@ -250,7 +258,9 @@ async fn the_architect_keeps_one_socratic_session_and_receives_its_skill() {
     assert!(prompts[0].contains("PINNED SKILL BUNDLE"));
     assert!(prompts[0].contains("references/ui-ux-design.md"));
     assert!(prompts[0].contains("DISCOVERY-ONLY CONTRACT"));
-    assert!(prompts[1].starts_with("OWNER ANSWER\n"));
+    assert!(prompts[0].contains("kind MUST be `question`"));
+    assert!(prompts[1].starts_with("DISCOVERY GUARD\n"));
+    assert!(prompts[2].starts_with("OWNER ANSWER\n"));
     assert_eq!(ch.connector.spawned.load(Ordering::SeqCst), 1);
 }
 

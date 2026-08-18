@@ -44,6 +44,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Architect discovery is read-only and receives the complete ordered
   `app-architect-brainstorm` bundle. The session persists its SHA-256 and
   operating mode; a missing reference is a hard failure, never a thin fallback.
+  The first turn must be a decision-rich question. A premature
+  `ready_to_draft` is recentered once in the same ACP session without inventing
+  an owner answer; a second attempt fails closed.
 - Architect generation runs only in a detached worktree. Its permission scope
   permits static `.md`/`.html` files under one server-selected `design/v…/`
   root and rejects shell, path traversal and every production/config mutation.

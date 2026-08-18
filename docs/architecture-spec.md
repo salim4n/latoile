@@ -81,7 +81,10 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     of the pushed HEAD. `local_sha = remote_sha` is a domain and SQL invariant.
 13. One active architecture session exists per project. It pins the complete
     `app-architect-brainstorm` SHA-256 and detected operating mode before the
-    first question; every answer is durable before the next provider turn.
+    first question; every answer is durable before the next provider turn. The
+    initial provider contract requires a question. A premature
+    `ready_to_draft` receives one no-answer discovery guard retry in the same
+    session; a repeated skip fails the session closed.
 14. Architecture generation runs in a detached worktree at a recorded base
     SHA. The Architect has no shell and can mutate only one versioned
     `design/v…/` directory. LaToile rejects any other path, validates the

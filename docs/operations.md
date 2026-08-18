@@ -30,6 +30,15 @@ records the product version, executable SHA-256 and rendered font fingerprint;
 changing that environment makes a repeat mismatch explicit instead of silently
 replacing approved evidence.
 
+## Architect discovery guard
+
+The first Architect turn must ask one decision-rich question even when the
+brief looks complete. If the provider returns `ready_to_draft`, LaToile sends
+one discovery-guard prompt in the same ACP session. This retry contains no owner
+answer and grants no write authority. A valid question resumes the normal
+durable Q/A flow; a second premature ready signal marks the architecture
+session failed and requires a new discovery attempt.
+
 Live comparison uses the same pinned browser/font environment. The capture
 browser starts only after every ready preview has been marked stale and its dev
 process recycled for the finished frontend run. It uses a cleared process

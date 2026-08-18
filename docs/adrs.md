@@ -648,3 +648,50 @@ storing provider prose or unbounded payloads.
 + Failed canaries retain bounded comparison metrics for diagnosis.
 − Canonicalization carries one explicit Chrome transport normalization rule.
 − Existing V2 baselines require recapture before live comparison under V3.
+
+---
+
+# ADR-018 — Recenter one premature first-turn Architect completion
+
+- **Date**: 2026-08-18
+- **Status**: accepted after repeated real-provider canary failure
+
+## Context
+
+The discovery domain correctly requires the Architect to challenge at least
+one consequential owner decision before drafting. The adapter's first prompt,
+however, still allowed either `question` or `ready_to_draft`. Two consecutive
+greenfield canaries therefore failed when the provider followed that looser
+contract and declared a detailed brief complete on its first turn. Failing the
+entire session was safe but made the automated brief-to-package flow brittle.
+
+## Decision
+
+The first adapter prompt now requires `kind=question` and explicitly forbids
+`ready_to_draft`. If the provider nevertheless returns ready, the application
+sends exactly one discovery-guard prompt through a dedicated channel method in
+the same ACP session. The guard states that no owner answer was supplied, asks
+for one unresolved decision-rich question and preserves the pinned session,
+skill digest and operating mode. It neither persists a fabricated answer nor
+grants generation/write authority.
+
+A valid guarded question becomes the first durable question. Malformed output,
+changed provenance, a lost session or a second ready signal fails closed and
+requires a new discovery attempt.
+
+## Rejected alternatives
+
+- Accept first-turn ready for detailed briefs: would make the required owner
+  challenge optional and weaken the product contract.
+- Invent a generic question in the application: would no longer prove that the
+  skilled Architect identified a consequential ambiguity.
+- Send the guard as an owner answer: would contaminate the durable decision
+  record with text the owner never supplied.
+- Retry indefinitely: hides a provider that is not following the role contract.
+
+## Consequences
+
++ A compliant Architect still uses one normal turn.
++ One stochastic premature completion recovers without losing session context.
++ Repeated noncompliance remains explicit and fail-closed.
+− A guarded discovery may spend one additional provider turn.

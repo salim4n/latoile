@@ -40,6 +40,7 @@ run the paid, stateful real-provider canary.
 | 26 | Owner decisions use real visual artifacts | Web API/UI tests prove bearer-authenticated baseline/render/heatmap loading, scenario/viewport/locale switching, side-by-side/overlay/diff modes, metrics/provenance, invalid recovery and disabled failed gates; flow tests prove one correction creates distinct evidence against the same baseline |
 | 27 | Corrective capture cannot reuse an old preview process | App and driver tests prove frontend completion emits `PreviewStale`, recycles the supervised process before capture and does so idempotently; the real-provider canary must prove `blocking → passed` |
 | 28 | Transport metadata cannot create a false visual reservation | Unit tests preserve semantic link URLs while excluding only the AX root transport URL; installed-Chromium tests prove exact HTTP bytes with relative links pass, changed link destinations reserve, and the deliberate 16 px regression still blocks under capture V3 |
+| 29 | Architect cannot skip the first owner challenge | Agent prompt tests require a first-turn question; HTTP flow tests prove one premature `ready_to_draft` is recentered in the same session and a second attempt fails closed |
 
 ## Anti-drift rules
 
