@@ -794,3 +794,52 @@ regression is labeled intermediate test setup only.
 + Non-blocking advice can remain visible without preventing delivery.
 − Verdict quality still depends on provider reasoning, but its decision
   boundary is now explicit and test-covered.
+
+---
+
+# ADR-021 — Bind Architect manifest provenance on the server
+
+- **Date**: 2026-08-19
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The package prompt included the exact SHA-256 of the complete
+`app-architect-brainstorm` bundle and required the model to copy it into
+`package-manifest.md`. A real provider eventually copied a different digest,
+so the adapter correctly rejected an otherwise generated package. This echo
+was brittle and had no trust value: a model cannot attest which skill bytes the
+server actually injected into its session.
+
+## Decision
+
+The Architect still authors the complete deliverable inventory and P0 scenario
+contract. The prompt now uses an explicit server-bound placeholder for
+`skill_digest` and `operating_mode`. After the isolated turn, and before any
+validation or commit, the adapter requires a regular manifest file, parses the
+strict JSON contract, then rewrites `schema_version`, `skill_digest` and
+`operating_mode` from the pinned server request. The canonical manifest is
+written inside the detached package worktree and traverses the same full
+validation, digest, Git commit and fast-forward checks as every other byte.
+
+Model-supplied values for these three provenance fields are never trusted or
+preserved. Unknown fields, malformed JSON, missing inventory, invalid P0
+scenarios and every other package defect still fail closed.
+
+## Rejected alternatives
+
+- Retry until the model copies 64 hex characters: spends paid turns without
+  improving provenance.
+- Accept a mismatched digest: would record false skill identity.
+- Remove provenance from the committed package: makes offline review and
+  approval evidence incomplete.
+- Let the model overwrite server metadata after binding: restores the same
+  self-attestation defect.
+
+## Consequences
+
++ Skill identity and operating mode now come from the authority that owns them.
++ Stochastic digest-copy failures disappear without weakening validation.
++ The committed package remains self-describing and content-addressed.
+− The adapter performs one explicit deterministic write inside the already
+  confined package worktree before validation.

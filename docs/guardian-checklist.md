@@ -43,6 +43,7 @@ run the paid, stateful real-provider canary.
 | 29 | Architect cannot skip the first owner challenge | Agent prompt tests require a first-turn question; HTTP flow tests prove one premature `ready_to_draft` is recentered in the same session and a second attempt fails closed |
 | 30 | Architect protocol drift cannot destroy a valid discovery silently | Agent and HTTP tests prove one post-answer contract repair stays in the same session with no owner input, enforces current-or-later phases, and fails closed on a second invalid turn |
 | 31 | Reviewer verdicts do not invent hidden acceptance scope | Driver prompt tests require a concrete-blocker rubric, preserve server-owned visual truth and classify optional improvements or unstated scope as non-blocking |
+| 32 | Architect cannot self-attest its skill provenance | Package tests deliberately emit wrong model provenance and prove the adapter binds schema, exact skill digest and mode from the server before validation and commit |
 
 ## Anti-drift rules
 

@@ -308,11 +308,9 @@ impl Connection for PackageConn {
         let tokens = b"# Design tokens\n\n- color-accent: #7c5cff\n";
         std::fs::write(root.join("design-tokens.md"), tokens).unwrap();
         let token_digest = format!("{:x}", Sha256::digest(tokens));
-        let skill_digest = text
-            .split("Pinned skill SHA-256: ")
-            .nth(1)
-            .and_then(|tail| tail.lines().next())
-            .unwrap();
+        // Model-authored provenance is deliberately wrong: the adapter must
+        // bind the server-owned digest before validation and commit.
+        let skill_digest = "model-supplied-wrong-digest";
         let manifest = format!(
             "```latoile-package\n{{\"schema_version\":2,\"skill_digest\":\"{skill_digest}\",\"operating_mode\":\"greenfield\",\"deliverables\":[{{\"path\":\"package-manifest.md\",\"kind\":\"manifest\"}},{{\"path\":\"architecture-spec.md\",\"kind\":\"document\"}},{{\"path\":\"domain-model.md\",\"kind\":\"document\"}},{{\"path\":\"data-model.md\",\"kind\":\"document\"}},{{\"path\":\"api-contract.md\",\"kind\":\"document\"}},{{\"path\":\"architecture-blueprint.md\",\"kind\":\"document\"}},{{\"path\":\"component-specification.md\",\"kind\":\"document\"}},{{\"path\":\"stack-decisions.md\",\"kind\":\"document\"}},{{\"path\":\"architecture-contract.md\",\"kind\":\"document\"}},{{\"path\":\"guardian-checklist.md\",\"kind\":\"document\"}},{{\"path\":\"user-flows.md\",\"kind\":\"document\"}},{{\"path\":\"screen-inventory.md\",\"kind\":\"document\"}},{{\"path\":\"design-tokens.md\",\"kind\":\"tokens\"}},{{\"path\":\"gallery.html\",\"kind\":\"gallery\"}},{{\"path\":\"adrs/ADR-001-boundary.md\",\"kind\":\"decision\"}},{{\"path\":\"mockups/home.html\",\"kind\":\"mockup\"}}],\"p0_scenarios\":[{{\"comparison_id\":\"P0-home\",\"screen\":\"Home\",\"state\":\"default\",\"locale\":\"fr-FR\",\"theme\":\"light\",\"route\":\"/\",\"fixture\":\"synthetic-default\",\"readiness_selector\":\"main\",\"stable_selectors\":[\"main\"],\"allowed_masks\":[],\"viewport\":{{\"width\":390,\"height\":844,\"device_scale_factor_milli\":1000}},\"mockup\":\"mockups/home.html\"}}]}}\n```\n"
         );
@@ -501,6 +499,15 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
     assert!(prompt.contains("references/brainstorming-method.md"));
     assert!(prompt.contains("assets/templates/arch-spec-template.md"));
     assert!(prompt.contains(&bundle.digest));
+    assert!(prompt.contains("__LATOILE_SERVER_BOUND__"));
+    let manifest = std::fs::read_to_string(
+        dir.path().join("design/v0001-as1/package-manifest.md"),
+    )
+    .unwrap();
+    assert!(manifest.contains(&bundle.digest));
+    assert!(manifest.contains("\"operating_mode\": \"greenfield\""));
+    assert!(manifest.contains("\"schema_version\": 2"));
+    assert!(!manifest.contains("model-supplied-wrong-digest"));
     {
         let contexts = contexts.lock().unwrap();
         assert_eq!(contexts[0].0, "architect_package");

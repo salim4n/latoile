@@ -20,7 +20,7 @@ use latoile_core::{
     ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageValidation,
     ArchitectureSessionId, ArchitectureValidationFinding, ArchitectureVisualScenario, SpecVersion,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -44,8 +44,9 @@ const REQUIRED_FILES: &[&str] = &[
 
 const MAX_PACKAGE_FILES: usize = 100;
 const MAX_PACKAGE_BYTES: u64 = 10 * 1024 * 1024;
+const SERVER_BOUND_MANIFEST_VALUE: &str = "__LATOILE_SERVER_BOUND__";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PackageManifest {
     schema_version: u32,
@@ -55,14 +56,14 @@ struct PackageManifest {
     p0_scenarios: Vec<P0Scenario>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestDeliverable {
     path: String,
     kind: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct P0Scenario {
     comparison_id: String,
@@ -79,7 +80,7 @@ struct P0Scenario {
     mockup: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestViewport {
     width: u32,
@@ -231,6 +232,7 @@ async fn generate_in_worktree<C: Connector>(
 
     let changed_files = changed_files(worktree).await?;
     validate_changed_paths(&changed_files, &request.design_dir)?;
+    bind_manifest_provenance(&package_root, &request.skill_digest, request.operating_mode)?;
     let validated = validate_package(&package_root, &request.skill_digest, request.operating_mode)?;
 
     git_ok(worktree, &["add", "--", &request.design_dir]).await?;
@@ -362,13 +364,19 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
+    let prompt = format!(
         "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable and unique; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
         bundle.render(),
         request.operating_mode.as_str(),
         request.skill_digest,
         request.design_dir,
         decisions,
+    );
+    prompt.replace(
+        "`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode.",
+        &format!(
+            "`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2. Set both `skill_digest` and `operating_mode` to the exact string `{SERVER_BOUND_MANIFEST_VALUE}`; LaToile replaces these server-owned provenance fields with the pinned values before validation and commit."
+        ),
     )
 }
 
@@ -414,6 +422,31 @@ fn validate_changed_paths(paths: &[String], design_dir: &str) -> Result<(), Agen
         }
     }
     Ok(())
+}
+
+fn bind_manifest_provenance(
+    root: &Path,
+    skill_digest: &str,
+    operating_mode: ArchitectureOperatingMode,
+) -> Result<(), AgentError> {
+    let path = root.join("package-manifest.md");
+    require_regular_file(&path, "package-manifest.md")?;
+    let bytes = std::fs::read(&path)
+        .map_err(|error| AgentError::Prompt(format!("reading package manifest: {error}")))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| AgentError::Prompt("package-manifest.md is not valid UTF-8".into()))?;
+    let raw = fenced_block(&text, "latoile-package").ok_or_else(|| {
+        AgentError::Prompt("package-manifest.md is missing the latoile-package contract".into())
+    })?;
+    let mut manifest: PackageManifest = serde_json::from_str(raw)
+        .map_err(|error| AgentError::Prompt(format!("invalid latoile-package manifest: {error}")))?;
+    manifest.schema_version = 2;
+    manifest.skill_digest = skill_digest.to_string();
+    manifest.operating_mode = operating_mode.as_str().to_string();
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| AgentError::Prompt(format!("serializing package manifest: {error}")))?;
+    std::fs::write(&path, format!("```latoile-package\n{json}\n```\n"))
+        .map_err(|error| AgentError::Prompt(format!("binding package manifest: {error}")))
 }
 
 fn validate_package(
@@ -1192,8 +1225,8 @@ fn truncate(mut value: String, limit: usize) -> String {
 #[cfg(test)]
 mod html_safety_tests {
     use super::{
-        html_is_self_contained, validate_manifest_header, ManifestDeliverable, PackageManifest,
-        ArchitectureOperatingMode,
+        bind_manifest_provenance, html_is_self_contained, validate_manifest_header,
+        ArchitectureOperatingMode, ManifestDeliverable, PackageManifest,
     };
 
     #[test]
@@ -1252,5 +1285,29 @@ mod html_safety_tests {
         .to_string();
         assert!(error.contains("skill_digest"));
         assert!(!error.contains(&digest));
+    }
+
+    #[test]
+    fn server_binds_manifest_provenance_instead_of_trusting_model_echoes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("package-manifest.md"),
+            "```latoile-package\n{\"schema_version\":99,\"skill_digest\":\"wrong\",\"operating_mode\":\"wrong\",\"deliverables\":[],\"p0_scenarios\":[]}\n```\n",
+        )
+        .unwrap();
+        let digest = "a".repeat(64);
+
+        bind_manifest_provenance(
+            root.path(),
+            &digest,
+            ArchitectureOperatingMode::Greenfield,
+        )
+        .unwrap();
+
+        let bound = std::fs::read_to_string(root.path().join("package-manifest.md")).unwrap();
+        assert!(bound.contains(&digest));
+        assert!(bound.contains("\"operating_mode\": \"greenfield\""));
+        assert!(bound.contains("\"schema_version\": 2"));
+        assert!(!bound.contains("\"wrong\""));
     }
 }

@@ -70,6 +70,10 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
 - Architecture metadata pins skill digest, operating mode, package digest,
   manifest digest, commit SHA and tree SHA. Package bytes remain in Git; session + draft +
   creation event persist atomically.
+  The model never attests its own identity: before package validation and
+  commit, the adapter rewrites manifest schema, skill digest and operating mode
+  from the server-pinned session while leaving deliverables and P0 scenarios
+  model-authored and fully validated.
 - A spec can transition to approved only with a fresh verification matching
   every pinned digest. Supersession, approval, project status, waiting-task
   binding and the audit event persist in one transaction. Later design-tree

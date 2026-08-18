@@ -94,6 +94,9 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     `design/v…/` directory. LaToile rejects any other path, validates the
     mandatory spec/ADR/guardian/flow/token/gallery/P0 inventory, commits the
     package itself and integrates only that verified commit by fast-forward.
+    Manifest schema, skill digest and operating mode are bound from the
+    server-owned session before validation/commit; the model cannot attest or
+    override its own provenance.
 15. A generated draft pins architecture-session id, skill digest, operating
     mode, package digest, manifest digest, commit SHA and tree SHA. Session, draft and
     `SpecVersionCreated` event become visible in one SQLite transaction.
