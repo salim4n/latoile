@@ -53,8 +53,9 @@ text, owner answers, provider responses, credentials and hidden reasoning are
 not retained.
 
 On failure the same artifact records `first_broken_seam` and a concise safe
-diagnostic. The remote repository is retained so the failure remains
-inspectable.
+diagnostic. Architecture failures retain only session status, phase, package
+state, fixed failure reason, pinned role provenance and question counts. The
+remote repository is retained so the failure remains inspectable.
 
 ## Cleanup
 

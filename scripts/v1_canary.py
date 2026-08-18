@@ -1003,6 +1003,9 @@ class Canary:
         if error is not None:
             self.data["first_broken_seam"] = self.first_broken_seam or "bootstrap"
             self.data["failure"] = redact(str(error), self.known_secrets)
+            architecture = self.safe_architecture_diagnostic()
+            if architecture:
+                self.data["architecture_diagnostic"] = architecture
             diagnostic = self.safe_server_diagnostic()
             if diagnostic:
                 self.data["adapter_diagnostic"] = diagnostic
@@ -1018,6 +1021,41 @@ class Canary:
                 ),
             }
         atomic_json(self.evidence_path, self.data)
+
+    def safe_architecture_diagnostic(self) -> dict[str, Any] | None:
+        database = self.home / "latoile.db"
+        if not database.exists():
+            return None
+        with contextlib.suppress(sqlite3.Error):
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                row = connection.execute(
+                    """
+                    SELECT id, status, phase, package_status, failure_reason,
+                           skill_name, operating_mode
+                    FROM architecture_session
+                    ORDER BY created_at DESC LIMIT 1
+                    """
+                ).fetchone()
+                if not row:
+                    return None
+                question_counts = dict(
+                    connection.execute(
+                        "SELECT status, COUNT(*) FROM architecture_question "
+                        "WHERE session_id = ? GROUP BY status",
+                        (row[0],),
+                    ).fetchall()
+                )
+            return {
+                "session_id": row[0],
+                "status": row[1],
+                "phase": row[2],
+                "package_status": row[3],
+                "failure_reason": redact(row[4] or "", self.known_secrets),
+                "skill_name": row[5],
+                "operating_mode": row[6],
+                "question_counts": question_counts,
+            }
+        return None
 
     def safe_server_diagnostic(self) -> str | None:
         """Return one filtered adapter lifecycle error, never provider content."""

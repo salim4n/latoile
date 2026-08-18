@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import pathlib
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -135,6 +136,66 @@ class CanarySafetyTests(unittest.TestCase):
         self.assertEqual(observation["gate"]["code"], "trusted")
         self.assertEqual(observation["evidence_ids"], ["visual:run-2:home"])
         self.assertNotIn("summary", observation)
+
+    def test_architecture_diagnostic_is_bounded_and_excludes_owner_content(self):
+        with tempfile.TemporaryDirectory() as artifact_root:
+            runner = canary.Canary(
+                mock.Mock(artifact_root=artifact_root, provider="codex")
+            )
+            self.addCleanup(runner.close)
+            runner.home.mkdir(parents=True)
+            runner.known_secrets.append("secret-value")
+            with sqlite3.connect(runner.home / "latoile.db") as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE architecture_session (
+                        id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        phase TEXT NOT NULL,
+                        package_status TEXT NOT NULL,
+                        failure_reason TEXT,
+                        skill_name TEXT,
+                        operating_mode TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE TABLE architecture_question (
+                        session_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        prompt TEXT NOT NULL,
+                        answer TEXT
+                    );
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO architecture_session VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "architecture-1",
+                        "failed",
+                        "domain_discovery",
+                        "not_started",
+                        "provider failed with secret-value",
+                        "app-architect-brainstorm",
+                        "greenfield",
+                        "2026-08-18T20:00:00Z",
+                    ),
+                )
+                connection.executemany(
+                    "INSERT INTO architecture_question VALUES (?, ?, ?, ?)",
+                    (
+                        ("architecture-1", "answered", "private prompt", "private answer"),
+                        ("architecture-1", "open", "next private prompt", None),
+                    ),
+                )
+
+            diagnostic = runner.safe_architecture_diagnostic()
+
+            self.assertEqual(diagnostic["session_id"], "architecture-1")
+            self.assertEqual(diagnostic["question_counts"], {"answered": 1, "open": 1})
+            self.assertIn("[redacted]", diagnostic["failure_reason"])
+            serialized = json.dumps(diagnostic)
+            self.assertNotIn("private prompt", serialized)
+            self.assertNotIn("private answer", serialized)
+            self.assertNotIn("secret-value", serialized)
 
 
 if __name__ == "__main__":
