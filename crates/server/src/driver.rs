@@ -11,11 +11,12 @@
 use crate::state::AppState;
 use latoile_agents::RunState;
 use latoile_app::supervision::{self, Observed};
-use latoile_app::use_cases::EnsurePreview;
+use latoile_app::use_cases::{CaptureVisualComparisons, EnsurePreview};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::RunId;
 use latoile_core::ports::{
     AgentChannel, ArchitectureSessionStore, EventLog, PreviewStore, RunStore, SpecStore, TaskStore,
+    VisualComparisonStore,
 };
 use latoile_core::{PreviewStatus, Run};
 use std::time::Duration;
@@ -123,8 +124,25 @@ async fn tick(state: &AppState) -> Result<(), latoile_app::use_cases::UseCaseErr
                 )
                 .execute(&project)
                 .await;
-                if let Err(e) = ensured {
+                if let Err(e) = &ensured {
                     tracing::warn!(error = %e, "preview refresh after run failed");
+                }
+
+                if run.role_id.as_str() == "frontend" {
+                    let live_base_url = ensured
+                        .as_ref()
+                        .map(|ready| format!("http://127.0.0.1:{}", ready.preview.port))
+                        .unwrap_or_default();
+                    let compared = CaptureVisualComparisons::new(
+                        state.store.clone(),
+                        state.agents.clone(),
+                        state.baselines.clone(),
+                    )
+                    .execute(&project, &run.id, &live_base_url)
+                    .await;
+                    if let Err(e) = compared {
+                        tracing::warn!(error = %e, "trusted visual comparison failed");
+                    }
                 }
 
                 // The reviewer gets task, approved spec references/excerpts,
@@ -270,9 +288,35 @@ async fn review_context(
     let base = finished.base_sha.as_deref().unwrap_or("unknown");
     let head = finished.head_sha.as_deref().unwrap_or("unknown");
     let artifacts = finished.artifacts.as_deref().unwrap_or("{}");
+    let visual_evidence = VisualComparisonStore::list_for_run(&state.store, &finished.id).await?;
+    let visual_evidence = if visual_evidence.is_empty() {
+        "(not applicable or trusted visual evidence unavailable)".into()
+    } else {
+        visual_evidence
+            .iter()
+            .map(|evidence| {
+                format!(
+                    "- evidence `{}` scenario `{}` status `{}`; baseline {}; render {}; heatmap {}; pixels {}/{} ({} ppm); geometry max {} milli-px; accessibility changes {}; failure {}",
+                    evidence.id.as_str(),
+                    evidence.comparison_id,
+                    evidence.status.as_str(),
+                    evidence.baseline_png_digest,
+                    evidence.render_png_digest.as_deref().unwrap_or("none"),
+                    evidence.heatmap_png_digest.as_deref().unwrap_or("none"),
+                    evidence.changed_pixels,
+                    evidence.total_pixels,
+                    evidence.pixel_ratio_micros,
+                    evidence.max_geometry_delta_milli,
+                    evidence.accessibility_changes,
+                    evidence.failure_code.as_deref().unwrap_or("none"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     Ok(format!(
-        "TASK\n- id: {}\n- role: {}\n- title: {}\n- description: {}\n\nAPPROVED SPEC\n{}\n\nSPEC EXCERPTS\n{}\n\nVISUAL CONTRACT REFERENCES\n{}\n\nEXECUTION EVIDENCE\n- summary: {}\n- base SHA: {}\n- head SHA: {}\n- sanitized artifacts: {}\n\nInspect the repository diff between the two SHAs (plus working-tree changes). For frontend work, compare the live render with the visual references before issuing the verdict.",
+        "TASK\n- id: {}\n- role: {}\n- title: {}\n- description: {}\n\nAPPROVED SPEC\n{}\n\nSPEC EXCERPTS\n{}\n\nVISUAL CONTRACT REFERENCES\n{}\n\nTRUSTED VISUAL EVIDENCE (SERVER-PRODUCED; DO NOT OVERRIDE)\n{}\n\nEXECUTION EVIDENCE\n- summary: {}\n- base SHA: {}\n- head SHA: {}\n- sanitized artifacts: {}\n\nInspect the repository diff between the two SHAs (plus working-tree changes). For frontend work, interpret the server-produced visual evidence; never invent comparison facts.",
         task.id.as_str(),
         task.role_id.as_str(),
         task.title,
@@ -280,6 +324,7 @@ async fn review_context(
         spec_reference,
         excerpts,
         visual_references,
+        visual_evidence,
         finished.summary.as_deref().unwrap_or("(none)"),
         base,
         head,

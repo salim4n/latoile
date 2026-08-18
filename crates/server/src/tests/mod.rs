@@ -12,13 +12,15 @@ use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
     ArchitectureSessionStore, ManagerReply, PortResult, RepoInfo, SpecStore,
-    VisualBaselineRenderer, VisualBaselineStore,
+    VisualBaselineRenderer, VisualBaselineStore, VisualComparisonRenderer,
 };
 use latoile_core::{
     ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
     ArchitecturePackageValidation, ArchitectureValidationFinding, ArchitectureVisualScenario,
-    CapturedVisualBaseline, Run, SpecProvenance, SpecVersion, VisualBaseline,
-    VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest, VisualBaselineStatus,
+    CapturedVisualBaseline, CapturedVisualComparison, Run, SpecProvenance, SpecVersion,
+    VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest,
+    VisualBaselineStatus, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest,
 };
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
@@ -48,6 +50,38 @@ impl VisualBaselineRenderer for StubBaselines {
 
     async fn read_png(&self, _baseline: &VisualBaseline) -> PortResult<Vec<u8>> {
         Ok(b"\x89PNG\r\n\x1a\nSTUB".to_vec())
+    }
+}
+
+impl VisualComparisonRenderer for StubBaselines {
+    async fn compare(
+        &self,
+        _request: &VisualComparisonCaptureRequest,
+    ) -> PortResult<VisualComparisonCaptureOutcome> {
+        Ok(VisualComparisonCaptureOutcome::Ready(
+            CapturedVisualComparison {
+                changed_pixels: 0,
+                total_pixels: 390 * 844,
+                max_geometry_delta_milli: 0,
+                accessibility_changes: 0,
+                render_png_digest: "1".repeat(64),
+                pixel_diff_digest: "2".repeat(64),
+                heatmap_png_digest: "3".repeat(64),
+                geometry_diff_digest: "4".repeat(64),
+                accessibility_diff_digest: "5".repeat(64),
+                environment_digest: "6".repeat(64),
+                browser_version: "Chrome/151".into(),
+                font_fingerprint: "b".repeat(64),
+            },
+        ))
+    }
+
+    async fn read_render_png(&self, _comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        Ok(b"\x89PNG\r\n\x1a\nRENDER".to_vec())
+    }
+
+    async fn read_heatmap_png(&self, _comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        Ok(b"\x89PNG\r\n\x1a\nHEATMAP".to_vec())
     }
 }
 

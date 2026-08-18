@@ -40,7 +40,7 @@ pub use error::{DomainError, TransitionError};
 pub use event::{EventKind, NewEvent};
 pub use ids::{
     ApprovalId, ArchitectureQuestionId, ArchitectureSessionId, ConversationId, MessageId,
-    PreviewId, ProjectId, RoleId, RunId, SpecVersionId, TaskId,
+    PreviewId, ProjectId, RoleId, RunId, SpecVersionId, TaskId, VisualComparisonId,
 };
 pub use preview::{Preview, PreviewStatus};
 pub use project::{Project, ProjectStatus};
@@ -48,6 +48,9 @@ pub use run::{Run, RunStatus, TriggeredBy};
 pub use spec::{SpecProvenance, SpecStatus, SpecVersion};
 pub use task::{Task, TaskStatus};
 pub use visual::{
-    CapturedVisualBaseline, VisualBaseline, VisualBaselineCaptureOutcome,
-    VisualBaselineCaptureRequest, VisualBaselineStatus,
+    BLOCKING_ACCESSIBILITY_CHANGES, BLOCKING_GEOMETRY_DELTA_MILLI, BLOCKING_PIXEL_RATIO_MICROS,
+    CapturedVisualBaseline, CapturedVisualComparison, RESERVATION_PIXEL_RATIO_MICROS,
+    VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest,
+    VisualBaselineStatus, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest, VisualComparisonStatus,
 };

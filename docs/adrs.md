@@ -400,6 +400,58 @@ shows progress, failures, recovery actions and the real PNG.
 
 + Owner approval is backed by browser-produced evidence, not a static preview alone.
 + Missing browsers, readiness timeouts and unstable selectors fail closed with recovery actions.
-+ #16 can reuse the exact scenario/environment contract for live pixel comparison.
++ Live comparison reuses the exact scenario/environment contract and immutable baseline.
 − A supported Chromium installation is required for execution-ready visual specs.
-− Live-render comparison and heatmaps remain a separate step.
+
+---
+
+# ADR-013 — Classify live visual evidence outside the Reviewer
+
+- **Date**: 2026-08-18
+- **Status**: accepted, real local Chromium comparison verified
+
+## Context
+
+A Reviewer can inspect code and explain intent, but its prose cannot prove what
+a browser rendered. A live screenshot alone is also insufficient: without the
+approved scenario, baseline bytes, geometry, accessibility and environment,
+visual similarity is neither reproducible nor safe to gate.
+
+## Decision
+
+After a frontend executor finishes and its supervised preview is ready,
+LaToile revalidates the immutable architecture package and replays every P0
+scenario against `127.0.0.1:<preview-port>`. The browser process inherits no
+service environment. CDP permits requests only to that exact HTTP origin and
+blocks HTTPS, file, FTP and WebSockets; approved dynamic selectors are the only
+masks. Route, synthetic fixture, locale, theme, viewport, scale, readiness and
+measured selectors come unchanged from the approved manifest.
+
+The capture adapter stores the real render, absolute pixel diff, heatmap,
+geometry change document, accessibility change document and complete
+environment provenance atomically under immutable content hashes. Browser and
+font fingerprints must match the baseline. The pure domain computes fixed
+thresholds: at least 2% changed pixels, an 8 px geometry delta, or three AX
+changes is blocking; smaller measured drift is a reservation; no drift passes.
+Capture/environment failure is `invalid` with zero similarity metrics and an
+explicit recovery action. Complete comparison rows and artifacts never change.
+
+The supervision driver performs this capture before Reviewer dispatch and
+passes only server-produced ids, hashes, metrics and status into its context.
+Authenticated routes expose comparison metadata, render and heatmap bytes.
+
+## Rejected alternatives
+
+- Ask the Reviewer to estimate similarity or spacing: narration is not evidence.
+- Allow the live app general network access: project JavaScript could exfiltrate
+  service context or make the render depend on mutable remote state.
+- Reuse an existing browser profile: cookies, cache and extensions contaminate evidence.
+- Treat capture failure as 100% similarity: fabricates an approvable result.
+- Add undeclared masks after seeing a diff: mutates the approved visual contract.
+
+## Consequences
+
++ A known 16 px spacing regression is detected by both pixel and geometry evidence.
++ Reviewers and UI consumers receive stable ids and hashes, not self-reported frames.
++ Missing routes, selectors, browsers or environment parity remain actionable and non-reviewable.
+− Live evidence requires a ready loopback preview and the same Chromium/font runtime as approval.

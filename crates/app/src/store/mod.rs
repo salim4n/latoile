@@ -26,6 +26,7 @@ mod spec;
 mod spec_approval;
 mod task;
 mod visual_baseline;
+mod visual_comparison;
 
 pub use approval::InboxApprovalRow;
 pub use conversation::ProjectMessageRow;
@@ -189,6 +190,7 @@ pub(crate) mod test_fixtures {
     pub(crate) static PROJECT: LazyLock<ProjectId> =
         LazyLock::new(|| ProjectId::new("p1").unwrap());
     pub(crate) const SPEC: &str = "s1";
+    pub(crate) const FINISHED_RUN: &str = "r-finished";
 
     pub(crate) fn attach_test_provenance(spec: &mut SpecVersion) {
         spec.attach_provenance(SpecProvenance {
@@ -329,6 +331,23 @@ pub(crate) mod test_fixtures {
         );
         RunStore::save(&store, &run).await.unwrap();
         (store, run.id)
+    }
+
+    pub(crate) async fn store_with_finished_frontend_run() -> Store {
+        let (store, task_id) = store_with_task().await;
+        let mut task = TaskStore::get(&store, &task_id).await.unwrap().unwrap();
+        task.start().unwrap();
+        TaskStore::save(&store, &task).await.unwrap();
+        let mut run = Run::new(
+            RunId::new(FINISHED_RUN).unwrap(),
+            task_id,
+            RoleId::new("frontend").unwrap(),
+            latoile_core::TriggeredBy::Manager,
+        );
+        run.begin().unwrap();
+        run.finish("frontend implementation complete").unwrap();
+        RunStore::save(&store, &run).await.unwrap();
+        store
     }
 }
 

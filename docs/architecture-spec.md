@@ -31,6 +31,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | D15 | A restart invalidates process-backed rows before HTTP readiness; the service cgroup reaps crash orphans, and backup always pairs SQLite with the external root key | Resume unknown processes, signal persisted PIDs, or back up the database alone |
 | D16 | Spec approval revalidates a complete machine-readable visual manifest and exact Git/content provenance; approval, supersession, task binding and event are one transaction | Trust validation performed only when the Architect originally generated the draft |
 | D17 | Every required P0 mockup is rendered by isolated Chromium before approval; immutable PNG, DOM geometry, accessibility and environment hashes gate approval and dispatch | Ad-hoc screenshots or Reviewer self-reported measurements |
+| D18 | A finished frontend run is captured from the exact supervised loopback route and compared to its immutable baseline; fixed server thresholds classify real pixel, geometry and accessibility evidence | Reviewer prose, manual screenshots or an unrestricted browser session |
 
 ## 3. Domain model
 
@@ -39,7 +40,7 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
 | Context | Responsibility | Entities |
 |---|---|---|
 | Project | lifecycle, repo link, state | `Project` |
-| Design | Socratic discovery, versioned spec, artifacts | `ArchitectureSession`, `ArchitectureQuestion`, `SpecVersion`, `VisualBaseline` |
+| Design | Socratic discovery, versioned spec, artifacts | `ArchitectureSession`, `ArchitectureQuestion`, `SpecVersion`, `VisualBaseline`, `VisualComparison` |
 | Orchestration | roles, tasks, runs, approvals | `Role`, `Task`, `Run`, `Approval` |
 | Conversation | the Manager thread | `Conversation`, `Message` |
 | Preview | dev server, port, state | `Preview` |
@@ -103,6 +104,13 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     DOM geometry and browser accessibility snapshots are content-addressed;
     successful evidence is immutable. Approval and dispatch require one ready
     baseline matching every scenario and the exact spec manifest/commit.
+20. A finished frontend run replays the same route, fixture, locale, theme,
+    viewport, readiness, selector and approved-mask contract. The fresh browser
+    has a cleared process environment and an exact loopback-origin network
+    allowlist. Render, pixel diff, heatmap, geometry changes, accessibility
+    changes and environment are immutable and hashed. Domain-owned thresholds
+    classify `invalid`, `blocking`, `reservation` or `passed`; invalid evidence
+    carries no fabricated pixel metrics.
 
 ### 3.3 Domain events
 
@@ -306,7 +314,7 @@ erDiagram
     }
 ```
 
-Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one delivery per project; one immutable visual baseline per spec/comparison; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0009`).
+Constraints: partial unique indexes for active run/task, active preview/project and approved spec/project; one corrective run per rejected approval; one delivery per project; one immutable visual baseline per spec/comparison and one immutable complete comparison per run/scenario; delivery SHA equality and PR URL/status consistency. Soft delete is the `PROJECT.deleted` flag. Migrations are append-only (`0001` through `0010`).
 
 ## 5. Architecture
 
@@ -318,7 +326,7 @@ crates/
 ├── agents/    ACP channel + provider CLI auth: supervised spawn, sessions, permissions, usage
 ├── preview/   dev-server supervision, port allocation, reverse proxy
 ├── github/    checkout provisioning, Git verification/push, GitHub REST/PR client
-├── capture/   isolated Chromium, CDP capture, immutable PNG/DOM/AX artifact store
+├── capture/   isolated Chromium, CDP capture, pixel/DOM/AX comparison and immutable artifact store
 ├── vault/     secrets (XChaCha20-Poly1305, root key outside the DB)
 ├── app/       use cases + supervision decisions: messages, dispatch, review, permissions, delivery
 ├── server/    axum HTTP, SSE, embedded assets, token auth — extract, validate, delegate
@@ -364,7 +372,10 @@ sequenceDiagram
     A->>DB: RUN finished + TASK → review
     A->>P: EnsurePreview
     P-->>A: PreviewReady
-    A->>R: task + approved spec + visual contract + Git evidence
+    A->>C: replay live route (exact loopback origin only)
+    C-->>A: render + pixel diff + heatmap + DOM/AX changes + environment
+    A->>DB: immutable VISUAL_COMPARISON + server threshold status
+    A->>R: task + approved spec + trusted visual ids/hashes + Git evidence
     R-->>A: structured latoile-review verdict
     A->>DB: reviewer RUN finished + review APPROVAL requested
     A-->>You: SSE ApprovalRequested (Reviewer evidence attached)
@@ -399,6 +410,9 @@ sequenceDiagram
 | GET | `/api/spec-versions/:id/baselines/:comparison_id/image` | authenticated immutable real baseline PNG |
 | POST | `/api/spec-versions/:id/approve` | ensure required baselines, revalidate and atomically approve the exact immutable spec |
 | GET | `/api/runs/:id` | status, summary, base/head SHA and sanitized artifacts |
+| GET | `/api/runs/:id/visual-comparisons` | trusted server-classified evidence for every required live scenario |
+| GET | `/api/visual-comparisons/:id/render` | authenticated immutable live-render PNG |
+| GET | `/api/visual-comparisons/:id/heatmap` | authenticated immutable pixel heatmap PNG |
 | GET | `/api/approvals`, `/api/approvals/:id` | pending inbox / decision detail |
 | POST | `/api/approvals/:id` | `{granted: bool, comment?: string}` for review or permission |
 | GET/POST/DELETE | `/api/projects/:id/preview` | status / ensure / stop supervised dev server |

@@ -23,11 +23,12 @@ use latoile_core::ports::{
     AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
     GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace,
     PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, VisualBaselineRenderer,
-    WorkBranchPublisher, WorkspaceProvisioner,
+    VisualComparisonRenderer, WorkBranchPublisher, WorkspaceProvisioner,
 };
 use latoile_core::{
     ArchitecturePackageValidation, Run, SpecVersion, VisualBaseline, VisualBaselineCaptureOutcome,
-    VisualBaselineCaptureRequest,
+    VisualBaselineCaptureRequest, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest,
 };
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
@@ -223,6 +224,43 @@ impl VisualBaselineRenderer for BaselineSlot {
             Self::Real(renderer) => renderer.read_png(baseline).await,
             #[cfg(test)]
             Self::Stub(renderer) => renderer.read_png(baseline).await,
+        }
+    }
+}
+
+impl VisualComparisonRenderer for BaselineSlot {
+    async fn compare(
+        &self,
+        request: &VisualComparisonCaptureRequest,
+    ) -> PortResult<VisualComparisonCaptureOutcome> {
+        match self {
+            Self::Real(renderer) => renderer.compare(request).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.compare(request).await,
+        }
+    }
+
+    async fn read_render_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_render_png(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_render_png(comparison).await,
+        }
+    }
+
+    async fn read_heatmap_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_heatmap_png(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_heatmap_png(comparison).await,
+        }
+    }
+
+    async fn verify_comparison(&self, comparison: &VisualComparison) -> PortResult<()> {
+        match self {
+            Self::Real(renderer) => renderer.verify_comparison(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.verify_comparison(comparison).await,
         }
     }
 }

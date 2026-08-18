@@ -4,12 +4,14 @@
 
 use super::*;
 use crate::driver;
+use axum::http::HeaderValue;
 use latoile_agents::{ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState};
 use latoile_core::event::EventKind;
 use latoile_core::ids::{ArchitectureSessionId, PreviewId, RunId, SpecVersionId, TaskId};
 use latoile_core::ports::PermissionRequest;
 use latoile_core::ports::{
     ApprovalStore, ArchitectureSessionStore, PreviewStore, RunStore, SpecStore, TaskStore,
+    VisualComparisonStore,
 };
 use latoile_core::{
     Approval, ApprovalId, ApprovalKind, ApprovalStatus, ArchitectureSession, ArchitectureStatus,
@@ -389,6 +391,48 @@ async fn a_finished_run_drives_review_and_journals() {
     let reviewer = reviewer.expect("a reviewer run should have been dispatched");
     assert_eq!(reviewer.status, RunStatus::Running);
     assert!(store.list_pending().await.unwrap().is_empty());
+    let comparisons = VisualComparisonStore::list_for_run(&store, &run)
+        .await
+        .unwrap();
+    assert_eq!(comparisons.len(), 1);
+    assert_eq!(
+        comparisons[0].status,
+        latoile_core::VisualComparisonStatus::Passed
+    );
+    let listed = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/runs/{}/visual-comparisons", run.as_str()),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    assert_eq!(listed[0]["status"], "passed");
+    assert_eq!(listed[0]["changed_pixels"], 0);
+    for artifact in ["render", "heatmap"] {
+        let response = app
+            .clone()
+            .oneshot(authed(request(
+                "GET",
+                &format!(
+                    "/api/visual-comparisons/{}/{}",
+                    comparisons[0].id.as_str(),
+                    artifact
+                ),
+                None,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            HeaderValue::from_static("image/png")
+        );
+        assert!(response.headers().contains_key("etag"));
+    }
 
     let prompt = {
         let prompts = agents.run_prompts.lock().unwrap();
@@ -403,6 +447,8 @@ async fn a_finished_run_drives_review_and_journals() {
     assert!(prompt.contains("1111111"), "{prompt}");
     assert!(prompt.contains("2222222"), "{prompt}");
     assert!(prompt.contains("src/endpoint.rs"), "{prompt}");
+    assert!(prompt.contains("TRUSTED VISUAL EVIDENCE"), "{prompt}");
+    assert!(prompt.contains(comparisons[0].id.as_str()), "{prompt}");
     assert!(prompt.contains("latoile-review"), "{prompt}");
     let reviewer_result = serde_json::json!({
         "schema_version": 1,

@@ -5,23 +5,32 @@
 
 mod artifacts;
 mod cdp;
+mod compare;
 mod page;
 
-use artifacts::{artifact_dir, persist_artifacts, sha256, sha256_file, verify_artifacts};
+use artifacts::{
+    ComparisonArtifactBytes, artifact_dir, persist_artifacts, persist_comparison_artifacts,
+    read_baseline_artifacts, read_comparison_png, sha256, sha256_file, verify_artifacts,
+    verify_comparison_artifacts,
+};
 use cdp::{CdpClient, ChromeProcess, find_browser};
-use latoile_core::ports::{PortError, PortResult, VisualBaselineRenderer};
+use latoile_core::ports::{
+    PortError, PortResult, VisualBaselineRenderer, VisualComparisonRenderer,
+};
 use latoile_core::{
-    CapturedVisualBaseline, VisualBaseline, VisualBaselineCaptureOutcome,
-    VisualBaselineCaptureRequest,
+    CapturedVisualBaseline, CapturedVisualComparison, VisualBaseline, VisualBaselineCaptureOutcome,
+    VisualBaselineCaptureRequest, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest,
 };
 use page::{
     MAX_PNG_BYTES, apply_allowed_masks, capture_accessibility, capture_font_probe,
-    capture_geometry, capture_png, configure_page, validate_request, wait_until_ready,
+    capture_geometry, capture_png, configure_live_page, configure_page, settle_page,
+    validate_request, wait_until_ready,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-const CAPTURE_PROTOCOL_VERSION: &str = "latoile-capture-v1";
+const CAPTURE_PROTOCOL_VERSION: &str = "latoile-capture-v2";
 
 #[derive(Debug, thiserror::Error)]
 enum CaptureError {
@@ -29,6 +38,8 @@ enum CaptureError {
     BrowserUnavailable,
     #[error("the capture input is not a bounded self-contained HTML document")]
     UnsafeInput,
+    #[error("the live capture URL is not a bounded loopback preview URL")]
+    UnsafeUrl,
     #[error("Chromium did not expose its debugging endpoint in time")]
     BrowserStartup,
     #[error("the declared ready selector did not become uniquely available")]
@@ -37,6 +48,10 @@ enum CaptureError {
     UnstableSelector,
     #[error("the same immutable scenario produced different artifact bytes")]
     DeterminismMismatch,
+    #[error("baseline evidence cannot be compared: {0}")]
+    Evidence(String),
+    #[error("live browser or font environment does not match the immutable baseline")]
+    EnvironmentMismatch,
     #[error("browser protocol failure: {0}")]
     Protocol(String),
     #[error("visual artifact storage failure: {0}")]
@@ -82,13 +97,12 @@ impl BaselineCapture {
         let page_ws = browser.page_websocket().await?;
         let mut cdp = CdpClient::connect(&page_ws).await?;
         configure_page(&mut cdp, request).await?;
-        wait_until_ready(&mut cdp, request).await?;
-
-        let geometry = capture_geometry(&mut cdp, request).await?;
+        wait_until_ready(&mut cdp, &request.scenario).await?;
+        apply_allowed_masks(&mut cdp, &request.scenario).await?;
+        let geometry = capture_geometry(&mut cdp, &request.scenario).await?;
         let accessibility = capture_accessibility(&mut cdp).await?;
-        let font_probe = capture_font_probe(&mut cdp, request).await?;
-        apply_allowed_masks(&mut cdp, request).await?;
-        let png = capture_png(&mut cdp, request).await?;
+        let font_probe = capture_font_probe(&mut cdp, &request.scenario).await?;
+        let png = capture_png(&mut cdp, &request.scenario).await?;
         let browser_version = cdp.call("Browser.getVersion", json!({})).await?;
         browser.shutdown().await;
 
@@ -139,6 +153,116 @@ impl BaselineCapture {
         )?;
         Ok(captured)
     }
+
+    async fn compare_inner(
+        &self,
+        request: &VisualComparisonCaptureRequest,
+    ) -> Result<CapturedVisualComparison, CaptureError> {
+        if !request.baseline.satisfies(
+            &request.spec_version_id,
+            &request.manifest_digest,
+            &request.package_commit_sha,
+            &request.scenario.comparison_id,
+        ) {
+            return Err(CaptureError::Evidence(
+                "the requested baseline does not match the immutable scenario".into(),
+            ));
+        }
+        let baseline = read_baseline_artifacts(&self.root, &request.baseline)
+            .map_err(|error| CaptureError::Evidence(error.to_string()))?;
+        let baseline_environment: Value = serde_json::from_slice(&baseline.environment)
+            .map_err(|error| CaptureError::Evidence(error.to_string()))?;
+        if baseline_environment
+            .get("protocol")
+            .and_then(Value::as_str)
+            != Some(CAPTURE_PROTOCOL_VERSION)
+        {
+            return Err(CaptureError::EnvironmentMismatch);
+        }
+        let executable = find_browser(self.browser_override.as_deref())?;
+        let executable_digest = tokio::task::spawn_blocking({
+            let executable = executable.clone();
+            move || sha256_file(&executable)
+        })
+        .await
+        .map_err(|error| CaptureError::Storage(error.to_string()))??;
+
+        let mut browser = ChromeProcess::launch(&executable).await?;
+        let page_ws = browser.page_websocket().await?;
+        let mut cdp = CdpClient::connect(&page_ws).await?;
+        let live_url = configure_live_page(&mut cdp, request).await?;
+        wait_until_ready(&mut cdp, &request.scenario).await?;
+        settle_page(&mut cdp).await?;
+        apply_allowed_masks(&mut cdp, &request.scenario).await?;
+        let geometry = capture_geometry(&mut cdp, &request.scenario).await?;
+        let accessibility = capture_accessibility(&mut cdp).await?;
+        let font_probe = capture_font_probe(&mut cdp, &request.scenario).await?;
+        let render_png = capture_png(&mut cdp, &request.scenario).await?;
+        let browser_version = cdp.call("Browser.getVersion", json!({})).await?;
+        browser.shutdown().await;
+
+        let product = browser_version
+            .get("product")
+            .and_then(Value::as_str)
+            .unwrap_or("Chromium/unknown")
+            .to_string();
+        let font_bytes = serde_json::to_vec(&font_probe)
+            .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+        let font_fingerprint = sha256(&font_bytes);
+        if request.baseline.browser_version.as_deref() != Some(product.as_str())
+            || request.baseline.font_fingerprint.as_deref() != Some(font_fingerprint.as_str())
+        {
+            return Err(CaptureError::EnvironmentMismatch);
+        }
+        let computed = compare::compare(&baseline, &render_png, &geometry, &accessibility)?;
+        let environment = json!({
+            "protocol": CAPTURE_PROTOCOL_VERSION,
+            "kind": "live_comparison",
+            "url": live_url,
+            "network_policy": "exact_loopback_origin_only",
+            "browser": browser_version,
+            "browser_executable_sha256": executable_digest,
+            "font_probe": font_probe,
+            "baseline_environment_digest": request.baseline.environment_digest,
+            "baseline_environment": baseline_environment,
+            "locale": request.scenario.locale,
+            "theme": request.scenario.theme,
+            "fixture": request.scenario.fixture,
+            "viewport": {
+                "width": request.scenario.viewport_width,
+                "height": request.scenario.viewport_height,
+                "device_scale_factor_milli": request.scenario.device_scale_factor_milli,
+            },
+            "animations": "disabled",
+            "process_environment": "cleared",
+        });
+        let environment = serde_json::to_vec(&environment)
+            .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+        let bytes = ComparisonArtifactBytes {
+            render_png,
+            pixel_diff_png: computed.pixel_diff_png,
+            heatmap_png: computed.heatmap_png,
+            geometry_diff: computed.geometry_diff,
+            accessibility_diff: computed.accessibility_diff,
+            environment,
+        };
+        let captured = CapturedVisualComparison {
+            changed_pixels: computed.changed_pixels,
+            total_pixels: computed.total_pixels,
+            max_geometry_delta_milli: computed.max_geometry_delta_milli,
+            accessibility_changes: computed.accessibility_changes,
+            render_png_digest: sha256(&bytes.render_png),
+            pixel_diff_digest: sha256(&bytes.pixel_diff_png),
+            heatmap_png_digest: sha256(&bytes.heatmap_png),
+            geometry_diff_digest: sha256(&bytes.geometry_diff),
+            accessibility_diff_digest: sha256(&bytes.accessibility_diff),
+            environment_digest: sha256(&bytes.environment),
+            browser_version: product,
+            font_fingerprint,
+        };
+        persist_comparison_artifacts(&self.root, request, &captured, &bytes)?;
+        Ok(captured)
+    }
 }
 
 impl VisualBaselineRenderer for BaselineCapture {
@@ -178,8 +302,56 @@ impl VisualBaselineRenderer for BaselineCapture {
     }
 }
 
+impl VisualComparisonRenderer for BaselineCapture {
+    async fn compare(
+        &self,
+        request: &VisualComparisonCaptureRequest,
+    ) -> PortResult<VisualComparisonCaptureOutcome> {
+        Ok(match self.compare_inner(request).await {
+            Ok(captured) => VisualComparisonCaptureOutcome::Ready(captured),
+            Err(error) => {
+                let (code, recovery_action) = failure_details(&error);
+                VisualComparisonCaptureOutcome::Invalid {
+                    code: code.into(),
+                    message: error.to_string(),
+                    recovery_action: recovery_action.into(),
+                }
+            }
+        })
+    }
+
+    async fn read_render_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        let bytes = read_comparison_png(&self.root, comparison, "render.png")?;
+        if bytes.len() > MAX_PNG_BYTES {
+            return Err(PortError("render PNG exceeds the artifact limit".into()));
+        }
+        Ok(bytes)
+    }
+
+    async fn read_heatmap_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        let bytes = read_comparison_png(&self.root, comparison, "heatmap.png")?;
+        if bytes.len() > MAX_PNG_BYTES {
+            return Err(PortError("heatmap PNG exceeds the artifact limit".into()));
+        }
+        Ok(bytes)
+    }
+
+    async fn verify_comparison(&self, comparison: &VisualComparison) -> PortResult<()> {
+        verify_comparison_artifacts(&self.root, comparison)
+    }
+}
+
 fn failure_outcome(error: CaptureError) -> VisualBaselineCaptureOutcome {
-    let (code, recovery_action) = match error {
+    let (code, recovery_action) = failure_details(&error);
+    VisualBaselineCaptureOutcome::Failed {
+        code: code.into(),
+        message: error.to_string(),
+        recovery_action: recovery_action.into(),
+    }
+}
+
+fn failure_details(error: &CaptureError) -> (&'static str, &'static str) {
+    match error {
         CaptureError::BrowserUnavailable | CaptureError::BrowserStartup => (
             "browser_unavailable",
             "Install a supported Chromium build or set LATOILE_CAPTURE_BROWSER, then retry.",
@@ -187,6 +359,10 @@ fn failure_outcome(error: CaptureError) -> VisualBaselineCaptureOutcome {
         CaptureError::UnsafeInput => (
             "unsafe_scenario",
             "Generate a new architecture version with a bounded self-contained mockup.",
+        ),
+        CaptureError::UnsafeUrl => (
+            "unsafe_preview_url",
+            "Restart the supervised loopback preview and retry the comparison.",
         ),
         CaptureError::ReadinessTimeout => (
             "readiness_timeout",
@@ -200,22 +376,30 @@ fn failure_outcome(error: CaptureError) -> VisualBaselineCaptureOutcome {
             "determinism_mismatch",
             "Pin the changed browser/font environment or remove nondeterminism, then generate a new version.",
         ),
+        CaptureError::Evidence(_) => (
+            "invalid_baseline_evidence",
+            "Re-capture or restore the immutable baseline artifacts before retrying.",
+        ),
+        CaptureError::EnvironmentMismatch => (
+            "environment_mismatch",
+            "Use the same capture protocol, Chromium and fonts; if the protocol changed, generate and approve a new architecture version.",
+        ),
         CaptureError::Protocol(_) | CaptureError::Storage(_) => (
             "capture_failed",
             "Inspect the LaToile service logs, repair the capture runtime and retry.",
         ),
-    };
-    VisualBaselineCaptureOutcome::Failed {
-        code: code.into(),
-        message: error.to_string(),
-        recovery_action: recovery_action.into(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use latoile_core::{ArchitectureVisualScenario, ProjectId, SpecVersionId};
+    use latoile_core::{
+        ArchitectureVisualScenario, ProjectId, RunId, SpecVersionId, VisualComparisonId,
+        VisualComparisonStatus,
+    };
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     fn request(html: &str) -> VisualBaselineCaptureRequest {
         VisualBaselineCaptureRequest {
@@ -320,5 +504,66 @@ mod tests {
         let second = capture.capture(&request).await.unwrap();
         assert_eq!(first, second);
         assert!(matches!(first, VisualBaselineCaptureOutcome::Ready(_)));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an installed Chromium browser"]
+    async fn installed_chromium_detects_a_live_spacing_regression() {
+        let root = tempfile::tempdir().unwrap();
+        let capture = BaselineCapture::new(root.path().into());
+        let mut baseline_request = request(
+            "<!doctype html><html><head><style>html,body{margin:0}main{box-sizing:border-box;margin-left:20px;width:120px;height:120px;background:#181818;color:#fff}</style></head><body><main data-latoile-ready='true'>Card</main></body></html>",
+        );
+        baseline_request.scenario.readiness_selector = "[data-latoile-ready='true']".into();
+        let baseline_captured = match capture.capture(&baseline_request).await.unwrap() {
+            VisualBaselineCaptureOutcome::Ready(captured) => captured,
+            failure => panic!("baseline capture failed: {failure:?}"),
+        };
+        let baseline = VisualBaseline::ready(&baseline_request, &baseline_captured).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let network_trap = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let trap_port = network_trap.local_addr().unwrap().port();
+        let html = format!(
+            "<!doctype html><html><head><style>html,body{{margin:0}}main{{box-sizing:border-box;margin-left:36px;width:120px;height:120px;background:#181818;color:#fff}}</style></head><body><main>Card</main><script>fetch('http://127.0.0.1:{trap_port}/must-not-connect').then(() => document.querySelector('main').textContent = 'NETWORK LEAK').catch(() => document.querySelector('main').dataset.latoileReady = 'true')</script></body></html>"
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        );
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        let comparison_request = VisualComparisonCaptureRequest {
+            id: VisualComparisonId::new("visual:run-1:home-default").unwrap(),
+            spec_version_id: baseline_request.spec_version_id.clone(),
+            project_id: baseline_request.project_id.clone(),
+            run_id: RunId::new("run-1").unwrap(),
+            manifest_digest: baseline_request.manifest_digest.clone(),
+            package_commit_sha: baseline_request.package_commit_sha.clone(),
+            baseline,
+            scenario: baseline_request.scenario,
+            live_base_url: format!("http://127.0.0.1:{port}"),
+        };
+        let captured = match capture.compare(&comparison_request).await.unwrap() {
+            VisualComparisonCaptureOutcome::Ready(captured) => captured,
+            failure => panic!("live comparison failed: {failure:?}"),
+        };
+        let comparison = VisualComparison::ready(&comparison_request, &captured).unwrap();
+        assert_eq!(comparison.status, VisualComparisonStatus::Blocking);
+        assert!(comparison.changed_pixels > 0);
+        assert_eq!(comparison.max_geometry_delta_milli, 16_000);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), network_trap.accept())
+                .await
+                .is_err(),
+            "the live page reached a non-approved loopback origin"
+        );
+        server.abort();
     }
 }

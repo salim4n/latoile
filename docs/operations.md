@@ -30,6 +30,12 @@ records the product version, executable SHA-256 and rendered font fingerprint;
 changing that environment makes a repeat mismatch explicit instead of silently
 replacing approved evidence.
 
+Live comparison uses the same pinned browser/font environment. The capture
+browser starts with a cleared process environment, allows HTTP requests only
+to the exact supervised `127.0.0.1:<preview-port>` origin and blocks HTTPS,
+file, FTP and every WebSocket. A browser/font mismatch records an invalid,
+actionable comparison rather than calculating a misleading similarity score.
+
 Store the GitHub token through stdin, never as an argument:
 
 ```sh

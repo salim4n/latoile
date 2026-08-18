@@ -15,6 +15,7 @@ mod runs;
 mod settings;
 mod specs;
 mod tasks;
+mod visual_comparisons;
 
 use crate::auth;
 use crate::state::AppState;
@@ -44,6 +45,18 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/projects/{id}/tasks/{task_id}", patch(tasks::reorder))
         .route("/api/runs/{id}", get(runs::get))
+        .route(
+            "/api/runs/{id}/visual-comparisons",
+            get(visual_comparisons::list_for_run),
+        )
+        .route(
+            "/api/visual-comparisons/{id}/render",
+            get(visual_comparisons::render_png),
+        )
+        .route(
+            "/api/visual-comparisons/{id}/heatmap",
+            get(visual_comparisons::heatmap_png),
+        )
         .route("/api/approvals", get(approvals::pending))
         .route(
             "/api/approvals/{id}",

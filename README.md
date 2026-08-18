@@ -24,7 +24,7 @@ You ──chat──► Manager ──► Architect ──► Spec v1 (design/ i
 
 - **The project is the central entity** — not the conversation, not the session.
 - **Spec before code** — every task references an approved, versioned specification. Design artifacts (domain model, ER diagrams, HTML mockups) live in the project's own `design/` directory, so git gives you history, diff, and review for free.
-- **Mockups are the visual contract** — the HTML mockups produced at design time sit side-by-side with the live render in the Review screen. The frontend agent builds toward a target, not a vibe.
+- **Mockups are the visual contract** — isolated Chromium captures the approved target and the finished live route, then LaToile computes pixel, geometry and accessibility evidence. The frontend agent builds toward a measured target, not a vibe.
 - **Fixed roles, dedicated skills** — each role is bound to its own skill file (system prompt + playbook). The Architect runs a structured architecture-brainstorm method; the Reviewer never merges, only recommends.
 - **Human approval is a hard invariant** — enforced by the domain state machine, not by convention.
 - **Live preview** — the project's dev server is supervised and reverse-proxied into the UI, mobile viewport by default. When a frontend run finishes, the preview reloads itself.
@@ -92,6 +92,7 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Dedicated Manager, Architect, Backend, Frontend and Reviewer skills
 - [x] Automated Architect discovery, confined architecture package and immutable owner validation
 - [x] Real deterministic Chromium baselines with PNG, DOM geometry and accessibility evidence
+- [x] Real loopback-only live capture with render PNG, pixel diff, heatmap and server-owned regression thresholds
 - [x] Executor supervision with bounded Git evidence and fail-closed ACP permissions
 - [x] Supervised live preview with auto-reload
 - [x] Reviewer-before-human flow, corrective runs and audited decisions
@@ -100,7 +101,7 @@ The default Rust, web and Python safety suites are hermetic. The separate opt-in
 - [x] Opt-in real-provider V1 vertical-slice canary
 - [x] Blocking startup recovery, preview health reconciliation, paired backup/restore and release smoke
 
-Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) now distinguish the shipped real mockup baselines from the still-pending live-render pixel diff, alongside fresh Manager context assembly and project status promotion.
+Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallelism, WebSocket preview proxying, non-web previews and automatic merge. The [verified V1 limits](docs/architecture-spec.md#71-verified-v1-limits) distinguish shipped trusted capture evidence from the pending Reviewer V2 binding and decision-grade artifact UI, alongside fresh Manager context assembly and project status promotion.
 
 ## Contributing
 

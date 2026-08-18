@@ -21,13 +21,17 @@ use crate::delivery::Delivery;
 use crate::event::NewEvent;
 use crate::ids::{
     ApprovalId, ArchitectureQuestionId, ArchitectureSessionId, ProjectId, RunId, TaskId,
+    VisualComparisonId,
 };
 use crate::preview::Preview;
 use crate::project::Project;
 use crate::run::Run;
 use crate::spec::SpecVersion;
 use crate::task::Task;
-use crate::visual::{VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest};
+use crate::visual::{
+    VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest, VisualComparison,
+    VisualComparisonCaptureOutcome, VisualComparisonCaptureRequest,
+};
 
 /// What adapters report when they fail. Deliberately opaque: a message for
 /// logs, mapped to `{code, message}` at the HTTP edge — internal chains never
@@ -89,6 +93,14 @@ pub trait VisualBaselineStore {
     /// A ready baseline is immutable. Failed attempts may be replaced only
     /// by a retry for the same immutable spec/scenario contract.
     async fn save(&self, baseline: &VisualBaseline) -> PortResult<()>;
+}
+
+pub trait VisualComparisonStore {
+    async fn get(&self, id: &VisualComparisonId) -> PortResult<Option<VisualComparison>>;
+    async fn list_for_run(&self, run: &RunId) -> PortResult<Vec<VisualComparison>>;
+    /// Complete evidence is immutable. An invalid attempt can be retried only
+    /// for the same run, spec, baseline and scenario contract.
+    async fn save(&self, comparison: &VisualComparison) -> PortResult<()>;
 }
 
 pub trait ApprovalStore {
@@ -304,6 +316,19 @@ pub trait VisualBaselineRenderer {
     async fn read_png(&self, baseline: &VisualBaseline) -> PortResult<Vec<u8>>;
     async fn verify(&self, baseline: &VisualBaseline) -> PortResult<()> {
         self.read_png(baseline).await.map(|_| ())
+    }
+}
+
+pub trait VisualComparisonRenderer {
+    async fn compare(
+        &self,
+        request: &VisualComparisonCaptureRequest,
+    ) -> PortResult<VisualComparisonCaptureOutcome>;
+    async fn read_render_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>>;
+    async fn read_heatmap_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>>;
+    async fn verify_comparison(&self, comparison: &VisualComparison) -> PortResult<()> {
+        self.read_render_png(comparison).await?;
+        self.read_heatmap_png(comparison).await.map(|_| ())
     }
 }
 

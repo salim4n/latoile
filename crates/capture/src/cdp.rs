@@ -54,6 +54,9 @@ impl ChromeProcess {
             .arg("--hide-scrollbars")
             .arg("--host-resolver-rules=MAP * 0.0.0.0")
             .arg("about:blank")
+            .env_clear()
+            .env("LANG", "C.UTF-8")
+            .env("LC_ALL", "C.UTF-8")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -126,6 +129,7 @@ impl Drop for ChromeProcess {
 pub(super) struct CdpClient {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next_id: u64,
+    allowed_origin: Option<String>,
 }
 
 impl CdpClient {
@@ -133,7 +137,15 @@ impl CdpClient {
         let (socket, _) = connect_async(url)
             .await
             .map_err(|error| CaptureError::Protocol(error.to_string()))?;
-        Ok(Self { socket, next_id: 1 })
+        Ok(Self {
+            socket,
+            next_id: 1,
+            allowed_origin: None,
+        })
+    }
+
+    pub(super) fn restrict_network_to(&mut self, origin: String) {
+        self.allowed_origin = Some(origin);
     }
 
     pub(super) async fn call(
@@ -175,6 +187,9 @@ impl CdpClient {
             };
             let value: Value = serde_json::from_str(&text)
                 .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+            if self.handle_intercept(&value).await? {
+                continue;
+            }
             if value.get("id").and_then(Value::as_u64) != Some(id) {
                 continue;
             }
@@ -183,5 +198,51 @@ impl CdpClient {
             }
             return Ok(value.get("result").cloned().unwrap_or(Value::Null));
         }
+    }
+
+    async fn handle_intercept(&mut self, event: &Value) -> Result<bool, CaptureError> {
+        if event.get("method").and_then(Value::as_str) != Some("Fetch.requestPaused") {
+            return Ok(false);
+        }
+        let request_id = event
+            .pointer("/params/requestId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CaptureError::Protocol("intercepted request id is missing".into()))?;
+        let url = event
+            .pointer("/params/request/url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CaptureError::Protocol("intercepted request URL is missing".into()))?;
+        let origin = self
+            .allowed_origin
+            .as_deref()
+            .ok_or_else(|| CaptureError::Protocol("network interception has no policy".into()))?;
+        let websocket_origin = origin.replacen("http://", "ws://", 1);
+        let allowed = url == origin
+            || url.starts_with(&format!("{origin}/"))
+            || url == websocket_origin
+            || url.starts_with(&format!("{websocket_origin}/"))
+            || url.starts_with("data:")
+            || url.starts_with("blob:")
+            || url == "about:blank";
+        let command_id = self.next_id;
+        self.next_id += 1;
+        let command = if allowed {
+            json!({
+                "id": command_id,
+                "method": "Fetch.continueRequest",
+                "params": {"requestId": request_id},
+            })
+        } else {
+            json!({
+                "id": command_id,
+                "method": "Fetch.failRequest",
+                "params": {"requestId": request_id, "errorReason": "BlockedByClient"},
+            })
+        };
+        self.socket
+            .send(Message::Text(command.to_string().into()))
+            .await
+            .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+        Ok(true)
     }
 }

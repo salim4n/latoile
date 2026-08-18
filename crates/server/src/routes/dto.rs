@@ -7,7 +7,7 @@ use latoile_app::store::{
 };
 use latoile_core::{
     Approval, ArchitectureQuestion, ArchitectureSession, Delivery, Message, Preview, Project, Run,
-    SpecVersion, Task, VisualBaseline,
+    SpecVersion, Task, VisualBaseline, VisualComparison,
 };
 use serde::Serialize;
 
@@ -332,6 +332,78 @@ impl From<&VisualBaseline> for VisualBaselineDto {
             png_digest: value.png_digest.clone(),
             geometry_digest: value.geometry_digest.clone(),
             accessibility_digest: value.accessibility_digest.clone(),
+            environment_digest: value.environment_digest.clone(),
+            browser_version: value.browser_version.clone(),
+            font_fingerprint: value.font_fingerprint.clone(),
+            failure_code: value.failure_code.clone(),
+            failure_message: value.failure_message.clone(),
+            recovery_action: value.recovery_action.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct VisualComparisonDto {
+    pub id: String,
+    pub spec_version_id: String,
+    pub project_id: String,
+    pub run_id: String,
+    pub comparison_id: String,
+    pub manifest_digest: String,
+    pub package_commit_sha: String,
+    pub baseline_png_digest: String,
+    pub status: &'static str,
+    pub changed_pixels: u64,
+    pub total_pixels: u64,
+    pub pixel_ratio_micros: u32,
+    pub max_geometry_delta_milli: u32,
+    pub accessibility_changes: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_png_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_diff_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heatmap_png_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_diff_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessibility_diff_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_action: Option<String>,
+}
+
+impl From<&VisualComparison> for VisualComparisonDto {
+    fn from(value: &VisualComparison) -> Self {
+        Self {
+            id: value.id.as_str().to_string(),
+            spec_version_id: value.spec_version_id.as_str().to_string(),
+            project_id: value.project_id.as_str().to_string(),
+            run_id: value.run_id.as_str().to_string(),
+            comparison_id: value.comparison_id.clone(),
+            manifest_digest: value.manifest_digest.clone(),
+            package_commit_sha: value.package_commit_sha.clone(),
+            baseline_png_digest: value.baseline_png_digest.clone(),
+            status: value.status.as_str(),
+            changed_pixels: value.changed_pixels,
+            total_pixels: value.total_pixels,
+            pixel_ratio_micros: value.pixel_ratio_micros,
+            max_geometry_delta_milli: value.max_geometry_delta_milli,
+            accessibility_changes: value.accessibility_changes,
+            render_png_digest: value.render_png_digest.clone(),
+            pixel_diff_digest: value.pixel_diff_digest.clone(),
+            heatmap_png_digest: value.heatmap_png_digest.clone(),
+            geometry_diff_digest: value.geometry_diff_digest.clone(),
+            accessibility_diff_digest: value.accessibility_diff_digest.clone(),
             environment_digest: value.environment_digest.clone(),
             browser_version: value.browser_version.clone(),
             font_fingerprint: value.font_fingerprint.clone(),
