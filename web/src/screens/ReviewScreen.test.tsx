@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { api, type Approval } from "../api";
+import { api, ApiError, type Approval } from "../api";
 import { LangProvider } from "../i18n";
 import { ReviewScreen } from "./ReviewScreen";
 
@@ -83,7 +83,7 @@ describe("ReviewScreen visual contract", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("renders the verdict, localized findings, diff and mockup comparison", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([review()]);
+    vi.spyOn(api, "approval").mockResolvedValue(review());
     renderReview();
 
     expect(await screen.findByText("Approuver avec réserve")).toBeTruthy();
@@ -103,7 +103,7 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("keeps the decision controls locked while the request is pending", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([review()]);
+    vi.spyOn(api, "approval").mockResolvedValue(review());
     vi.spyOn(api, "decide").mockReturnValue(new Promise<never>(() => {}));
     renderReview();
 
@@ -117,7 +117,7 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("shows an approved terminal state without claiming a merge", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([review()]);
+    vi.spyOn(api, "approval").mockResolvedValue(review());
     vi.spyOn(api, "decide").mockResolvedValue(review({ status: "granted" }));
     renderReview();
 
@@ -134,8 +134,50 @@ describe("ReviewScreen visual contract", () => {
     ).toBe(true);
   });
 
+  it("requires a comment for changes and shows the corrective audit", async () => {
+    vi.spyOn(api, "approval").mockResolvedValue(review());
+    const decided = review({
+      status: "rejected",
+      decision_comment: "Corriger le focus clavier et ajouter le test.",
+      corrective_run_id: "correction-9",
+    });
+    const decide = vi.spyOn(api, "decide").mockResolvedValue(decided);
+    renderReview();
+
+    const changes = await screen.findByRole("button", { name: "Demander des changements" });
+    expect((changes as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Commentaire de décision" }), {
+      target: { value: "Corriger le focus clavier et ajouter le test." },
+    });
+    expect((changes as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(changes);
+
+    expect(decide).toHaveBeenCalledWith(
+      "approval-41",
+      false,
+      "Corriger le focus clavier et ajouter le test.",
+    );
+    expect(await screen.findByText("Historique de décision")).toBeTruthy();
+    expect(screen.getByText("Corriger le focus clavier et ajouter le test.")).toBeTruthy();
+    expect(screen.getByText(/Run correctif démarré : #correction-9/)).toBeTruthy();
+  });
+
+  it("keeps a decided review readable after a reload", async () => {
+    vi.spyOn(api, "approval").mockResolvedValue(review({
+      status: "rejected",
+      decision_comment: "Reprendre le contraste.",
+      corrective_run_id: "correction-10",
+    }));
+    renderReview();
+
+    expect(await screen.findByText("ÉTAT : CHANGEMENTS DEMANDÉS")).toBeTruthy();
+    expect(screen.getByText("Reprendre le contraste.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Approuver" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+  });
+
   it("makes a failed decision recoverable", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([review()]);
+    vi.spyOn(api, "approval").mockResolvedValue(review());
     vi.spyOn(api, "decide").mockRejectedValue(new Error("offline"));
     renderReview();
 
@@ -152,7 +194,7 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("uses shaped skeletons while loading", () => {
-    vi.spyOn(api, "approvals").mockReturnValue(new Promise<never>(() => {}));
+    vi.spyOn(api, "approval").mockReturnValue(new Promise<never>(() => {}));
     renderReview();
 
     expect(screen.getByRole("status", { name: "Chargement de la review" })).toBeTruthy();
@@ -160,7 +202,7 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("separates an API failure from an already-decided review", async () => {
-    vi.spyOn(api, "approvals").mockRejectedValue(new Error("offline"));
+    vi.spyOn(api, "approval").mockRejectedValue(new Error("offline"));
     renderReview();
 
     expect(await screen.findByRole("heading", { name: "Review indisponible" })).toBeTruthy();
@@ -168,7 +210,9 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("uses an actionable terminal state when the approval is no longer pending", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([]);
+    vi.spyOn(api, "approval").mockRejectedValue(
+      new ApiError(404, "not_found", "approval"),
+    );
     renderReview();
 
     expect(await screen.findByRole("heading", { name: "Review déjà tranchée" })).toBeTruthy();
@@ -176,9 +220,9 @@ describe("ReviewScreen visual contract", () => {
   });
 
   it("is honest when the legacy payload only contains a summary", async () => {
-    vi.spyOn(api, "approvals").mockResolvedValue([
+    vi.spyOn(api, "approval").mockResolvedValue(
       review({ payload: JSON.stringify({ summary: "Endpoint implémenté." }) }),
-    ]);
+    );
     renderReview();
 
     expect(await screen.findByText("Endpoint implémenté.")).toBeTruthy();

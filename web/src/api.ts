@@ -95,6 +95,17 @@ export interface Task {
   status: "ready" | "in_progress" | "review" | "changes_requested" | "done";
   position: number;
   latest_run_id?: string;
+  latest_review_status?: "pending" | "granted" | "rejected";
+  latest_decision_comment?: string;
+  next_action:
+    | "ready_to_start"
+    | "agent_working"
+    | "reviewer_working"
+    | "awaiting_owner_decision"
+    | "changes_requested"
+    | "correction_ready"
+    | "corrective_run_in_progress"
+    | "completed";
 }
 
 export interface Approval {
@@ -103,6 +114,8 @@ export interface Approval {
   kind: "spec" | "review" | "permission";
   status: "pending" | "granted" | "rejected";
   payload: string;
+  decision_comment?: string;
+  corrective_run_id?: string;
   /// Present on the Inbox read model. Decision responses keep these optional
   /// because they return the domain entity after the transition.
   project_id?: string;
@@ -110,6 +123,7 @@ export interface Approval {
   task_title?: string;
   role_id?: string;
   created_at?: string;
+  decided_at?: string;
 }
 
 export interface Message {
@@ -169,10 +183,11 @@ export const api = {
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   repos: () => request<Repo[]>("/api/github/repos"),
   approvals: () => request<Approval[]>("/api/approvals"),
-  decide: (id: string, granted: boolean) =>
+  approval: (id: string) => request<Approval>(`/api/approvals/${id}`),
+  decide: (id: string, granted: boolean, comment?: string) =>
     request<Approval>(`/api/approvals/${id}`, {
       method: "POST",
-      body: JSON.stringify({ granted }),
+      body: JSON.stringify({ granted, comment }),
     }),
   messages: (project: string) => request<Message[]>(`/api/projects/${project}/messages`),
   sendMessage: (project: string, content: string) =>

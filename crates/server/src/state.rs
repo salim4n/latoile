@@ -166,6 +166,10 @@ pub struct AppState {
     pub agent_auth: latoile_agents::AgentAuthManager,
     /// The live role→provider map the channel reads; refreshed on PUT.
     pub routing: SharedRouting,
+    /// One process-wide decision critical section. LaToile is single-user;
+    /// serializing this tiny write path makes HTTP retries/concurrency
+    /// exactly-once before they reach agent spawning.
+    pub decision_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) token: Arc<str>,
 }
 
@@ -254,6 +258,7 @@ pub async fn build(
         proxy_http: reqwest::Client::new(),
         agent_auth: latoile_agents::AgentAuthManager::production(),
         routing,
+        decision_lock: Arc::new(tokio::sync::Mutex::new(())),
         token: Arc::from(token.as_str()),
     };
     let driver = crate::driver::spawn(state.clone());

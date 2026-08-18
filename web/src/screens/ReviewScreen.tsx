@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError, type Approval } from "../api";
 import { useAsync } from "../hooks";
 import { useT } from "../i18n";
 import { Shell } from "../components/Shell";
@@ -21,12 +21,20 @@ import { parseReviewPayload } from "./reviewPayload";
 export function ReviewScreen() {
   const { t } = useT();
   const { approvalId = "" } = useParams();
-  const approvals = useAsync(api.approvals, []);
+  const review = useAsync(() => api.approval(approvalId), [approvalId]);
+  const [decidedApproval, setDecidedApproval] = useState<Approval | null>(null);
   const [decision, setDecision] = useState<ReviewDecision>(null);
+  const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [decisionError, setDecisionError] = useState(false);
 
-  const approval = (approvals.data ?? []).find((item) => item.id === approvalId);
+  const approval = decidedApproval ?? review.data;
+  const persistedDecision: ReviewDecision = approval?.status === "granted"
+    ? "approved"
+    : approval?.status === "rejected"
+      ? "rejected"
+      : null;
+  const effectiveDecision = decision ?? persistedDecision;
   const payload = approval ? parseReviewPayload(approval.payload) : null;
   const screenTitle = approval?.task_title
     ? `${t("review.screen.prefix")}${approval.task_title}`
@@ -37,10 +45,16 @@ export function ReviewScreen() {
 
   async function decide(granted: boolean) {
     if (busy || !approval) return;
+    if (!granted && !comment.trim()) return;
     setBusy(true);
     setDecisionError(false);
     try {
-      await api.decide(approvalId, granted);
+      const decided = await api.decide(
+        approvalId,
+        granted,
+        comment.trim() || undefined,
+      );
+      setDecidedApproval({ ...approval, ...decided });
       setDecision(granted ? "approved" : "rejected");
     } catch {
       setDecisionError(true);
@@ -49,19 +63,20 @@ export function ReviewScreen() {
     }
   }
 
-  const decided = decision !== null;
+  const decided = effectiveDecision !== null;
+  const notFound = review.error instanceof ApiError && review.error.status === 404;
 
   return (
     <Shell back={t("shell.back.inbox")} title={screenTitle} crumb={crumb} wide>
-      {approvals.loading && <ReviewLoading label={t("review.loading")} />}
-      {approvals.error && (
+      {review.loading && <ReviewLoading label={t("review.loading")} />}
+      {review.error && !notFound && (
         <ErrorState
           title={t("review.error.title")}
           body={t("review.error.body")}
-          onRetry={approvals.reload}
+          onRetry={review.reload}
         />
       )}
-      {approvals.data && !approval && (
+      {notFound && (
         <EmptyState
           title={t("review.gone.title")}
           body={t("review.gone")}
@@ -74,13 +89,13 @@ export function ReviewScreen() {
           aria-label={decided ? t("review.state.decided") : t("review.state.pending")}
         >
           <span className="state-label">
-            {t(decision === "approved"
+            {t(effectiveDecision === "approved"
               ? "review.state.approved"
-              : decision === "rejected"
+              : effectiveDecision === "rejected"
                 ? "review.state.rejected"
                 : "review.state.pending")}
           </span>
-          <VerdictCard approval={approval} payload={payload} decision={decision} />
+          <VerdictCard approval={approval} payload={payload} decision={effectiveDecision} />
           {payload.diff && <DiffBlock diff={payload.diff} runId={approval.run_id} />}
           {payload.comparison && (
             <CompareBlock comparison={payload.comparison} runId={approval.run_id} />
@@ -89,10 +104,36 @@ export function ReviewScreen() {
             <p className="review-details-note">{t("review.details.missing")}</p>
           )}
 
+          {decided && (approval.decision_comment || approval.corrective_run_id) && (
+            <section className="decision-history" aria-label={t("review.history")}>
+              <h2>{t("review.history")}</h2>
+              {approval.decision_comment && (
+                <p><strong>{t("review.comment.saved")}</strong> {approval.decision_comment}</p>
+              )}
+              {approval.corrective_run_id && (
+                <p>{t("review.correction.started")} #{approval.corrective_run_id}</p>
+              )}
+            </section>
+          )}
+
           <div className="actionbar">
+            {!decided && (
+              <div className="review-comment">
+                <label htmlFor="review-comment">{t("review.comment.label")}</label>
+                <textarea
+                  id="review-comment"
+                  rows={3}
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                  placeholder={t("review.comment.placeholder")}
+                  disabled={busy}
+                />
+                <span>{t("review.comment.help")}</span>
+              </div>
+            )}
             {decided && (
               <p className="merged-note">
-                {decision === "approved"
+                {effectiveDecision === "approved"
                   ? `${t("review.run")} ${runLabel(approval.run_id)} ${t("review.decided.approved")}`
                   : t("review.decided.rejected")}
               </p>
@@ -110,7 +151,7 @@ export function ReviewScreen() {
             <button
               className="btn btn--danger btn--block"
               type="button"
-              disabled={busy || decided}
+              disabled={busy || decided || !comment.trim()}
               onClick={() => decide(false)}
             >
               {t("review.changes")}

@@ -97,6 +97,7 @@ describe("ProjectScreen visual contract", () => {
         status: "ready",
         position: 0,
         latest_run_id: "42",
+        next_action: "ready_to_start",
       },
       {
         id: "T-105",
@@ -106,6 +107,9 @@ describe("ProjectScreen visual contract", () => {
         description: "",
         status: "in_progress",
         position: 1,
+        latest_review_status: "rejected",
+        latest_decision_comment: "Corriger le focus clavier.",
+        next_action: "corrective_run_in_progress",
       },
     ];
     vi.spyOn(api, "tasks").mockResolvedValue(tasks);
@@ -117,6 +121,8 @@ describe("ProjectScreen visual contract", () => {
     expect(within(board).getByText("Architecte")).toBeTruthy();
     expect(within(board).getByText("T-104 · run #42")).toBeTruthy();
     expect(within(board).getByText("Construire la page d'accueil")).toBeTruthy();
+    expect(within(board).getByText("Correction en cours")).toBeTruthy();
+    expect(within(board).getByText("Corriger le focus clavier.")).toBeTruthy();
   });
 
   it("shows the live Preview badge, captured logs and both viewport formats", async () => {

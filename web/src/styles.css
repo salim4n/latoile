@@ -367,6 +367,14 @@ textarea[aria-invalid="true"] { border-color: var(--danger); }
 .review-details-note { color: var(--text-muted); font-size: var(--text-sm); border: 1px dashed var(--border); border-radius: var(--radius-md); padding: var(--space-3); margin-top: var(--space-4); }
 .actionbar { position: sticky; bottom: 64px; z-index: 5; background: var(--surface-1); border-top: 1px solid var(--border); padding: var(--space-3) 0 0; margin-top: var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
 .actionbar .divider { height: 1px; background: var(--border); }
+.review-comment { display: grid; gap: var(--space-2); width: 100%; }
+.review-comment label, .decision-history h2 { font-weight: 700; }
+.review-comment textarea { min-height: 88px; }
+.review-comment span, .task-next-action { color: var(--text-secondary); font-size: var(--text-xs); }
+.decision-history { margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+.decision-history h2 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
+.decision-history p, .task-next-action, .task-decision-comment { margin: var(--space-1) 0 0; }
+.task-decision-comment { color: var(--text-secondary); font-size: var(--text-xs); }
 @media (min-width: 1024px) {
   .review-frame { flex: 0 0 260px; }
   .actionbar { bottom: 0; flex-direction: row-reverse; justify-content: space-between; align-items: center; }

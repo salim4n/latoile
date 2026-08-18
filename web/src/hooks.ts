@@ -8,28 +8,28 @@ import { onEvent } from "./events";
 export interface Async<T> {
   data: T | null;
   loading: boolean;
-  error: boolean;
+  error: Error | null;
   reload: () => void;
 }
 
 export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
   const loadRef = useRef(load);
   loadRef.current = load;
 
   const reload = useCallback(() => {
     setLoading(true);
-    setError(false);
+    setError(null);
     loadRef
       .current()
       .then((value) => {
         setData(value);
         setLoading(false);
       })
-      .catch(() => {
-        setError(true);
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause : new Error("unknown error"));
         setLoading(false);
       });
   }, []);

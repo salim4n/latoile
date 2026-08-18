@@ -118,6 +118,7 @@ pub async fn state() -> (AppState, Store, StubAgents) {
                 )
         },
         routing: latoile_agents::SharedRouting::default(),
+        decision_lock: Arc::new(tokio::sync::Mutex::new(())),
         token: Arc::from(TOKEN),
     };
     (state, store, agents)

@@ -1,7 +1,9 @@
 //! Flow tests: approvals, spec approval, SSE resume, preview proxy, roles.
 
 use super::*;
+use crate::driver;
 use axum::http::StatusCode;
+use latoile_agents::{RunOutcome, RunReport, RunState};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RunId, SpecVersionId, TaskId};
 use latoile_core::ports::{ApprovalStore, EventLog, RunStore, SpecStore, TaskStore};
@@ -37,20 +39,42 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
     task.submit_for_review().unwrap();
     TaskStore::save(store, &task).await.unwrap();
 
-    let mut run = Run::new(
-        RunId::new("r1").unwrap(),
+    let mut executor = Run::new(
+        RunId::new("executor-1").unwrap(),
         task.id.clone(),
         RoleId::new("frontend").unwrap(),
         TriggeredBy::Manager,
     );
-    run.begin().unwrap();
-    RunStore::save(store, &run).await.unwrap();
+    executor.begin().unwrap();
+    executor.finish("login implemented").unwrap();
+    executor.attach_evidence(None, None, "{}".into()).unwrap();
+    RunStore::save(store, &executor).await.unwrap();
+
+    let mut reviewer = Run::new(
+        RunId::new("r1").unwrap(),
+        task.id.clone(),
+        RoleId::new("reviewer").unwrap(),
+        TriggeredBy::Manager,
+    );
+    reviewer.begin().unwrap();
+    reviewer.finish("review complete").unwrap();
+    RunStore::save(store, &reviewer).await.unwrap();
 
     let approval = Approval::new(
         ApprovalId::new("a1").unwrap(),
-        run.id,
+        reviewer.id,
         ApprovalKind::Review,
-        "{}".into(),
+        serde_json::json!({
+            "schema_version": 1,
+            "verdict": "changes_requested",
+            "summary": "Le focus clavier doit être corrigé.",
+            "findings": [{
+                "severity": "blocking",
+                "text": "Focus clavier absent.",
+                "location": "web/src/Login.tsx:42"
+            }]
+        })
+        .to_string(),
     );
     ApprovalStore::save(store, &approval).await.unwrap();
     approval
@@ -73,10 +97,33 @@ async fn a_granted_review_closes_the_task() {
     assert_eq!(pending[0]["project_id"], project);
     assert_eq!(pending[0]["project_name"], "Mon App");
     assert_eq!(pending[0]["task_title"], "Page de connexion");
-    assert_eq!(pending[0]["role_id"], "frontend");
+    assert_eq!(pending[0]["role_id"], "reviewer");
     assert!(pending[0]["created_at"].as_str().unwrap().ends_with('Z'));
 
     let decided = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({
+                "granted": true,
+                "comment": "Validé après contrôle du rendu."
+            })),
+        )))
+        .await
+        .unwrap();
+    let decided = body_json(decided).await;
+    assert_eq!(decided["status"], "granted");
+    assert_eq!(decided["decision_comment"], "Validé après contrôle du rendu.");
+    assert_eq!(approval.kind, ApprovalKind::Review);
+
+    let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.status, latoile_core::TaskStatus::Done);
+
+    let retry = app
         .clone()
         .oneshot(authed(request(
             "POST",
@@ -85,20 +132,21 @@ async fn a_granted_review_closes_the_task() {
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(decided).await["status"], "granted");
-    assert_eq!(approval.kind, ApprovalKind::Review);
-
-    let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(task.status, latoile_core::TaskStatus::Done);
+    assert_eq!(body_json(retry).await["status"], "granted");
+    let events = store.events_since(0).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, event)| event.kind == EventKind::ApprovalGranted)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
-async fn a_rejected_review_leaves_the_task_in_review() {
-    let (state, store, _) = state().await;
-    let app = router(state);
+async fn a_rejected_review_starts_one_audited_corrective_run() {
+    let (state, store, agents) = state().await;
+    let app = router(state.clone());
     let project = create_project(&app).await;
     seed_review_pending(&store, &project).await;
 
@@ -107,23 +155,150 @@ async fn a_rejected_review_leaves_the_task_in_review() {
         .oneshot(authed(request(
             "POST",
             "/api/approvals/a1",
-            Some(serde_json::json!({"granted": false})),
+            Some(serde_json::json!({
+                "granted": false,
+                "comment": "Corriger le focus et ajouter un test clavier."
+            })),
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(decided).await["status"], "rejected");
+    let decided = body_json(decided).await;
+    assert_eq!(decided["status"], "rejected");
+    assert_eq!(
+        decided["decision_comment"],
+        "Corriger le focus et ajouter un test clavier."
+    );
+    let corrective = decided["corrective_run_id"].as_str().unwrap().to_string();
 
     let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(task.status, latoile_core::TaskStatus::Review);
+    assert_eq!(task.status, latoile_core::TaskStatus::InProgress);
+    let corrective_run = RunStore::get(&store, &RunId::new(&corrective).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(corrective_run.role_id.as_str(), "frontend");
+    let correction_prompt = {
+        let prompts = agents.run_prompts.lock().unwrap();
+        prompts
+            .iter()
+            .find(|(role, _)| role == "frontend")
+            .map(|(_, prompt)| prompt.clone())
+            .unwrap()
+    };
+    assert!(correction_prompt.contains("Focus clavier absent"));
+    assert!(correction_prompt.contains("Corriger le focus et ajouter un test clavier"));
+
+    let board = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/tasks"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let board = body_json(board).await;
+    assert_eq!(board[0]["next_action"], "corrective_run_in_progress");
+    assert_eq!(
+        board[0]["latest_decision_comment"],
+        "Corriger le focus et ajouter un test clavier."
+    );
+
+    // The detail endpoint keeps the terminal decision visible after reload.
+    let detail = app
+        .clone()
+        .oneshot(authed(request("GET", "/api/approvals/a1", None)))
+        .await
+        .unwrap();
+    let detail = body_json(detail).await;
+    assert_eq!(detail["status"], "rejected");
+    assert_eq!(detail["corrective_run_id"], corrective);
+
+    // Same HTTP decision is idempotent: no second agent run.
+    let retry = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({
+                "granted": false,
+                "comment": "retry"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(body_json(retry).await["corrective_run_id"], corrective);
+    assert_eq!(agents.run_prompts.lock().unwrap().len(), 1);
 
     let pending = app
+        .clone()
         .oneshot(authed(request("GET", "/api/approvals", None)))
         .await
         .unwrap();
     assert!(body_json(pending).await.as_array().unwrap().is_empty());
+
+    // The corrected executor returns through the same Reviewer-first cycle.
+    let handle = driver::spawn_every(state, std::time::Duration::from_millis(30));
+    agents.run_states.lock().unwrap().insert(
+        corrective.clone(),
+        RunState::Done(RunReport::terminal(
+            RunOutcome::Finished,
+            "Focus corrected and keyboard test added",
+        )),
+    );
+
+    let task_id = TaskId::new("t1").unwrap();
+    let mut second_reviewer = None;
+    for _ in 0..150 {
+        second_reviewer = RunStore::list_for_task(&store, &task_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|run| run.role_id.as_str() == "reviewer" && run.id.as_str() != "r1");
+        if second_reviewer.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let second_reviewer = second_reviewer.expect("corrected work must dispatch a new Reviewer");
+    assert_eq!(second_reviewer.status, latoile_core::RunStatus::Running);
+
+    let corrected_review = serde_json::json!({
+        "schema_version": 1,
+        "verdict": "approve",
+        "summary": "Le focus et le test clavier sont conformes.",
+        "findings": [],
+        "suggested_follow_ups": []
+    })
+    .to_string();
+    agents.run_states.lock().unwrap().insert(
+        second_reviewer.id.as_str().into(),
+        RunState::Done(RunReport::terminal(
+            RunOutcome::Finished,
+            corrected_review,
+        )),
+    );
+
+    let mut fresh = Vec::new();
+    for _ in 0..100 {
+        fresh = ApprovalStore::list_pending(&store).await.unwrap();
+        if !fresh.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    handle.abort();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].run_id, second_reviewer.id);
+    let fresh_payload: serde_json::Value = serde_json::from_str(&fresh[0].payload).unwrap();
+    assert_eq!(fresh_payload["verdict"], "approve");
+    assert_eq!(
+        TaskStore::get(&store, &task_id).await.unwrap().unwrap().status,
+        latoile_core::TaskStatus::Review
+    );
 }
 
 #[tokio::test]

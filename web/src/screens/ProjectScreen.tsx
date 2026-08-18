@@ -182,6 +182,17 @@ const ROLE_KEYS: Partial<Record<string, Key>> = {
   reviewer: "role.reviewer",
 };
 
+const NEXT_ACTION_KEYS: Record<Task["next_action"], Key> = {
+  ready_to_start: "board.next.ready_to_start",
+  agent_working: "board.next.agent_working",
+  reviewer_working: "board.next.reviewer_working",
+  awaiting_owner_decision: "board.next.awaiting_owner_decision",
+  changes_requested: "board.next.changes_requested",
+  correction_ready: "board.next.correction_ready",
+  corrective_run_in_progress: "board.next.corrective_run_in_progress",
+  completed: "board.next.completed",
+};
+
 function taskReference(task: Task): string {
   return task.latest_run_id ? `${task.id} · run #${task.latest_run_id}` : task.id;
 }
@@ -189,7 +200,10 @@ function taskReference(task: Task): string {
 function BoardTab({ project }: { project: string }) {
   const { t } = useT();
   const tasks = useAsync(() => api.tasks(project), [project]);
-  useEventReload(["task_ready", "run_started", "run_finished", "approval_granted"], tasks.reload);
+  useEventReload(
+    ["task_ready", "run_started", "run_finished", "approval_granted", "approval_rejected"],
+    tasks.reload,
+  );
 
   if (tasks.loading) return <BoardLoading label={t("board.loading")} />;
   if (tasks.error) {
@@ -212,6 +226,13 @@ function BoardTab({ project }: { project: string }) {
                 return (
                   <article className="task" key={task.id}>
                     <h4>{task.title}</h4>
+                    <p className="task-next-action">{t(NEXT_ACTION_KEYS[task.next_action])}</p>
+                    {task.latest_decision_comment && (
+                      <p className="task-decision-comment">
+                        <strong>{t("board.decision.comment")}</strong>{" "}
+                        {task.latest_decision_comment}
+                      </p>
+                    )}
                     <div className="task-foot">
                       <span className="agent">{roleKey ? t(roleKey) : task.role_id}</span>
                       <span>{taskReference(task)}</span>

@@ -81,6 +81,11 @@ pub struct TaskDto {
     pub position: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_review_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_decision_comment: Option<String>,
+    pub next_action: &'static str,
 }
 
 impl From<&Task> for TaskDto {
@@ -95,6 +100,9 @@ impl From<&Task> for TaskDto {
             status: t.status.as_str(),
             position: t.position,
             latest_run_id: None,
+            latest_review_status: None,
+            latest_decision_comment: None,
+            next_action: next_action(t.status.as_str(), None),
         }
     }
 }
@@ -103,7 +111,28 @@ impl From<&ProjectTaskRow> for TaskDto {
     fn from(row: &ProjectTaskRow) -> Self {
         let mut dto = Self::from(&row.task);
         dto.latest_run_id.clone_from(&row.latest_run_id);
+        dto.latest_review_status
+            .clone_from(&row.latest_review_status);
+        dto.latest_decision_comment
+            .clone_from(&row.latest_decision_comment);
+        dto.next_action = next_action(
+            row.task.status.as_str(),
+            row.latest_review_status.as_deref(),
+        );
         dto
+    }
+}
+
+fn next_action(task_status: &str, latest_review: Option<&str>) -> &'static str {
+    match (task_status, latest_review) {
+        ("done", _) => "completed",
+        ("review", Some("pending")) => "awaiting_owner_decision",
+        ("review", _) => "reviewer_working",
+        ("in_progress", Some("rejected")) => "corrective_run_in_progress",
+        ("in_progress", _) => "agent_working",
+        ("changes_requested", _) => "changes_requested",
+        ("ready", Some("rejected")) => "correction_ready",
+        _ => "ready_to_start",
     }
 }
 
@@ -145,6 +174,10 @@ pub struct ApprovalDto {
     pub status: &'static str,
     pub payload: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corrective_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
@@ -154,6 +187,8 @@ pub struct ApprovalDto {
     pub role_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<String>,
 }
 
 impl From<&Approval> for ApprovalDto {
@@ -164,11 +199,17 @@ impl From<&Approval> for ApprovalDto {
             kind: a.kind.as_str(),
             status: a.status.as_str(),
             payload: a.payload.clone(),
+            decision_comment: a.decision_comment.clone(),
+            corrective_run_id: a
+                .corrective_run_id
+                .as_ref()
+                .map(|run| run.as_str().to_string()),
             project_id: None,
             project_name: None,
             task_title: None,
             role_id: None,
             created_at: None,
+            decided_at: None,
         }
     }
 }
@@ -181,11 +222,18 @@ impl From<&InboxApprovalRow> for ApprovalDto {
             kind: row.approval.kind.as_str(),
             status: row.approval.status.as_str(),
             payload: row.approval.payload.clone(),
+            decision_comment: row.approval.decision_comment.clone(),
+            corrective_run_id: row
+                .approval
+                .corrective_run_id
+                .as_ref()
+                .map(|run| run.as_str().to_string()),
             project_id: Some(row.project_id.clone()),
             project_name: Some(row.project_name.clone()),
             task_title: Some(row.task_title.clone()),
             role_id: Some(row.role_id.clone()),
             created_at: Some(row.created_at.clone()),
+            decided_at: row.decided_at.clone(),
         }
     }
 }

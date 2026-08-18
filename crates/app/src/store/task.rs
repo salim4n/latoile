@@ -43,6 +43,8 @@ const COLUMNS: &str =
 pub struct ProjectTaskRow {
     pub task: Task,
     pub latest_run_id: Option<String>,
+    pub latest_review_status: Option<String>,
+    pub latest_decision_comment: Option<String>,
 }
 
 impl Store {
@@ -54,7 +56,17 @@ impl Store {
             "SELECT {COLUMNS},
                     (SELECT run.id FROM run
                      WHERE run.task_id = task.id
-                     ORDER BY run.started_at DESC, run.id DESC LIMIT 1) AS latest_run_id
+                     ORDER BY run.started_at DESC, run.id DESC LIMIT 1) AS latest_run_id,
+                    (SELECT approval.status FROM approval
+                     JOIN run review_run ON review_run.id = approval.run_id
+                     WHERE review_run.task_id = task.id AND approval.kind = 'review'
+                     ORDER BY approval.created_at DESC, approval.id DESC LIMIT 1)
+                        AS latest_review_status,
+                    (SELECT approval.decision_comment FROM approval
+                     JOIN run review_run ON review_run.id = approval.run_id
+                     WHERE review_run.task_id = task.id AND approval.kind = 'review'
+                     ORDER BY approval.created_at DESC, approval.id DESC LIMIT 1)
+                        AS latest_decision_comment
              FROM task WHERE project_id = ?
              ORDER BY position, created_at, id"
         ))
@@ -68,6 +80,8 @@ impl Store {
                 Ok(ProjectTaskRow {
                     task: row_to_task(row)?,
                     latest_run_id: row.try_get("latest_run_id")?,
+                    latest_review_status: row.try_get("latest_review_status")?,
+                    latest_decision_comment: row.try_get("latest_decision_comment")?,
                 })
             })
             .collect::<Result<Vec<_>, StoreError>>()
@@ -206,5 +220,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].task.id.as_str(), "t1");
         assert_eq!(rows[0].latest_run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(rows[0].latest_review_status, None);
+        assert_eq!(rows[0].latest_decision_comment, None);
     }
 }

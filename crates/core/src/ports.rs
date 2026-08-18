@@ -17,7 +17,7 @@
 use crate::approval::Approval;
 use crate::conversation::{Conversation, Message};
 use crate::event::NewEvent;
-use crate::ids::{ProjectId, RunId, TaskId};
+use crate::ids::{ApprovalId, ProjectId, RunId, TaskId};
 use crate::preview::Preview;
 use crate::project::Project;
 use crate::run::Run;
@@ -72,6 +72,7 @@ pub trait SpecStore {
 }
 
 pub trait ApprovalStore {
+    async fn get(&self, id: &ApprovalId) -> PortResult<Option<Approval>>;
     async fn list_pending(&self) -> PortResult<Vec<Approval>>;
     async fn save(&self, approval: &Approval) -> PortResult<()>;
 }

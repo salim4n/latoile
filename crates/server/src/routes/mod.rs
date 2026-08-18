@@ -35,7 +35,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/tasks/{task_id}", patch(tasks::reorder))
         .route("/api/runs/{id}", get(runs::get))
         .route("/api/approvals", get(approvals::pending))
-        .route("/api/approvals/{id}", post(approvals::decide))
+        .route(
+            "/api/approvals/{id}",
+            get(approvals::get).post(approvals::decide),
+        )
         .route("/api/projects/{id}/spec-versions", get(specs::list))
         .route("/api/spec-versions/{id}/approve", post(specs::approve))
         .route("/api/roles", get(roles))

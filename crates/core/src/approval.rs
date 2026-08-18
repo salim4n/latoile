@@ -47,6 +47,10 @@ pub struct Approval {
     pub status: ApprovalStatus,
     /// JSON: diff reference, reviewer findings, or the permission request.
     pub payload: String,
+    /// The owner's immutable audit note attached to the decision.
+    pub decision_comment: Option<String>,
+    /// For a rejected review, the one corrective executor run it spawned.
+    pub corrective_run_id: Option<RunId>,
 }
 
 impl Approval {
@@ -57,6 +61,8 @@ impl Approval {
             kind,
             status: ApprovalStatus::Pending,
             payload,
+            decision_comment: None,
+            corrective_run_id: None,
         }
     }
 
@@ -71,16 +77,63 @@ impl Approval {
     }
 
     pub fn grant(&mut self) -> Result<(), DomainError> {
-        self.decide(ApprovalStatus::Granted)
+        self.grant_with_comment(None)
     }
 
     pub fn reject(&mut self) -> Result<(), DomainError> {
-        self.decide(ApprovalStatus::Rejected)
+        self.reject_with_comment(None)
+    }
+
+    pub fn grant_with_comment(&mut self, comment: Option<String>) -> Result<(), DomainError> {
+        let comment = clean_comment(comment)?;
+        self.decide(ApprovalStatus::Granted)?;
+        self.decision_comment = comment;
+        Ok(())
+    }
+
+    pub fn reject_with_comment(&mut self, comment: Option<String>) -> Result<(), DomainError> {
+        if self.kind == ApprovalKind::Review
+            && comment.as_deref().is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(DomainError::Invariant(
+                "requesting changes requires an owner comment",
+            ));
+        }
+        let comment = clean_comment(comment)?;
+        self.decide(ApprovalStatus::Rejected)?;
+        self.decision_comment = comment;
+        Ok(())
+    }
+
+    pub fn attach_corrective_run(&mut self, run: RunId) -> Result<(), DomainError> {
+        if self.kind != ApprovalKind::Review || self.status != ApprovalStatus::Rejected {
+            return Err(DomainError::Invariant(
+                "a corrective run belongs to a rejected review",
+            ));
+        }
+        if self.corrective_run_id.is_some() {
+            return Err(DomainError::Invariant(
+                "a rejected review has only one corrective run",
+            ));
+        }
+        self.corrective_run_id = Some(run);
+        Ok(())
     }
 
     pub fn is_granted(&self) -> bool {
         self.status == ApprovalStatus::Granted
     }
+}
+
+fn clean_comment(comment: Option<String>) -> Result<Option<String>, DomainError> {
+    let cleaned = comment.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    if cleaned.as_ref().is_some_and(|value| value.len() > 8 * 1024) {
+        return Err(DomainError::Invariant("approval comment is too long"));
+    }
+    Ok(cleaned)
 }
 
 #[cfg(test)]
@@ -105,8 +158,30 @@ mod tests {
         assert!(a.reject().is_err());
 
         let mut b = approval(ApprovalKind::Permission);
-        b.reject().unwrap();
+        b.reject_with_comment(Some("Pas nécessaire".into())).unwrap();
         assert!(!b.is_granted());
+        assert_eq!(b.decision_comment.as_deref(), Some("Pas nécessaire"));
         assert!(b.grant().is_err());
+    }
+
+    #[test]
+    fn a_review_rejection_needs_a_comment_and_one_corrective_run() {
+        let mut approval = approval(ApprovalKind::Review);
+        assert!(approval.reject_with_comment(None).is_err());
+        assert_eq!(approval.status, ApprovalStatus::Pending);
+
+        approval
+            .reject_with_comment(Some("  Corriger le focus clavier.  ".into()))
+            .unwrap();
+        assert_eq!(
+            approval.decision_comment.as_deref(),
+            Some("Corriger le focus clavier.")
+        );
+        approval
+            .attach_corrective_run(RunId::new("correction-1").unwrap())
+            .unwrap();
+        assert!(approval
+            .attach_corrective_run(RunId::new("correction-2").unwrap())
+            .is_err());
     }
 }
