@@ -52,6 +52,53 @@ class CanarySafetyTests(unittest.TestCase):
             self.assertTrue(saved["cleanup"]["remote_archived"])
             self.assertIn("remote_archived_at", saved["cleanup"])
 
+    def test_cleanup_accepts_the_greenfield_evidence_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = pathlib.Path(directory) / "evidence.json"
+            repo = "owner/latoile-v1-canary-20260818-greenfield"
+            evidence.write_text(json.dumps({"schema_version": 2, "repository": repo}))
+            args = mock.Mock(evidence=str(evidence), confirm=repo, delete=False)
+            with mock.patch.object(canary, "checked", return_value=""):
+                self.assertEqual(canary.cleanup(args), 0)
+
+    def test_visual_transition_requires_blocking_then_distinct_passed_evidence(self):
+        original = {
+            "id": "visual:run-1:home",
+            "run_id": "run-1",
+            "comparison_id": "home",
+            "status": "blocking",
+            "manifest_digest": "a" * 64,
+            "baseline_png_digest": "b" * 64,
+            "render_png_digest": "c" * 64,
+            "pixel_diff_digest": "d" * 64,
+            "heatmap_png_digest": "e" * 64,
+        }
+        corrected = {
+            **original,
+            "id": "visual:run-2:home",
+            "run_id": "run-2",
+            "status": "passed",
+            "render_png_digest": "1" * 64,
+            "pixel_diff_digest": "2" * 64,
+            "heatmap_png_digest": "3" * 64,
+        }
+        self.assertEqual(
+            canary.one_visual_comparison([original], "run-1", "blocking"),
+            original,
+        )
+        self.assertEqual(
+            canary.one_visual_comparison([corrected], "run-2", "passed"),
+            corrected,
+        )
+        canary.prove_replacement_evidence(original, corrected)
+
+        with self.assertRaises(canary.CanaryFailure):
+            canary.prove_replacement_evidence(original, {**corrected, "id": original["id"]})
+        with self.assertRaises(canary.CanaryFailure):
+            canary.prove_replacement_evidence(
+                original, {**corrected, "baseline_png_digest": "f" * 64}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

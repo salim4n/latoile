@@ -490,8 +490,8 @@ package confinement. These current limits remain:
   turn.
 - Initial briefs now drive the content-addressed Architect discovery and a
   committed `design/v…/` draft automatically. A live paid-provider canary for
-  this longer generation turn is still required before calling the provider
-  path production-proven; hermetic ACP adapter tests are not provider evidence.
+  the full mismatch/correction journey remains the release proof; hermetic ACP
+  adapter tests are not provider evidence.
 - Project status reaches `specced`; automatic promotion to `building` and
   `live` is not yet connected to orchestration/deployment events.
 - Preview proxying streams HTTP bodies but not WebSocket upgrades. Executor

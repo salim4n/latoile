@@ -27,7 +27,7 @@ run the paid, stateful real-provider canary.
 | 13 | Delivery proves selected code | Delivery/GitHub tests cover clean branch, origin, SHA ancestry, exact remote SHA, partial failure and existing PR reuse |
 | 14 | LaToile never merges | Guardian rejects a GitHub merge API; manual review confirms no merge route/button |
 | 15 | Default suites stay hermetic | Guardian runs without provider auth or GitHub network calls; local loopback process fixtures are self-contained |
-| 16 | V1 completion has real evidence | Run the opt-in [real-provider canary](v1-canary.md); retain bounded ids, cursor, equal SHAs and PR URL |
+| 16 | V1 differentiation has real evidence | Run the opt-in [greenfield visual-contract canary](v1-canary.md) from a clean commit; retain bounded Architect provenance, blocking/replacement evidence ids, unchanged baseline, Reviewer event ordering, cursor, equal SHAs and PR URL |
 | 17 | Restart state is fail-safe | Server tests prove pre-listener run/permission/preview recovery and runtime preview death reconciliation |
 | 18 | Production artifact is executable | CI and release sign-off run `scripts/release-smoke.sh` against disposable state |
 | 19 | Backup pairs database and key | CLI tests prove integrity, key verification, no overwrite and workspace preservation |

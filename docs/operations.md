@@ -77,6 +77,13 @@ skill seeding, pre-listener recovery of a blocked run/permission/preview,
 backup/restore, preservation of workspace sentinels and a second start from
 restored state. CI runs the same script on Ubuntu.
 
+For the brief-to-visual-review epic, release sign-off is a three-part gate on
+the same clean commit: `scripts/guardian.sh`, this release smoke, then the
+operator-triggered real-provider command in [v1-canary.md](v1-canary.md). The
+canary is not folded into CI because it spends provider capacity and creates a
+private GitHub repository. Its bounded evidence and archived disposable remote
+are the proof; a hermetic green build alone cannot replace it.
+
 ## Supervised service
 
 Use a dedicated account and keep the HTTP listener on loopback behind a
