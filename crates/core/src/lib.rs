@@ -12,6 +12,7 @@
 
 pub mod approval;
 pub mod conversation;
+pub mod delivery;
 pub mod error;
 pub mod event;
 pub mod ids;
@@ -25,6 +26,7 @@ pub mod task;
 
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
 pub use conversation::{Author, Conversation, Message};
+pub use delivery::{Delivery, DeliveryStatus};
 pub use error::{DomainError, TransitionError};
 pub use event::{EventKind, NewEvent};
 pub use ids::{

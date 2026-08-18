@@ -86,6 +86,14 @@ export interface Project {
   last_activity_at?: string;
 }
 
+export interface Delivery {
+  status: "not_started" | "pushed" | "pull_request_open";
+  work_branch: string;
+  local_sha?: string;
+  remote_sha?: string;
+  pull_request_url?: string;
+}
+
 export interface Task {
   id: string;
   project_id: string;
@@ -179,6 +187,10 @@ export interface Repo {
 export const api = {
   projects: () => request<Project[]>("/api/projects"),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
+  delivery: (project: string) =>
+    request<Delivery>(`/api/projects/${project}/delivery`),
+  deliverProject: (project: string) =>
+    request<Delivery>(`/api/projects/${project}/delivery`, { method: "POST" }),
   createProject: (body: Record<string, string>) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   repos: () => request<Repo[]>("/api/github/repos"),

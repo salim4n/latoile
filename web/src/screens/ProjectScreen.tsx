@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ApiError, api, getToken, type Message, type Preview, type Task } from "../api";
+import { ApiError, api, getToken, type Delivery, type Message, type Preview, type Task } from "../api";
 import { useAsync, useEventReload, type Async } from "../hooks";
 import { useT, type Key, type Lang } from "../i18n";
 import { Shell } from "../components/Shell";
@@ -12,6 +12,75 @@ import { EmptyState, ErrorState } from "../components/states";
 import { CheckIcon, GearIcon, PlayIcon, SendIcon, WarningIcon } from "../components/icons";
 
 type Tab = "chat" | "board" | "preview";
+
+function DeliveryPanel({ project }: { project: string }) {
+  const { t } = useT();
+  const delivery = useAsync(() => api.delivery(project), [project]);
+  const [latest, setLatest] = useState<Delivery | null>(null);
+  const [delivering, setDelivering] = useState(false);
+  const [actionError, setActionError] = useState(false);
+  const current = latest ?? delivery.data;
+
+  async function deliver() {
+    if (delivering) return;
+    setDelivering(true);
+    setActionError(false);
+    try {
+      setLatest(await api.deliverProject(project));
+    } catch {
+      setActionError(true);
+      delivery.reload();
+    } finally {
+      setDelivering(false);
+    }
+  }
+
+  if (delivery.loading && !current) {
+    return <div className="skel delivery-skeleton" role="status" aria-label={t("delivery.loading")} />;
+  }
+  if (delivery.error && !current) {
+    return (
+      <div className="delivery-card delivery-card--error">
+        <p>{t("delivery.load.error")}</p>
+        <button className="btn btn--ghost btn--sm" type="button" onClick={delivery.reload}>
+          {t("inbox.error.retry")}
+        </button>
+      </div>
+    );
+  }
+  if (!current) return null;
+
+  const verified = current.local_sha && current.local_sha === current.remote_sha;
+  return (
+    <section className="delivery-card" aria-label={t("delivery.aria")}>
+      <div className="delivery-copy">
+        <div className="delivery-heading">
+          <strong>{t("delivery.title")}</strong>
+          <span className={current.status === "pull_request_open" ? "badge badge--success" : "badge badge--neutral"}>
+            {t(`delivery.status.${current.status}` as Key)}
+          </span>
+        </div>
+        <p>{current.work_branch}</p>
+        {verified && (
+          <code className="delivery-sha">
+            {t("delivery.sha")} {current.local_sha?.slice(0, 12)}
+          </code>
+        )}
+        {actionError && <p className="decision-error" role="alert">{t("delivery.action.error")}</p>}
+      </div>
+      {current.pull_request_url ? (
+        <a className="btn btn--primary btn--sm" href={current.pull_request_url} target="_blank" rel="noreferrer">
+          {t("delivery.open_pr")}
+        </a>
+      ) : (
+        <button className="btn btn--primary btn--sm" type="button" onClick={deliver} disabled={delivering}>
+          {delivering && <span className="spin" aria-hidden="true" />}
+          {current.status === "pushed" ? t("delivery.retry_pr") : t("delivery.deliver")}
+        </button>
+      )}
+    </section>
+  );
+}
 
 function ProjectLoading({ label }: { label: string }) {
   return (
@@ -415,6 +484,7 @@ export function ProjectScreen() {
       )}
       {project.data && (
         <>
+          <DeliveryPanel project={id} />
           <div className="tabs" role="tablist" aria-label={t("tabs.aria")}>
             {tabs.map((item) => (
               <button

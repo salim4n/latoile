@@ -5,7 +5,7 @@
 use latoile_app::store::{
     InboxApprovalRow, ProjectListRow, ProjectMessageRow, ProjectTaskRow, RoleRow,
 };
-use latoile_core::{Approval, Message, Preview, Project, Run, SpecVersion, Task};
+use latoile_core::{Approval, Delivery, Message, Preview, Project, Run, SpecVersion, Task};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -45,6 +45,42 @@ impl From<&ProjectListRow> for ProjectDto {
         let mut dto = Self::from(&row.project);
         dto.last_activity_at = Some(row.last_activity_at.clone());
         dto
+    }
+}
+
+#[derive(Serialize)]
+pub struct DeliveryDto {
+    pub status: &'static str,
+    pub work_branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull_request_url: Option<String>,
+}
+
+impl DeliveryDto {
+    pub fn not_started(project: &Project) -> Self {
+        Self {
+            status: "not_started",
+            work_branch: project.work_branch.clone(),
+            local_sha: None,
+            remote_sha: None,
+            pull_request_url: None,
+        }
+    }
+}
+
+impl From<&Delivery> for DeliveryDto {
+    fn from(delivery: &Delivery) -> Self {
+        Self {
+            status: delivery.status.as_str(),
+            work_branch: delivery.work_branch.clone(),
+            local_sha: Some(delivery.local_sha.clone()),
+            remote_sha: Some(delivery.remote_sha.clone()),
+            pull_request_url: delivery.pull_request_url.clone(),
+        }
     }
 }
 

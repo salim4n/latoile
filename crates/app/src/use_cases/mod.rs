@@ -9,6 +9,7 @@
 mod approve_spec;
 mod create_project;
 mod decide_permission;
+mod deliver_project;
 mod dispatch_task;
 mod ensure_preview;
 mod grant_approval;
@@ -21,6 +22,7 @@ mod stop_preview;
 pub use approve_spec::ApproveSpec;
 pub use create_project::{CreateProject, CreateProjectInput};
 pub use decide_permission::DecidePermission;
+pub use deliver_project::DeliverProject;
 pub use dispatch_task::{DispatchTask, DispatchTaskInput, DispatchedTask};
 pub use ensure_preview::{EnsurePreview, EnsuredPreview};
 pub use grant_approval::{GrantApproval, GrantedApproval};

@@ -13,6 +13,7 @@
 
 mod approval;
 mod conversation;
+mod delivery;
 mod event;
 mod preview;
 mod project;

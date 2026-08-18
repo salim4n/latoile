@@ -166,6 +166,20 @@ impl ApprovalStore for Store {
             .map_err(Into::into)
     }
 
+    async fn list_for_run(&self, run: &RunId) -> PortResult<Vec<Approval>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM approval WHERE run_id = ? ORDER BY created_at, id"
+        ))
+        .bind(run.as_str())
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(row_to_approval)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     async fn save(&self, approval: &Approval) -> PortResult<()> {
         sqlx::query(
             "INSERT INTO approval

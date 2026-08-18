@@ -197,6 +197,30 @@ async fn open_pull_request_returns_its_url() {
 }
 
 #[tokio::test]
+async fn an_existing_open_pull_request_is_found_by_head_and_base() {
+    let mock = Mock::start(vec![(
+        200,
+        r#"[{"html_url":"https://github.com/salim4n/mon-app/pull/3"}]"#.into(),
+    )])
+    .await;
+    let gh = github(&mock, Some("tok123"));
+
+    let url = GitHubClient::find_open_pull_request(&gh, "salim4n/mon-app", "work", "main")
+        .await
+        .unwrap();
+    assert_eq!(
+        url.as_deref(),
+        Some("https://github.com/salim4n/mon-app/pull/3")
+    );
+    let sent = mock.take_requests();
+    assert!(sent[0]
+        .request_line
+        .starts_with("GET /repos/salim4n/mon-app/pulls?"));
+    assert!(sent[0].request_line.contains("state=open"));
+    assert!(sent[0].request_line.contains("base=main"));
+}
+
+#[tokio::test]
 async fn a_401_is_an_auth_error() {
     let mock = Mock::start(vec![(401, r#"{"message":"Bad credentials"}"#.into())]).await;
     let gh = github(&mock, Some("expired"));

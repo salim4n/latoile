@@ -5,7 +5,8 @@
 use crate::{GitHub, GitHubError};
 use base64::Engine as _;
 use latoile_core::ports::{
-    PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace, SecretStore, WorkspaceProvisioner,
+    PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace, PublishWorkBranchInput,
+    PublishedWorkBranch, SecretStore, WorkBranchPublisher, WorkspaceProvisioner,
 };
 use std::path::Path;
 use tokio::process::Command;
@@ -17,6 +18,126 @@ impl<S: SecretStore> WorkspaceProvisioner for GitHub<S> {
     async fn provision(&self, input: &ProvisionWorkspaceInput) -> PortResult<ProvisionedWorkspace> {
         provision(self, input).await.map_err(Into::into)
     }
+}
+
+impl<S: SecretStore> WorkBranchPublisher for GitHub<S> {
+    async fn verify_and_push(
+        &self,
+        input: &PublishWorkBranchInput,
+    ) -> PortResult<PublishedWorkBranch> {
+        publish_work_branch(self, input).await.map_err(Into::into)
+    }
+}
+
+async fn publish_work_branch<S: SecretStore>(
+    github: &GitHub<S>,
+    input: &PublishWorkBranchInput,
+) -> Result<PublishedWorkBranch, GitHubError> {
+    let (owner, name) = repo_parts(&input.repo)?;
+    validate_component(owner, "repository owner")?;
+    validate_component(name, "repository name")?;
+    validate_branch(&input.work_branch)?;
+
+    let root = tokio::fs::canonicalize(&github.config.workspace_root)
+        .await
+        .map_err(|e| GitHubError::Workspace(e.to_string()))?;
+    let checkout = tokio::fs::canonicalize(&input.checkout)
+        .await
+        .map_err(|e| GitHubError::Workspace(e.to_string()))?;
+    if !checkout.starts_with(&root) || !checkout.join(".git").is_dir() {
+        return Err(GitHubError::Workspace(
+            "the delivery checkout is outside the configured workspace or is not a Git checkout"
+                .into(),
+        ));
+    }
+
+    let token = github.token().await?;
+    let origin = git_output(&checkout, &token, &["remote", "get-url", "origin"]).await?;
+    if !remote_matches(&origin, &input.repo) {
+        return Err(GitHubError::Workspace(
+            "the delivery checkout origin does not match the project repository".into(),
+        ));
+    }
+    let branch = git_output(&checkout, &token, &["branch", "--show-current"]).await?;
+    if branch != input.work_branch {
+        return Err(GitHubError::Workspace(format!(
+            "delivery requires branch {}, but the checkout is on {branch}",
+            input.work_branch
+        )));
+    }
+    let status = git_output(
+        &checkout,
+        &token,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .await?;
+    if !status.is_empty() {
+        return Err(GitHubError::Workspace(
+            "delivery requires a clean worktree with every selected change committed".into(),
+        ));
+    }
+
+    let local_sha = git_output(&checkout, &token, &["rev-parse", "HEAD"]).await?;
+    if local_sha.len() < 40 || !local_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(GitHubError::Workspace(
+            "Git returned an invalid local commit SHA".into(),
+        ));
+    }
+    if input.approved_shas.is_empty() {
+        return Err(GitHubError::Workspace(
+            "delivery needs at least one approved executor SHA".into(),
+        ));
+    }
+    for approved in &input.approved_shas {
+        if approved.len() < 40 || !approved.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(GitHubError::Workspace(
+                "an approved executor SHA is invalid".into(),
+            ));
+        }
+        let ancestor = Command::new("git")
+            .args(["merge-base", "--is-ancestor", approved, &local_sha])
+            .current_dir(&checkout)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .status()
+            .await
+            .map_err(|error| GitHubError::Workspace(error.to_string()))?;
+        if !ancestor.success() {
+            return Err(GitHubError::Workspace(format!(
+                "approved executor SHA {approved} is not contained in the delivery HEAD"
+            )));
+        }
+    }
+    let refspec = format!("HEAD:refs/heads/{}", input.work_branch);
+    git(
+        &checkout,
+        &token,
+        &["push", "--porcelain", "origin", &refspec],
+    )
+    .await?;
+    let remote_ref = format!("refs/heads/{}", input.work_branch);
+    let remote = git_output(
+        &checkout,
+        &token,
+        &["ls-remote", "--heads", "origin", &remote_ref],
+    )
+    .await?;
+    let remote_sha = remote
+        .split_whitespace()
+        .next()
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| GitHubError::Workspace("the pushed branch is absent on origin".into()))?
+        .to_string();
+    if remote_sha != local_sha {
+        return Err(GitHubError::Workspace(format!(
+            "remote SHA verification failed: local {local_sha}, remote {remote_sha}"
+        )));
+    }
+
+    Ok(PublishedWorkBranch {
+        work_branch: input.work_branch.clone(),
+        local_sha,
+        remote_sha,
+    })
 }
 
 async fn provision<S: SecretStore>(
@@ -415,5 +536,124 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.0.contains("invalid slug"));
+    }
+
+    #[tokio::test]
+    async fn publishes_a_clean_work_branch_and_verifies_the_remote_sha() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = commit_repo(temp.path());
+        let github = GitHub::new(
+            crate::GitHubConfig {
+                workspace_root: temp.path().join("workspace"),
+                git_remote_base: format!("file://{}", temp.path().join("remotes").display()),
+                ..crate::GitHubConfig::default()
+            },
+            Secrets(HashMap::from([(
+                crate::DEFAULT_TOKEN_NAME.into(),
+                "never-log-me".into(),
+            )])),
+            GitHub::<Secrets>::default_http(),
+        );
+        let provisioned = github
+            .provision(&ProvisionWorkspaceInput {
+                repo: "salim4n/mon-app".into(),
+                slug: "mon-app".into(),
+                work_branch: "work".into(),
+                dev_command: None,
+            })
+            .await
+            .unwrap();
+        let checkout = Path::new(&provisioned.local_path);
+        std::fs::write(checkout.join("feature.txt"), "ready").unwrap();
+        for args in [
+            vec!["add", "feature.txt"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "feat: ready",
+            ],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(checkout)
+                .status()
+                .unwrap()
+                .success());
+        }
+
+        let approved_sha = git_output(checkout, "x", &["rev-parse", "HEAD"])
+            .await
+            .unwrap();
+        let published = github
+            .verify_and_push(&PublishWorkBranchInput {
+                repo: "salim4n/mon-app".into(),
+                checkout: provisioned.local_path,
+                work_branch: "work".into(),
+                approved_shas: vec![approved_sha],
+            })
+            .await
+            .unwrap();
+        assert_eq!(published.local_sha, published.remote_sha);
+        let remote_sha = std::process::Command::new("git")
+            .args([
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/heads/work",
+            ])
+            .output()
+            .unwrap();
+        assert!(remote_sha.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&remote_sha.stdout).trim(),
+            published.local_sha
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_a_dirty_or_wrong_branch_before_push() {
+        let temp = tempfile::tempdir().unwrap();
+        commit_repo(temp.path());
+        let github = GitHub::new(
+            crate::GitHubConfig {
+                workspace_root: temp.path().join("workspace"),
+                git_remote_base: format!("file://{}", temp.path().join("remotes").display()),
+                ..crate::GitHubConfig::default()
+            },
+            Secrets(HashMap::from([(
+                crate::DEFAULT_TOKEN_NAME.into(),
+                "never-log-me".into(),
+            )])),
+            GitHub::<Secrets>::default_http(),
+        );
+        let provisioned = github
+            .provision(&ProvisionWorkspaceInput {
+                repo: "salim4n/mon-app".into(),
+                slug: "mon-app".into(),
+                work_branch: "work".into(),
+                dev_command: None,
+            })
+            .await
+            .unwrap();
+        std::fs::write(
+            Path::new(&provisioned.local_path).join("dirty.txt"),
+            "dirty",
+        )
+        .unwrap();
+        let error = github
+            .verify_and_push(&PublishWorkBranchInput {
+                repo: "salim4n/mon-app".into(),
+                checkout: provisioned.local_path,
+                work_branch: "work".into(),
+                approved_shas: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert!(error.0.contains("clean worktree"), "{error}");
+        assert!(!error.0.contains("never-log-me"));
     }
 }

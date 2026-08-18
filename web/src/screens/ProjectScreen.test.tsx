@@ -34,6 +34,10 @@ function mockProject({
   preview?: Preview | null;
 } = {}) {
   vi.spyOn(api, "project").mockResolvedValue(project);
+  vi.spyOn(api, "delivery").mockResolvedValue({
+    status: "not_started",
+    work_branch: project.work_branch,
+  });
   vi.spyOn(api, "messages").mockResolvedValue(messages);
   if (preview) vi.spyOn(api, "preview").mockResolvedValue(preview);
   else vi.spyOn(api, "preview").mockRejectedValue(new ApiError(404, "not_found", "preview not found"));
@@ -65,6 +69,25 @@ describe("ProjectScreen visual contract", () => {
     expect(screen.getByText("4 tâches prêtes")).toBeTruthy();
     expect(screen.getByText("Run démarré")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Réglages du projet" })).toBeTruthy();
+  });
+
+  it("delivers only on owner action and shows verified PR evidence", async () => {
+    mockProject();
+    const deliver = vi.spyOn(api, "deliverProject").mockResolvedValue({
+      status: "pull_request_open",
+      work_branch: project.work_branch,
+      local_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      remote_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      pull_request_url: "https://github.com/salim4n/latoile/pull/7",
+    });
+    renderProject();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Livrer sur GitHub" }));
+    await waitFor(() => expect(deliver).toHaveBeenCalledWith(project.id));
+    expect(await screen.findByText(/SHA vérifié : aaaaaaaaaaaa/)).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Voir la Pull Request ↗" });
+    expect(link.getAttribute("href")).toBe("https://github.com/salim4n/latoile/pull/7");
+    expect(screen.queryByRole("button", { name: "Livrer sur GitHub" })).toBeNull();
   });
 
   it("keeps a failed message recoverable without clearing the draft", async () => {
@@ -181,6 +204,10 @@ describe("ProjectScreen visual contract", () => {
 
   it("does not disguise a server failure as an absent preview", async () => {
     vi.spyOn(api, "project").mockResolvedValue(project);
+    vi.spyOn(api, "delivery").mockResolvedValue({
+      status: "not_started",
+      work_branch: project.work_branch,
+    });
     vi.spyOn(api, "messages").mockResolvedValue([]);
     vi.spyOn(api, "preview").mockRejectedValue(new ApiError(500, "internal_error", "failed"));
     renderProject();
@@ -193,6 +220,7 @@ describe("ProjectScreen visual contract", () => {
   it("uses a project-shaped loading state before the workspace is ready", () => {
     const pending = new Promise<never>(() => {});
     vi.spyOn(api, "project").mockReturnValue(pending);
+    vi.spyOn(api, "delivery").mockReturnValue(pending);
     vi.spyOn(api, "preview").mockReturnValue(pending);
     renderProject();
 

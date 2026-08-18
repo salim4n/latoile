@@ -25,6 +25,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects", get(projects::list).post(projects::create))
         .route("/api/projects/{id}", get(projects::get))
         .route(
+            "/api/projects/{id}/delivery",
+            get(projects::delivery).post(projects::deliver),
+        )
+        .route(
             "/api/projects/{id}/messages",
             get(messages::list).post(messages::send),
         )

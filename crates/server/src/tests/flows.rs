@@ -47,7 +47,13 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
     );
     executor.begin().unwrap();
     executor.finish("login implemented").unwrap();
-    executor.attach_evidence(None, None, "{}".into()).unwrap();
+    executor
+        .attach_evidence(
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            "{}".into(),
+        )
+        .unwrap();
     RunStore::save(store, &executor).await.unwrap();
 
     let mut reviewer = Run::new(
@@ -78,6 +84,83 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
     );
     ApprovalStore::save(store, &approval).await.unwrap();
     approval
+}
+
+#[tokio::test]
+async fn explicit_delivery_exposes_verified_sha_and_idempotent_pull_request() {
+    let (state, store, _) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+    seed_review_pending(&store, &project).await;
+    let grant = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({"granted": true})),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::OK);
+
+    let before = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let before = body_json(before).await;
+    assert_eq!(before["status"], "not_started");
+    assert_eq!(before["work_branch"], "work");
+
+    let delivered = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(delivered.status(), StatusCode::OK);
+    let delivered = body_json(delivered).await;
+    assert_eq!(delivered["status"], "pull_request_open");
+    assert_eq!(delivered["local_sha"], delivered["remote_sha"]);
+    assert_eq!(
+        delivered["pull_request_url"],
+        "https://github.com/salim4n/mon-app/pull/1"
+    );
+
+    let retried = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(body_json(retried).await, delivered);
+}
+
+#[tokio::test]
+async fn delivery_route_refuses_a_project_with_unapproved_work() {
+    let (state, _, _) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+    let response = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -114,7 +197,10 @@ async fn a_granted_review_closes_the_task() {
         .unwrap();
     let decided = body_json(decided).await;
     assert_eq!(decided["status"], "granted");
-    assert_eq!(decided["decision_comment"], "Validé après contrôle du rendu.");
+    assert_eq!(
+        decided["decision_comment"],
+        "Validé après contrôle du rendu."
+    );
     assert_eq!(approval.kind, ApprovalKind::Review);
 
     let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
@@ -276,10 +362,7 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     .to_string();
     agents.run_states.lock().unwrap().insert(
         second_reviewer.id.as_str().into(),
-        RunState::Done(RunReport::terminal(
-            RunOutcome::Finished,
-            corrected_review,
-        )),
+        RunState::Done(RunReport::terminal(RunOutcome::Finished, corrected_review)),
     );
 
     let mut fresh = Vec::new();
@@ -296,7 +379,11 @@ async fn a_rejected_review_starts_one_audited_corrective_run() {
     let fresh_payload: serde_json::Value = serde_json::from_str(&fresh[0].payload).unwrap();
     assert_eq!(fresh_payload["verdict"], "approve");
     assert_eq!(
-        TaskStore::get(&store, &task_id).await.unwrap().unwrap().status,
+        TaskStore::get(&store, &task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         latoile_core::TaskStatus::Review
     );
 }

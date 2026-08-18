@@ -20,7 +20,8 @@ use latoile_app::store::Store;
 use latoile_core::ids::{ProjectId, RunId};
 use latoile_core::ports::{
     AgentChannel, GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput,
-    ProvisionedWorkspace, RepoInfo, WorkspaceProvisioner,
+    ProvisionedWorkspace, PublishWorkBranchInput, PublishedWorkBranch, RepoInfo,
+    WorkBranchPublisher, WorkspaceProvisioner,
 };
 use latoile_core::Run;
 use latoile_github::{GitHub, GitHubConfig};
@@ -120,6 +121,40 @@ impl GitHubClient for GitHubSlot {
             Self::Real(github) => github.open_pull_request(repo, head, base).await,
             #[cfg(test)]
             Self::Stub(_) => Ok("https://github.com/stub/pr/1".into()),
+        }
+    }
+    async fn find_open_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> PortResult<Option<String>> {
+        match self {
+            Self::Real(github) => github.find_open_pull_request(repo, head, base).await,
+            #[cfg(test)]
+            Self::Stub(_) => Ok(Some(format!("https://github.com/{repo}/pull/1"))),
+        }
+    }
+}
+
+impl WorkBranchPublisher for GitHubSlot {
+    async fn verify_and_push(
+        &self,
+        input: &PublishWorkBranchInput,
+    ) -> PortResult<PublishedWorkBranch> {
+        match self {
+            Self::Real(github) => github.verify_and_push(input).await,
+            #[cfg(test)]
+            Self::Stub(_) => {
+                let sha = input.approved_shas.last().cloned().ok_or_else(|| {
+                    latoile_core::ports::PortError("no approved SHA supplied".into())
+                })?;
+                Ok(PublishedWorkBranch {
+                    work_branch: input.work_branch.clone(),
+                    local_sha: sha.clone(),
+                    remote_sha: sha,
+                })
+            }
         }
     }
 }

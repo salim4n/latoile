@@ -16,6 +16,7 @@
 
 use crate::approval::Approval;
 use crate::conversation::{Conversation, Message};
+use crate::delivery::Delivery;
 use crate::event::NewEvent;
 use crate::ids::{ApprovalId, ProjectId, RunId, TaskId};
 use crate::preview::Preview;
@@ -74,7 +75,13 @@ pub trait SpecStore {
 pub trait ApprovalStore {
     async fn get(&self, id: &ApprovalId) -> PortResult<Option<Approval>>;
     async fn list_pending(&self) -> PortResult<Vec<Approval>>;
+    async fn list_for_run(&self, run: &RunId) -> PortResult<Vec<Approval>>;
     async fn save(&self, approval: &Approval) -> PortResult<()>;
+}
+
+pub trait DeliveryStore {
+    async fn get_for_project(&self, project: &ProjectId) -> PortResult<Option<Delivery>>;
+    async fn save(&self, delivery: &Delivery) -> PortResult<()>;
 }
 
 pub trait PreviewStore {
@@ -159,6 +166,38 @@ pub struct RepoInfo {
 pub trait GitHubClient {
     async fn list_repos(&self) -> PortResult<Vec<RepoInfo>>;
     async fn open_pull_request(&self, repo: &str, head: &str, base: &str) -> PortResult<String>;
+    async fn find_open_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> PortResult<Option<String>>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishWorkBranchInput {
+    pub repo: String,
+    pub checkout: String,
+    pub work_branch: String,
+    /// Executor commit SHAs whose Reviewer approvals authorized delivery.
+    /// The publisher proves every one is an ancestor of the pushed HEAD.
+    pub approved_shas: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedWorkBranch {
+    pub work_branch: String,
+    pub local_sha: String,
+    pub remote_sha: String,
+}
+
+/// Local Git verification and the one non-force branch push. API PR creation
+/// remains a separate GitHub port so the application controls ordering.
+pub trait WorkBranchPublisher {
+    async fn verify_and_push(
+        &self,
+        input: &PublishWorkBranchInput,
+    ) -> PortResult<PublishedWorkBranch>;
 }
 
 /// Input for provisioning the one V1 checkout attached to a project.

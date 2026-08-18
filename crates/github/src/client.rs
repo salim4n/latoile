@@ -167,6 +167,41 @@ impl<S: SecretStore> GitHubClient for GitHub<S> {
             .map_err(|e| GitHubError::Decode(e.to_string()))?;
         Ok(url.html_url)
     }
+
+    async fn find_open_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> PortResult<Option<String>> {
+        let owner = repo
+            .split_once('/')
+            .map(|(owner, _)| owner)
+            .filter(|owner| !owner.is_empty())
+            .ok_or_else(|| {
+                GitHubError::Validation("repository must look like owner/name".into())
+            })?;
+        let token = self.token().await?;
+        let response = self
+            .http
+            .get(format!("{}/repos/{repo}/pulls", self.config.api_base))
+            .bearer_auth(token)
+            .query(&[
+                ("state", "open".to_string()),
+                ("head", format!("{owner}:{head}")),
+                ("base", base.to_string()),
+                ("per_page", "1".to_string()),
+            ])
+            .send()
+            .await
+            .map_err(GitHubError::from)?;
+        let pulls = Self::checked(response, repo)
+            .await?
+            .json::<Vec<PullJson>>()
+            .await
+            .map_err(|e| GitHubError::Decode(e.to_string()))?;
+        Ok(pulls.into_iter().next().map(|pull| pull.html_url))
+    }
 }
 
 #[cfg(test)]
