@@ -96,7 +96,10 @@ Name: la Toile (the Webway, WH40k) — the parallel network where agents work; a
     package itself and integrates only that verified commit by fast-forward.
     Manifest schema, skill digest and operating mode are bound from the
     server-owned session before validation/commit; the model cannot attest or
-    override its own provenance.
+    override its own provenance. A content-validation failure receives at most
+    two repair turns in the same ACP session and detached worktree, with no new
+    owner answer or permission expansion. Path confinement failures are never
+    sent back for repair and fail immediately.
 15. A generated draft pins architecture-session id, skill digest, operating
     mode, package digest, manifest digest, commit SHA and tree SHA. Session, draft and
     `SpecVersionCreated` event become visible in one SQLite transaction.

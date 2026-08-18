@@ -283,6 +283,8 @@ struct PackageConn {
     workspace: PathBuf,
     log: Arc<StdMutex<Vec<String>>>,
     escape: bool,
+    invalid_gallery_turns: usize,
+    turns: usize,
 }
 
 impl Connection for PackageConn {
@@ -302,6 +304,8 @@ impl Connection for PackageConn {
                 updates: vec![],
             });
         }
+        let invalid_gallery = self.turns < self.invalid_gallery_turns;
+        self.turns += 1;
         let root = self.workspace.join("design/v0001-as1/");
         std::fs::create_dir_all(root.join("adrs")).unwrap();
         std::fs::create_dir_all(root.join("mockups")).unwrap();
@@ -346,13 +350,14 @@ impl Connection for PackageConn {
             ),
         )
         .unwrap();
-        std::fs::write(
-            root.join("gallery.html"),
+        let gallery = if invalid_gallery {
+            "<!doctype html><html><body><a href=\"mockups/home.html\">Missing token binding</a></body></html>".into()
+        } else {
             format!(
                 "<!doctype html><html data-latoile-token-digest=\"{token_digest}\"><body><a href=\"mockups/home.html\">Home</a></body></html>"
-            ),
-        )
-        .unwrap();
+            )
+        };
+        std::fs::write(root.join("gallery.html"), gallery).unwrap();
         Ok(TurnResult {
             outcome: RunOutcome::Finished,
             text: "Verified package ready".into(),
@@ -370,6 +375,7 @@ struct PackageConnector {
     log: Arc<StdMutex<Vec<String>>>,
     contexts: PermissionContextLog,
     escape: bool,
+    invalid_gallery_turns: usize,
 }
 
 impl Connector for PackageConnector {
@@ -389,6 +395,8 @@ impl Connector for PackageConnector {
             workspace: workspace.to_path_buf(),
             log: self.log.clone(),
             escape: self.escape,
+            invalid_gallery_turns: self.invalid_gallery_turns,
+            turns: 0,
         })
     }
 }
@@ -453,7 +461,10 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
     let bundle = Preambles::new(config.skills_dir.clone())
         .architect_bundle()
         .unwrap();
-    let connector = PackageConnector::default();
+    let connector = PackageConnector {
+        invalid_gallery_turns: 1,
+        ..PackageConnector::default()
+    };
     let log = connector.log.clone();
     let contexts = connector.contexts.clone();
     let routing = config.clone();
@@ -495,11 +506,17 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
             .join("design/v0001-as1/mockups/home.html")
             .is_file()
     );
-    let prompt = log.lock().unwrap()[0].clone();
+    let (prompt, repair_prompt) = {
+        let prompts = log.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        (prompts[0].clone(), prompts[1].clone())
+    };
     assert!(prompt.contains("references/brainstorming-method.md"));
     assert!(prompt.contains("assets/templates/arch-spec-template.md"));
     assert!(prompt.contains(&bundle.digest));
     assert!(prompt.contains("__LATOILE_SERVER_BOUND__"));
+    assert!(repair_prompt.starts_with("PACKAGE VALIDATION REPAIR 1/2\n"));
+    assert!(repair_prompt.contains("does not pin the shared design tokens"));
     let manifest = std::fs::read_to_string(
         dir.path().join("design/v0001-as1/package-manifest.md"),
     )
@@ -564,6 +581,51 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
         .unwrap();
     assert!(!drifted.valid);
     assert_eq!(drifted.findings[0].code, "immutable_package_invalid");
+}
+
+#[tokio::test]
+async fn architecture_package_validation_repairs_are_bounded() {
+    let (dir, config) = fixture();
+    let bundle = Preambles::new(config.skills_dir.clone())
+        .architect_bundle()
+        .unwrap();
+    let connector = PackageConnector {
+        invalid_gallery_turns: 3,
+        ..PackageConnector::default()
+    };
+    let log = connector.log.clone();
+    let routing = config.clone();
+    let channel: AcpChannel<PackageConnector, RootDirs, ChannelConfig> = AcpChannel::new(
+        config,
+        connector,
+        RootDirs(dir.path().to_path_buf()),
+        routing,
+    );
+
+    let error = channel
+        .generate_architecture_package(
+            &project(),
+            &architecture_session(),
+            &ArchitecturePackageRequest {
+                design_dir: "design/v0001-as1/".into(),
+                skill_digest: bundle.digest,
+                operating_mode: ArchitectureOperatingMode::Greenfield,
+                decisions: vec![ArchitectureDecision {
+                    sequence: 1,
+                    prompt: "Who is the user?".into(),
+                    answer: "A product team".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.0.contains("does not pin the shared design tokens"));
+    let prompts = log.lock().unwrap();
+    assert_eq!(prompts.len(), 3);
+    assert!(prompts[1].starts_with("PACKAGE VALIDATION REPAIR 1/2\n"));
+    assert!(prompts[2].starts_with("PACKAGE VALIDATION REPAIR 2/2\n"));
+    assert!(!dir.path().join("design/v0001-as1").exists());
 }
 
 #[tokio::test]

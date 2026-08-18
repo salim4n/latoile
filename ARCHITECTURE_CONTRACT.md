@@ -54,7 +54,9 @@ rg -l 'sqlx::query' crates -g '*.rs' | rg -v '^crates/(app/src/store|vault)/' # 
   permits static `.md`/`.html` files under one server-selected `design/v…/`
   root and rejects shell, path traversal and every production/config mutation.
   Only a bounded, inventory-complete package commit may fast-forward the live
-  checkout (ADR-010).
+  checkout (ADR-010). Content-validation failures may trigger at most two
+  repair turns in that same ACP/worktree with the bounded validator result;
+  confinement violations fail immediately and are never repairable.
 - A visual manifest enumerates every package file and declares each P0 screen,
   state, locale, viewport, scale factor, stable comparison id and mockup. HTML
   pins the declared metadata and the shared design-token digest.

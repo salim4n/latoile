@@ -843,3 +843,49 @@ scenarios and every other package defect still fail closed.
 + The committed package remains self-describing and content-addressed.
 − The adapter performs one explicit deterministic write inside the already
   confined package worktree before validation.
+
+---
+
+# ADR-022 — Repair bounded package-content validation failures in place
+
+- **Date**: 2026-08-19
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+Even with correct server-bound provenance, a real 16-file package may contain
+one local inconsistency. A canary produced a `gallery.html` that was external
+or failed to pin the shared design-token digest. One-shot generation discarded
+the entire valid discovery and package work for a defect that the Architect
+could correct from the deterministic validator result.
+
+## Decision
+
+Package generation now validates after each finished turn inside the same ACP
+session and detached worktree. A package-content or manifest-validation error
+may trigger at most two repair turns. The prompt states that no new owner
+answer exists, includes only the bounded validator result and confines the fix
+to the original server-selected package directory. Provenance is rebound and
+the complete validator reruns after every repair.
+
+Changed-path validation remains outside this recovery loop. Any file outside
+the package root, unsafe extension, path traversal or evidence-bound breach
+fails immediately and is never presented as a repairable content issue. A
+non-finished repair, provider failure, timeout or third invalid validation also
+fails closed; the temporary worktree is removed and nothing is integrated.
+
+## Rejected alternatives
+
+- Regenerate the whole discovery: discards durable owner decisions for a local
+  packaging defect.
+- Patch model-authored HTML in the server: would make the server the designer
+  rather than a validator.
+- Allow unlimited repair turns: creates an unbounded paid loop.
+- Repair path escapes: weakens the hard security boundary into a suggestion.
+
+## Consequences
+
++ Local manifest/gallery/token inconsistencies can recover automatically.
++ Repairs preserve owner decisions, ACP context and worktree evidence.
++ Security confinement remains an immediate hard failure.
+− A difficult package may consume up to two additional provider turns.

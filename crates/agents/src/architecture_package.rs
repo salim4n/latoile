@@ -44,6 +44,7 @@ const REQUIRED_FILES: &[&str] = &[
 
 const MAX_PACKAGE_FILES: usize = 100;
 const MAX_PACKAGE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_PACKAGE_REPAIR_TURNS: usize = 2;
 const SERVER_BOUND_MANIFEST_VALUE: &str = "__LATOILE_SERVER_BOUND__";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -215,7 +216,7 @@ async fn generate_in_worktree<C: Connector>(
     let mut conn = connector.connect(command, worktree, permissions).await?;
     conn.new_session(worktree).await?;
     let prompt = package_prompt(bundle, request);
-    let turn = tokio::time::timeout(timeouts.prompt, conn.prompt(&prompt))
+    let mut turn = tokio::time::timeout(timeouts.prompt, conn.prompt(&prompt))
         .await
         .map_err(|_| {
             AgentError::Timeout(format!(
@@ -224,16 +225,51 @@ async fn generate_in_worktree<C: Connector>(
                 worktree.display()
             ))
         })??;
-    if turn.outcome != RunOutcome::Finished {
-        return Err(AgentError::Prompt(
-            "the Architect did not finish the package turn".into(),
-        ));
-    }
-
-    let changed_files = changed_files(worktree).await?;
-    validate_changed_paths(&changed_files, &request.design_dir)?;
-    bind_manifest_provenance(&package_root, &request.skill_digest, request.operating_mode)?;
-    let validated = validate_package(&package_root, &request.skill_digest, request.operating_mode)?;
+    let mut repairs = 0usize;
+    let validated = loop {
+        if turn.outcome != RunOutcome::Finished {
+            return Err(AgentError::Prompt(
+                "the Architect did not finish the package turn".into(),
+            ));
+        }
+        let changed_files = changed_files(worktree).await?;
+        // Confinement is never repairable: any path outside the selected
+        // package root fails immediately rather than being shown back to the
+        // model as a softer content issue.
+        validate_changed_paths(&changed_files, &request.design_dir)?;
+        let validation = bind_manifest_provenance(
+            &package_root,
+            &request.skill_digest,
+            request.operating_mode,
+        )
+        .and_then(|_| {
+            validate_package(
+                &package_root,
+                &request.skill_digest,
+                request.operating_mode,
+            )
+        });
+        match validation {
+            Ok(validated) => break validated,
+            Err(error) if repairs < MAX_PACKAGE_REPAIR_TURNS => {
+                repairs += 1;
+                let repair_prompt = format!(
+                    "PACKAGE VALIDATION REPAIR {repairs}/{MAX_PACKAGE_REPAIR_TURNS}\nNo new owner answer was supplied. LaToile rejected the package with this bounded validator result:\n{error}\n\nFix only that validation defect and any directly inconsistent package metadata under `{}`. Preserve every durable owner decision, the server-bound provenance, the single P0 contract and all already-valid files. Do not execute commands or write outside the package directory. Finish the repair turn when the package is complete; LaToile will rebind provenance and re-run every validator.",
+                    request.design_dir,
+                );
+                turn = tokio::time::timeout(timeouts.prompt, conn.prompt(&repair_prompt))
+                    .await
+                    .map_err(|_| {
+                        AgentError::Timeout(format!(
+                            "architecture package repair (session {}, cwd {})",
+                            session.as_str(),
+                            worktree.display()
+                        ))
+                    })??;
+            }
+            Err(error) => return Err(error),
+        }
+    };
 
     git_ok(worktree, &["add", "--", &request.design_dir]).await?;
     git_ok(

@@ -44,6 +44,7 @@ run the paid, stateful real-provider canary.
 | 30 | Architect protocol drift cannot destroy a valid discovery silently | Agent and HTTP tests prove one post-answer contract repair stays in the same session with no owner input, enforces current-or-later phases, and fails closed on a second invalid turn |
 | 31 | Reviewer verdicts do not invent hidden acceptance scope | Driver prompt tests require a concrete-blocker rubric, preserve server-owned visual truth and classify optional improvements or unstated scope as non-blocking |
 | 32 | Architect cannot self-attest its skill provenance | Package tests deliberately emit wrong model provenance and prove the adapter binds schema, exact skill digest and mode from the server before validation and commit |
+| 33 | Architect package repair is bounded and never weakens confinement | Adapter tests prove one invalid gallery is repaired in the same ACP/worktree, a third invalid result fails after exactly two repairs, and path escape still fails immediately without integration |
 
 ## Anti-drift rules
 
