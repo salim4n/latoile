@@ -448,16 +448,7 @@ fn validate_package(
     let manifest: PackageManifest = serde_json::from_str(manifest_raw).map_err(|error| {
         AgentError::Prompt(format!("invalid latoile-package manifest: {error}"))
     })?;
-    if manifest.schema_version != 2
-        || manifest.skill_digest != expected_skill_digest
-        || manifest.operating_mode != expected_mode.as_str()
-        || manifest.deliverables.is_empty()
-        || manifest.p0_scenarios.is_empty()
-    {
-        return Err(AgentError::Prompt(
-            "the package manifest does not match the pinned skill, mode and P0 contract".into(),
-        ));
-    }
+    validate_manifest_header(&manifest, expected_skill_digest, expected_mode)?;
 
     let package_files = package_files(root)?;
     let actual_paths = package_files
@@ -646,6 +637,41 @@ fn validate_package(
             .map_err(|_| AgentError::Prompt("package file count overflowed".into()))?,
         scenarios,
     })
+}
+
+fn validate_manifest_header(
+    manifest: &PackageManifest,
+    expected_skill_digest: &str,
+    expected_mode: ArchitectureOperatingMode,
+) -> Result<(), AgentError> {
+    if manifest.schema_version != 2 {
+        return Err(AgentError::Prompt(
+            "package manifest schema_version must be 2".into(),
+        ));
+    }
+    if manifest.skill_digest != expected_skill_digest {
+        return Err(AgentError::Prompt(
+            "package manifest skill_digest does not match the server-pinned Architect bundle"
+                .into(),
+        ));
+    }
+    if manifest.operating_mode != expected_mode.as_str() {
+        return Err(AgentError::Prompt(
+            "package manifest operating_mode does not match the server-pinned project mode"
+                .into(),
+        ));
+    }
+    if manifest.deliverables.is_empty() {
+        return Err(AgentError::Prompt(
+            "package manifest deliverables must not be empty".into(),
+        ));
+    }
+    if manifest.p0_scenarios.is_empty() {
+        return Err(AgentError::Prompt(
+            "package manifest p0_scenarios must not be empty".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn selector_contract_safe(selector: &str) -> bool {
@@ -1165,7 +1191,10 @@ fn truncate(mut value: String, limit: usize) -> String {
 
 #[cfg(test)]
 mod html_safety_tests {
-    use super::html_is_self_contained;
+    use super::{
+        html_is_self_contained, validate_manifest_header, ManifestDeliverable, PackageManifest,
+        ArchitectureOperatingMode,
+    };
 
     #[test]
     fn static_gallery_links_and_data_assets_are_allowed() {
@@ -1188,5 +1217,40 @@ mod html_safety_tests {
                 "accepted unsafe HTML: {html}"
             );
         }
+    }
+
+    #[test]
+    fn manifest_header_failures_are_specific_and_bounded() {
+        let digest = "a".repeat(64);
+        let valid = || PackageManifest {
+            schema_version: 2,
+            skill_digest: digest.clone(),
+            operating_mode: "greenfield".into(),
+            deliverables: vec![ManifestDeliverable {
+                path: "package-manifest.md".into(),
+                kind: "manifest".into(),
+            }],
+            p0_scenarios: vec![],
+        };
+        let error = validate_manifest_header(
+            &valid(),
+            &digest,
+            ArchitectureOperatingMode::Greenfield,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, "the prompt failed: package manifest p0_scenarios must not be empty");
+
+        let mut wrong_digest = valid();
+        wrong_digest.skill_digest = "b".repeat(64);
+        let error = validate_manifest_header(
+            &wrong_digest,
+            &digest,
+            ArchitectureOperatingMode::Greenfield,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("skill_digest"));
+        assert!(!error.contains(&digest));
     }
 }
