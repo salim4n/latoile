@@ -39,7 +39,15 @@ async function tail(cursor: number): Promise<void> {
   let delay = 1000;
   for (;;) {
     try {
-      next = await read(next);
+      const resumed = await read(next);
+      if (resumed === null) {
+        // A 401 is a terminal state for this authenticated session. The token
+        // screen will start a fresh tail after the owner signs in again.
+        started = false;
+        emitStatus("down");
+        return;
+      }
+      next = resumed;
       delay = 1000;
       emitStatus("up");
     } catch {
@@ -52,14 +60,14 @@ async function tail(cursor: number): Promise<void> {
 
 /// One connection's worth of frames; resolves with the cursor to resume
 /// from when the server (or the network) closes the stream.
-async function read(cursor: number): Promise<number> {
+async function read(cursor: number): Promise<number | null> {
   const token = getToken();
   const response = await fetch(`/api/events?after=${cursor}`, {
     headers: token ? { authorization: `Bearer ${token}` } : {},
   });
   if (response.status === 401) {
     forceUnauthorized();
-    throw new Error("unauthorized");
+    return null;
   }
   if (!response.ok || !response.body) throw new Error(`sse: ${response.status}`);
 
