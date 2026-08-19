@@ -23,6 +23,7 @@ describe("ISSUE-006 cancelled architecture state", () => {
       project_id: project.id,
       status: "cancelled",
       phase: "requirements",
+      requested_locale: "fr-FR",
       package_status: "not_started",
       questions: [
         {

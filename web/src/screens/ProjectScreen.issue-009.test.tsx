@@ -19,6 +19,7 @@ const generating: ArchitectureSession = {
   project_id: project.id,
   status: "ready_to_draft",
   phase: "ready_to_draft",
+  requested_locale: "fr-FR",
   package_status: "generating",
   questions: [],
 };

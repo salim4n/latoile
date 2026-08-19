@@ -248,6 +248,9 @@ async fn generate_in_worktree<C: Connector>(
                 &request.skill_digest,
                 request.operating_mode,
             )
+        })
+        .and_then(|validated| {
+            validate_requested_locale(validated, &request.requested_locale)
         });
         match validation {
             Ok(validated) => break validated,
@@ -385,6 +388,11 @@ fn validate_request(
             "architecture package generation needs durable owner decisions".into(),
         ));
     }
+    if !matches!(request.requested_locale.as_str(), "en-US" | "fr-FR") {
+        return Err(AgentError::Prompt(
+            "architecture package locale must be en-US or fr-FR".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -401,9 +409,10 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
-        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable, unique, at most 128 characters, and use only ASCII letters, digits, `.`, `-`, or `_`; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
+        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nOwner package locale: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only. Use the owner package locale for all package prose and visible mockup copy; never infer the language from the skill bundle.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Every scenario `locale` MUST exactly equal the owner package locale shown above. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable, unique, at most 128 characters, and use only ASCII letters, digits, `.`, `-`, or `_`; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
         bundle.render(),
         request.operating_mode.as_str(),
+        request.requested_locale,
         request.skill_digest,
         request.design_dir,
         decisions,
@@ -414,6 +423,22 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
             "`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2. Set both `skill_digest` and `operating_mode` to the exact string `{SERVER_BOUND_MANIFEST_VALUE}`; LaToile replaces these server-owned provenance fields with the pinned values before validation and commit."
         ),
     )
+}
+
+fn validate_requested_locale(
+    validated: ValidatedPackage,
+    requested_locale: &str,
+) -> Result<ValidatedPackage, AgentError> {
+    if validated
+        .scenarios
+        .iter()
+        .any(|scenario| scenario.locale != requested_locale)
+    {
+        return Err(AgentError::Prompt(format!(
+            "every P0 scenario locale must equal the owner-selected {requested_locale} locale"
+        )));
+    }
+    Ok(validated)
 }
 
 async fn changed_files(worktree: &Path) -> Result<Vec<String>, AgentError> {
@@ -1372,3 +1397,7 @@ mod qa_regression_issue_008;
 #[cfg(test)]
 #[path = "architecture_package/qa_regression_issue_011.rs"]
 mod qa_regression_issue_011;
+
+#[cfg(test)]
+#[path = "architecture_package/qa_regression_issue_012.rs"]
+mod qa_regression_issue_012;

@@ -33,6 +33,7 @@ impl<A: AgentChannel> StartArchitecture<A> {
         &self,
         project: &ProjectId,
         brief: &str,
+        requested_locale: &str,
     ) -> Result<ArchitectureOutcome, UseCaseError> {
         if brief.trim().is_empty() {
             return Err(latoile_core::DomainError::Invariant(
@@ -54,6 +55,7 @@ impl<A: AgentChannel> StartArchitecture<A> {
             ArchitectureSessionId::new(ulid::Ulid::new().to_string())?,
             project.clone(),
         );
+        session.set_requested_locale(requested_locale)?;
         ArchitectureSessionStore::save(&self.store, &session).await?;
 
         let mut reply = match self

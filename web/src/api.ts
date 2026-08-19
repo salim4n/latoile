@@ -219,6 +219,7 @@ export interface ArchitectureSession {
   skill_name?: string;
   skill_digest?: string;
   operating_mode?: "greenfield" | "reverse_engineering";
+  requested_locale: "en-US" | "fr-FR";
   package_status: "not_started" | "generating" | "draft_ready";
   package?: {
     design_dir: string;
@@ -384,10 +385,18 @@ export const api = {
       body: JSON.stringify({ granted, comment }),
     }),
   messages: (project: string) => request<Message[]>(`/api/projects/${project}/messages`),
-  sendMessage: (project: string, content: string, intent?: "architecture_brief") =>
+  sendMessage: (
+    project: string,
+    content: string,
+    intent?: "architecture_brief",
+    locale?: "en-US" | "fr-FR",
+  ) =>
     request<{ message: Message; reply: Message | null }>(
       `/api/projects/${project}/messages`,
-      { method: "POST", body: JSON.stringify({ content, ...(intent ? { intent } : {}) }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ content, ...(intent ? { intent } : {}), ...(locale ? { locale } : {}) }),
+      },
     ),
   architecture: (project: string) =>
     request<ArchitectureSession | null>(`/api/projects/${project}/architecture`),

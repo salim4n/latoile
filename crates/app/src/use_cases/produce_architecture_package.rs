@@ -86,6 +86,7 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
                 design_dir: design_dir.clone(),
                 skill_digest: skill_digest.clone(),
                 operating_mode,
+                requested_locale: session.requested_locale.clone(),
                 decisions,
             },
         )

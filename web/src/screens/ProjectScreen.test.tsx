@@ -91,6 +91,7 @@ describe("ProjectScreen visual contract", () => {
       skill_name: "app-architect-brainstorm",
       skill_digest: "a".repeat(64),
       operating_mode: "greenfield",
+      requested_locale: "fr-FR",
       package_status: "draft_ready",
       package: {
         design_dir: "design/v0001-architec/",
@@ -242,6 +243,7 @@ describe("ProjectScreen visual contract", () => {
       skill_name: "app-architect-brainstorm",
       skill_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       operating_mode: "greenfield",
+      requested_locale: "fr-FR",
       package_status: "not_started",
       questions: [
         {
@@ -277,7 +279,12 @@ describe("ProjectScreen visual contract", () => {
     fireEvent.change(answer, { target: { value: "Les données restent en Europe." } });
     fireEvent.click(screen.getByRole("button", { name: "Envoyer" }));
     await waitFor(() =>
-      expect(send).toHaveBeenCalledWith(project.id, "Les données restent en Europe."),
+      expect(send).toHaveBeenCalledWith(
+        project.id,
+        "Les données restent en Europe.",
+        undefined,
+        undefined,
+      ),
     );
 
     fireEvent.click(within(panel).getByRole("button", { name: "Annuler la session" }));

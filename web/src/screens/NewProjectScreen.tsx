@@ -47,7 +47,7 @@ function ConnectRepositoryLink({ compact = false }: { compact?: boolean }) {
 }
 
 export function NewProjectScreen() {
-  const { t } = useT();
+  const { t, lang } = useT();
   const navigate = useNavigate();
   const repos = useAsync(api.repos, []);
   const [selected, setSelected] = useState<string | null>(null);
@@ -87,7 +87,12 @@ export function NewProjectScreen() {
       };
       if (devCommand.trim()) body.dev_command = devCommand.trim();
       const project = await api.createProject(body);
-      await api.sendMessage(project.id, brief.trim(), "architecture_brief");
+      await api.sendMessage(
+        project.id,
+        brief.trim(),
+        "architecture_brief",
+        lang === "fr" ? "fr-FR" : "en-US",
+      );
       navigate(`/projects/${project.id}`);
     } catch {
       setFailed(true);

@@ -97,6 +97,7 @@ fn map_session(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureSession, Sto
             .as_deref()
             .map(operating_mode)
             .transpose()?,
+        requested_locale: row.try_get("requested_locale")?,
         package_status: package_status(&row.try_get::<String, _>("package_status")?)?,
         package,
         failure_reason: row.try_get("failure_reason")?,
@@ -117,7 +118,7 @@ fn map_question(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureQuestion, S
 }
 
 const SESSION_COLUMNS: &str = "id, project_id, status, phase, acp_session_id, skill_name, \
-    skill_digest, operating_mode, package_status, package_design_dir, package_base_sha, \
+    skill_digest, operating_mode, requested_locale, package_status, package_design_dir, package_base_sha, \
     package_head_sha, package_tree_sha, package_digest, package_manifest_digest, package_changed_files, \
     package_diff_stat, failure_reason";
 const QUESTION_COLUMNS: &str = "id, session_id, sequence, prompt, status, answer";
@@ -197,10 +198,10 @@ impl ArchitectureSessionStore for Store {
         sqlx::query(
             "INSERT INTO architecture_session
                (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
-                operating_mode, package_status, package_design_dir, package_base_sha,
+                operating_mode, requested_locale, package_status, package_design_dir, package_base_sha,
                 package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
                 package_changed_files, package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
@@ -208,6 +209,7 @@ impl ArchitectureSessionStore for Store {
                skill_name = excluded.skill_name,
                skill_digest = excluded.skill_digest,
                operating_mode = excluded.operating_mode,
+               requested_locale = excluded.requested_locale,
                package_status = excluded.package_status,
                package_design_dir = excluded.package_design_dir,
                package_base_sha = excluded.package_base_sha,
@@ -228,6 +230,7 @@ impl ArchitectureSessionStore for Store {
         .bind(&session.skill_name)
         .bind(&session.skill_digest)
         .bind(session.operating_mode.map(|mode| mode.as_str()))
+        .bind(&session.requested_locale)
         .bind(session.package_status.as_str())
         .bind(package.map(|value| value.design_dir.as_str()))
         .bind(package.map(|value| value.base_sha.as_str()))
@@ -351,10 +354,10 @@ impl ArchitectureSessionStore for Store {
         sqlx::query(
             "INSERT INTO architecture_session
                (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
-                operating_mode, package_status, package_design_dir, package_base_sha,
+                operating_mode, requested_locale, package_status, package_design_dir, package_base_sha,
                 package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
                 package_changed_files, package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                status = excluded.status,
                phase = excluded.phase,
@@ -362,6 +365,7 @@ impl ArchitectureSessionStore for Store {
                skill_name = excluded.skill_name,
                skill_digest = excluded.skill_digest,
                operating_mode = excluded.operating_mode,
+               requested_locale = excluded.requested_locale,
                package_status = excluded.package_status,
                package_design_dir = excluded.package_design_dir,
                package_base_sha = excluded.package_base_sha,
@@ -382,6 +386,7 @@ impl ArchitectureSessionStore for Store {
         .bind(&session.skill_name)
         .bind(&session.skill_digest)
         .bind(session.operating_mode.map(|mode| mode.as_str()))
+        .bind(&session.requested_locale)
         .bind(session.package_status.as_str())
         .bind(package.map(|value| value.design_dir.as_str()))
         .bind(package.map(|value| value.base_sha.as_str()))

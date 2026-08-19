@@ -28,7 +28,7 @@ impl Store {
         let updated = sqlx::query(
             "UPDATE architecture_session SET
                status = ?, phase = ?, acp_session_id = ?, skill_name = ?, skill_digest = ?,
-               operating_mode = ?, package_status = ?, package_design_dir = ?,
+               operating_mode = ?, requested_locale = ?, package_status = ?, package_design_dir = ?,
                package_base_sha = ?, package_head_sha = ?, package_tree_sha = ?,
                package_digest = ?, package_manifest_digest = ?, package_changed_files = ?, package_diff_stat = ?,
                failure_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -40,6 +40,7 @@ impl Store {
         .bind(&session.skill_name)
         .bind(&session.skill_digest)
         .bind(session.operating_mode.map(|mode| mode.as_str()))
+        .bind(&session.requested_locale)
         .bind(session.package_status.as_str())
         .bind(&package.design_dir)
         .bind(&package.base_sha)

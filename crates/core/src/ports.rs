@@ -201,6 +201,7 @@ pub struct ArchitecturePackageRequest {
     pub design_dir: String,
     pub skill_digest: String,
     pub operating_mode: ArchitectureOperatingMode,
+    pub requested_locale: String,
     pub decisions: Vec<ArchitectureDecision>,
 }
 

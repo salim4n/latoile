@@ -432,6 +432,7 @@ async fn the_acp_adapter_rejects_and_does_not_integrate_an_escape() {
                 design_dir: "design/v0001-as1/".into(),
                 skill_digest: bundle.digest,
                 operating_mode: ArchitectureOperatingMode::Greenfield,
+                requested_locale: "fr-FR".into(),
                 decisions: vec![ArchitectureDecision {
                     sequence: 1,
                     prompt: "Who?".into(),
@@ -483,6 +484,7 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
                 design_dir: "design/v0001-as1/".into(),
                 skill_digest: bundle.digest.clone(),
                 operating_mode: ArchitectureOperatingMode::Greenfield,
+                requested_locale: "fr-FR".into(),
                 decisions: vec![ArchitectureDecision {
                     sequence: 1,
                     prompt: "Who is the user?".into(),
@@ -515,6 +517,8 @@ async fn the_acp_adapter_generates_only_a_complete_pinned_package() {
     assert!(prompt.contains("assets/templates/arch-spec-template.md"));
     assert!(prompt.contains(&bundle.digest));
     assert!(prompt.contains("__LATOILE_SERVER_BOUND__"));
+    assert!(prompt.contains("Owner package locale: fr-FR"));
+    assert!(prompt.contains("Every scenario `locale` MUST exactly equal"));
     assert!(repair_prompt.starts_with("PACKAGE VALIDATION REPAIR 1/2\n"));
     assert!(repair_prompt.contains("does not pin the shared design tokens"));
     let manifest = std::fs::read_to_string(
@@ -610,6 +614,7 @@ async fn architecture_package_validation_repairs_are_bounded() {
                 design_dir: "design/v0001-as1/".into(),
                 skill_digest: bundle.digest,
                 operating_mode: ArchitectureOperatingMode::Greenfield,
+                requested_locale: "fr-FR".into(),
                 decisions: vec![ArchitectureDecision {
                     sequence: 1,
                     prompt: "Who is the user?".into(),

@@ -404,7 +404,12 @@ function ChatTab({ project }: { project: string }) {
     setSending(true);
     setSendError(false);
     try {
-      await api.sendMessage(project, content, architectureRetry ? "architecture_brief" : undefined);
+      await api.sendMessage(
+        project,
+        content,
+        architectureRetry ? "architecture_brief" : undefined,
+        architectureRetry ? (lang === "fr" ? "fr-FR" : "en-US") : undefined,
+      );
       setDraft("");
       setArchitectureRetry(false);
       messages.reload();

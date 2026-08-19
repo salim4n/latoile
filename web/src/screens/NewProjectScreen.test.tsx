@@ -139,6 +139,7 @@ describe("NewProjectScreen visual contract", () => {
       project.id,
       "Construire le portail client.",
       "architecture_brief",
+      "fr-FR",
     );
   });
 

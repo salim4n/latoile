@@ -39,6 +39,8 @@ pub struct SendBody {
     content: String,
     #[serde(default)]
     intent: Option<String>,
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -69,7 +71,11 @@ pub async fn send(
     let architecture_reply = if body.intent.as_deref() == Some("architecture_brief") {
         Some(
             StartArchitecture::new(state.store.clone(), state.agents.clone())
-                .execute(&project_id, &body.content)
+                .execute(
+                    &project_id,
+                    &body.content,
+                    body.locale.as_deref().unwrap_or("en-US"),
+                )
                 .await?
                 .message,
         )

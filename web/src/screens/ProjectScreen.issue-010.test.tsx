@@ -19,6 +19,7 @@ const failed: ArchitectureSession = {
   project_id: project.id,
   status: "failed",
   phase: "ready_to_draft",
+  requested_locale: "fr-FR",
   package_status: "not_started",
   failure_reason: "architecture package rejected",
   questions: [],
@@ -55,7 +56,12 @@ describe("ISSUE-010 failed architecture recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Envoyer" }));
 
     await waitFor(() =>
-      expect(send).toHaveBeenCalledWith(project.id, "Revised brief", "architecture_brief"),
+      expect(send).toHaveBeenCalledWith(
+        project.id,
+        "Revised brief",
+        "architecture_brief",
+        "fr-FR",
+      ),
     );
   });
 });

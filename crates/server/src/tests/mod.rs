@@ -529,4 +529,5 @@ mod flows;
 mod http;
 mod qa_regression_issue_002;
 mod qa_regression_issue_003;
+mod qa_regression_issue_012;
 mod settings;

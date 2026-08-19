@@ -73,6 +73,7 @@ pub struct ArchitectureSessionDto {
     pub skill_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operating_mode: Option<&'static str>,
+    pub requested_locale: String,
     pub package_status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package: Option<ArchitecturePackageDto>,
@@ -103,6 +104,7 @@ impl ArchitectureSessionDto {
             skill_name: session.skill_name.clone(),
             skill_digest: session.skill_digest.clone(),
             operating_mode: session.operating_mode.map(|mode| mode.as_str()),
+            requested_locale: session.requested_locale.clone(),
             package_status: session.package_status.as_str(),
             package: session
                 .package

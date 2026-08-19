@@ -157,6 +157,7 @@ pub struct ArchitectureSession {
     pub skill_name: Option<String>,
     pub skill_digest: Option<String>,
     pub operating_mode: Option<ArchitectureOperatingMode>,
+    pub requested_locale: String,
     pub package_status: ArchitecturePackageStatus,
     pub package: Option<ArchitecturePackageEvidence>,
     pub failure_reason: Option<String>,
@@ -173,10 +174,27 @@ impl ArchitectureSession {
             skill_name: None,
             skill_digest: None,
             operating_mode: None,
+            requested_locale: "en-US".into(),
             package_status: ArchitecturePackageStatus::NotStarted,
             package: None,
             failure_reason: None,
         }
+    }
+
+    pub fn set_requested_locale(&mut self, locale: impl Into<String>) -> Result<(), DomainError> {
+        if self.status != ArchitectureStatus::Discovering || self.acp_session_id.is_some() {
+            return Err(DomainError::Invariant(
+                "architecture locale is pinned before the Architect session starts",
+            ));
+        }
+        let locale = locale.into();
+        if !matches!(locale.as_str(), "en-US" | "fr-FR") {
+            return Err(DomainError::Invariant(
+                "architecture locale must be en-US or fr-FR",
+            ));
+        }
+        self.requested_locale = locale;
+        Ok(())
     }
 
     pub fn attach_agent(&mut self, session_id: impl Into<String>) -> Result<(), DomainError> {
@@ -379,6 +397,10 @@ impl ArchitectureSession {
 #[cfg(test)]
 #[path = "architecture/qa_regression_issue_009.rs"]
 mod qa_regression_issue_009;
+
+#[cfg(test)]
+#[path = "architecture/qa_regression_issue_012.rs"]
+mod qa_regression_issue_012;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchitectureQuestionStatus {
