@@ -288,7 +288,7 @@ function ArchitecturePanel({
           specs={specs}
         />
       )}
-      {openQuestion && (
+      {active && openQuestion && (
         <div className="architecture-current">
           <strong>{t("architecture.current_question")}</strong>
           <p>{openQuestion.prompt}</p>
