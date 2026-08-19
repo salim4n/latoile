@@ -223,10 +223,14 @@ function ArchitecturePanel({
   project,
   architecture,
   specs,
+  retryPrepared,
+  onPrepareRetry,
 }: {
   project: string;
   architecture: Async<ArchitectureSession | null>;
   specs: Async<SpecVersion[]>;
+  retryPrepared: boolean;
+  onPrepareRetry: () => void;
 }) {
   const { t } = useT();
   const [cancelling, setCancelling] = useState(false);
@@ -347,6 +351,20 @@ function ArchitecturePanel({
           {session.failure_reason}
         </p>
       )}
+      {session.status === "failed" &&
+        (retryPrepared ? (
+          <p className="architecture-retry-ready" role="status">
+            {t("architecture.retry.prepared")}
+          </p>
+        ) : (
+          <button
+            className="btn btn--ghost btn--sm architecture-retry"
+            type="button"
+            onClick={onPrepareRetry}
+          >
+            {t("architecture.retry.prepare")}
+          </button>
+        ))}
       {cancelError && (
         <p className="decision-error" role="alert">
           {t("architecture.cancel.error")}
@@ -374,6 +392,7 @@ function ChatTab({ project }: { project: string }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
+  const [architectureRetry, setArchitectureRetry] = useState(false);
   useEventReload(["message_posted"], messages.reload);
   useEventReload(["message_posted"], architecture.reload);
   useEventReload(["spec_version_created", "spec_approved"], specs.reload);
@@ -385,8 +404,9 @@ function ChatTab({ project }: { project: string }) {
     setSending(true);
     setSendError(false);
     try {
-      await api.sendMessage(project, content);
+      await api.sendMessage(project, content, architectureRetry ? "architecture_brief" : undefined);
       setDraft("");
+      setArchitectureRetry(false);
       messages.reload();
       architecture.reload();
     } catch {
@@ -405,7 +425,13 @@ function ChatTab({ project }: { project: string }) {
   const awaitingArchitect = architecture.data?.status === "awaiting_answer";
   return (
     <div className="chat-panel">
-      <ArchitecturePanel project={project} architecture={architecture} specs={specs} />
+      <ArchitecturePanel
+        project={project}
+        architecture={architecture}
+        specs={specs}
+        retryPrepared={architectureRetry}
+        onPrepareRetry={() => setArchitectureRetry(true)}
+      />
       <div className="chat-thread">
         {messages.loading && <ProjectLoading label={t("chat.loading")} />}
         {messages.error && (
@@ -434,12 +460,24 @@ function ChatTab({ project }: { project: string }) {
       <form className="composer" onSubmit={send} aria-label={t("chat.composer.aria")}>
         {sendError && <p className="composer-error" role="alert">{t("chat.send.error")}</p>}
         <label htmlFor="composer-input" className="sr-only">
-          {t(awaitingArchitect ? "architecture.answer.placeholder" : "chat.placeholder")}
+          {t(
+            architectureRetry
+              ? "architecture.retry.placeholder"
+              : awaitingArchitect
+                ? "architecture.answer.placeholder"
+                : "chat.placeholder",
+          )}
         </label>
         <input
           id="composer-input"
           type="text"
-          placeholder={t(awaitingArchitect ? "architecture.answer.placeholder" : "chat.placeholder")}
+          placeholder={t(
+            architectureRetry
+              ? "architecture.retry.placeholder"
+              : awaitingArchitect
+                ? "architecture.answer.placeholder"
+                : "chat.placeholder",
+          )}
           autoComplete="off"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
