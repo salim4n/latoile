@@ -186,13 +186,13 @@ pub(crate) async fn persist_architect_message(
         .for_project(project)
         .await?
         .ok_or(UseCaseError::NotFound("conversation"))?;
-    let title = match turn.kind {
-        ArchitectureTurnKind::Question => "Question de l'Architecte",
-        ArchitectureTurnKind::ReadyToDraft => "Découverte architecture terminée",
+    let kind = match turn.kind {
+        ArchitectureTurnKind::Question => "question",
+        ArchitectureTurnKind::ReadyToDraft => "ready_to_draft",
     };
     let actions = serde_json::json!([{
         "type": "architecture",
-        "title": title,
+        "kind": kind,
         "sub": turn.message,
         "session_id": session.id.as_str(),
         "phase": session.phase.as_str(),
@@ -202,14 +202,7 @@ pub(crate) async fn persist_architect_message(
         MessageId::new(ulid::Ulid::new().to_string())?,
         conversation.id,
         Author::Manager,
-        match turn.kind {
-            ArchitectureTurnKind::Question => {
-                "L'Architecte a besoin de votre décision avant de poursuivre."
-            }
-            ArchitectureTurnKind::ReadyToDraft => {
-                "La découverte est complète. L'Architecte peut maintenant produire le paquet de référence."
-            }
-        },
+        turn.message.clone(),
         Some(actions.to_string()),
     )?;
     ConversationStore::append(store, &message).await?;

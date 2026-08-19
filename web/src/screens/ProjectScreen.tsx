@@ -140,18 +140,39 @@ function PreviewLoading({ label }: { label: string }) {
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
-function ActionCard({ actions }: { actions: string }) {
+type ActionRow = {
+  type?: string;
+  kind?: string;
+  status?: string;
+  title?: string;
+  sub?: string;
+};
+
+function parseActions(actions: string | null): ActionRow[] {
+  if (!actions) return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(actions);
   } catch {
-    return null;
+    return [];
   }
-  if (!Array.isArray(parsed)) return null;
-  const rows = parsed.filter(
-    (action): action is { title?: string; sub?: string } =>
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (action): action is ActionRow =>
       typeof action === "object" && action !== null,
   );
+}
+
+function messageDisplayContent(message: Message): string {
+  const architecture = parseActions(message.actions).find(
+    (action) => action.type === "architecture" && action.sub,
+  );
+  return architecture?.sub ?? message.content;
+}
+
+function ActionCard({ actions }: { actions: string }) {
+  const { t } = useT();
+  const rows = parseActions(actions);
   if (rows.length === 0) return null;
   return (
     <div className="action-card">
@@ -159,8 +180,16 @@ function ActionCard({ actions }: { actions: string }) {
         <div className="action-row" key={index}>
           {index % 2 === 0 ? <CheckIcon /> : <PlayIcon />}
           <div>
-            <strong>{row.title ?? JSON.stringify(row)}</strong>
-            {row.sub && <p>{row.sub}</p>}
+            <strong>
+              {row.type === "architecture"
+                ? t(
+                    row.kind === "ready_to_draft" || row.status === "ready_to_draft"
+                      ? "architecture.action.complete"
+                      : "architecture.action.question",
+                  )
+                : row.title ?? JSON.stringify(row)}
+            </strong>
+            {row.type !== "architecture" && row.sub && <p>{row.sub}</p>}
           </div>
         </div>
       ))}
@@ -387,7 +416,7 @@ function ChatTab({ project }: { project: string }) {
                 {time && ` · ${time}`}
               </div>
               <div className="msg-body">
-                <p>{message.content}</p>
+                <p>{messageDisplayContent(message)}</p>
                 {message.actions && <ActionCard actions={message.actions} />}
               </div>
             </div>
