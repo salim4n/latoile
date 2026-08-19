@@ -51,13 +51,19 @@ export function NewProjectScreen() {
   const navigate = useNavigate();
   const repos = useAsync(api.repos, []);
   const [selected, setSelected] = useState<string | null>(null);
+  const [repoSearch, setRepoSearch] = useState("");
   const [brief, setBrief] = useState("");
   const [devCommand, setDevCommand] = useState("");
   const [briefError, setBriefError] = useState(false);
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const effectiveSelected = selected ?? repos.data?.[0]?.full_name ?? null;
+  const normalizedSearch = repoSearch.trim().toLocaleLowerCase();
+  const visibleRepos = (repos.data ?? []).filter((repo) =>
+    `${repo.full_name} ${repo.description ?? ""}`.toLocaleLowerCase().includes(normalizedSearch),
+  );
+  const effectiveSelected =
+    selected ?? (normalizedSearch ? visibleRepos[0]?.full_name : repos.data?.[0]?.full_name) ?? null;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -121,8 +127,19 @@ export function NewProjectScreen() {
           <form aria-label={t("new.form.aria")} aria-busy={sending} onSubmit={submit} noValidate>
             <fieldset className="fieldset" disabled={sending}>
               <legend className="legend">{t("new.repo.legend")}</legend>
+              <label className="field-label repo-search-label" htmlFor="repo-search">
+                {t("new.repo.search.label")}
+              </label>
+              <input
+                className="text-field repo-search"
+                id="repo-search"
+                type="search"
+                value={repoSearch}
+                placeholder={t("new.repo.search.placeholder")}
+                onChange={(event) => setRepoSearch(event.target.value)}
+              />
               <div className="repo-list" role="radiogroup" aria-label={t("new.repo.legend")}>
-                {repos.data.map((repo) => (
+                {visibleRepos.map((repo) => (
                   <label className="card repo" key={repo.full_name}>
                     <input
                       type="radio"
@@ -141,6 +158,11 @@ export function NewProjectScreen() {
                     </span>
                   </label>
                 ))}
+                {visibleRepos.length === 0 && (
+                  <p className="repo-no-results" role="status">
+                    {t("new.repo.search.empty")}
+                  </p>
+                )}
                 <ConnectRepositoryLink />
               </div>
             </fieldset>
@@ -186,7 +208,7 @@ export function NewProjectScreen() {
             </div>
 
             <div className="submitbar new-project-submitbar">
-              <button className="btn btn--primary btn--block" type="submit" disabled={sending}>
+              <button className="btn btn--primary btn--block" type="submit" disabled={sending || !effectiveSelected}>
                 {sending && <span className="spin" aria-hidden="true" />}
                 {sending ? t("new.sending") : t("new.submit")}
               </button>
