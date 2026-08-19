@@ -15,12 +15,12 @@ use latoile_core::ports::{
     VisualBaselineRenderer, VisualBaselineStore, VisualComparisonRenderer,
 };
 use latoile_core::{
-    ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
-    ArchitecturePackageValidation, ArchitectureValidationFinding, ArchitectureVisualScenario,
-    CapturedVisualBaseline, CapturedVisualComparison, Run, SpecProvenance, SpecVersion,
-    VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest,
-    VisualBaselineStatus, VisualComparison, VisualComparisonCaptureOutcome,
-    VisualComparisonCaptureRequest,
+    ArchitectureOperatingMode, ArchitecturePackageEvidence, ArchitecturePackageValidation,
+    ArchitectureValidationFinding, ArchitectureVisualScenario, CapturedVisualBaseline,
+    CapturedVisualComparison, Run, SpecProvenance, SpecVersion, VisualBaseline,
+    VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest, VisualBaselineStatus,
+    VisualComparison, VisualComparisonCaptureOutcome, VisualComparisonCaptureRequest,
+    ARCHITECT_SKILL_NAME,
 };
 use latoile_preview::{Supervisor, SupervisorConfig};
 use std::sync::{Arc, Mutex};
@@ -527,4 +527,5 @@ mod agent_auth;
 mod driver;
 mod flows;
 mod http;
+mod qa_regression_issue_002;
 mod settings;

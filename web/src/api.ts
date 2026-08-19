@@ -418,7 +418,7 @@ export const api = {
       method: "DELETE",
     }),
   tasks: (project: string) => request<Task[]>(`/api/projects/${project}/tasks`),
-  preview: (project: string) => request<Preview>(`/api/projects/${project}/preview`),
+  preview: (project: string) => request<Preview | null>(`/api/projects/${project}/preview`),
   ensurePreview: (project: string) =>
     request<Preview>(`/api/projects/${project}/preview`, { method: "POST" }),
   stopPreview: (project: string) =>
