@@ -8,6 +8,7 @@ fn generating_session() -> ArchitectureSession {
         ArchitectureSessionId::new("architecture-issue-009").unwrap(),
         ProjectId::new("project-issue-009").unwrap(),
     );
+    session.record_brief("Build the package.").unwrap();
     session.attach_agent("acp:issue-009").unwrap();
     session
         .record_skill(

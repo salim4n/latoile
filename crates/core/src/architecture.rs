@@ -151,6 +151,7 @@ impl ArchitectureStatus {
 pub struct ArchitectureSession {
     pub id: ArchitectureSessionId,
     pub project_id: ProjectId,
+    pub brief: String,
     pub status: ArchitectureStatus,
     pub phase: ArchitecturePhase,
     pub acp_session_id: Option<String>,
@@ -168,6 +169,7 @@ impl ArchitectureSession {
         Self {
             id,
             project_id,
+            brief: String::new(),
             status: ArchitectureStatus::Discovering,
             phase: ArchitecturePhase::DomainDiscovery,
             acp_session_id: None,
@@ -179,6 +181,25 @@ impl ArchitectureSession {
             package: None,
             failure_reason: None,
         }
+    }
+
+    pub fn record_brief(&mut self, brief: impl Into<String>) -> Result<(), DomainError> {
+        if self.status != ArchitectureStatus::Discovering
+            || self.acp_session_id.is_some()
+            || !self.brief.is_empty()
+        {
+            return Err(DomainError::Invariant(
+                "architecture brief is pinned once before the Architect session starts",
+            ));
+        }
+        let brief = brief.into();
+        if brief.trim().is_empty() {
+            return Err(DomainError::Invariant(
+                "architecture discovery needs a non-empty owner brief",
+            ));
+        }
+        self.brief = brief;
+        Ok(())
     }
 
     pub fn set_requested_locale(&mut self, locale: impl Into<String>) -> Result<(), DomainError> {
@@ -298,6 +319,7 @@ impl ArchitectureSession {
             || self.skill_name.is_none()
             || self.skill_digest.is_none()
             || self.operating_mode.is_none()
+            || self.brief.is_empty()
         {
             return Err(DomainError::Invariant(
                 "an architecture package starts once, after discovery and with pinned skill provenance",
@@ -402,6 +424,10 @@ mod qa_regression_issue_009;
 #[path = "architecture/qa_regression_issue_012.rs"]
 mod qa_regression_issue_012;
 
+#[cfg(test)]
+#[path = "architecture/qa_regression_issue_013.rs"]
+mod qa_regression_issue_013;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchitectureQuestionStatus {
     Open,
@@ -476,10 +502,12 @@ mod tests {
     use super::*;
 
     fn session() -> ArchitectureSession {
-        ArchitectureSession::new(
+        let mut session = ArchitectureSession::new(
             ArchitectureSessionId::new("as1").unwrap(),
             ProjectId::new("p1").unwrap(),
-        )
+        );
+        session.record_brief("Build the requested product.").unwrap();
+        session
     }
 
     #[test]

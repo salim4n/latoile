@@ -55,6 +55,7 @@ impl<A: AgentChannel> StartArchitecture<A> {
             ArchitectureSessionId::new(ulid::Ulid::new().to_string())?,
             project.clone(),
         );
+        session.record_brief(brief)?;
         session.set_requested_locale(requested_locale)?;
         ArchitectureSessionStore::save(&self.store, &session).await?;
 

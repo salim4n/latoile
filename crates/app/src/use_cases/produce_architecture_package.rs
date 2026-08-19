@@ -84,6 +84,7 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
             &session.id,
             &ArchitecturePackageRequest {
                 design_dir: design_dir.clone(),
+                brief: session.brief.clone(),
                 skill_digest: skill_digest.clone(),
                 operating_mode,
                 requested_locale: session.requested_locale.clone(),

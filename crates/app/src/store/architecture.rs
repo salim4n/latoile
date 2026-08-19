@@ -87,6 +87,7 @@ fn map_session(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureSession, Sto
     Ok(ArchitectureSession {
         id: ArchitectureSessionId::new(row.try_get::<String, _>("id")?)?,
         project_id: ProjectId::new(row.try_get::<String, _>("project_id")?)?,
+        brief: row.try_get("brief")?,
         status: status(&row.try_get::<String, _>("status")?)?,
         phase: phase(&row.try_get::<String, _>("phase")?)?,
         acp_session_id: row.try_get("acp_session_id")?,
@@ -117,7 +118,7 @@ fn map_question(row: &sqlx::sqlite::SqliteRow) -> Result<ArchitectureQuestion, S
     })
 }
 
-const SESSION_COLUMNS: &str = "id, project_id, status, phase, acp_session_id, skill_name, \
+const SESSION_COLUMNS: &str = "id, project_id, brief, status, phase, acp_session_id, skill_name, \
     skill_digest, operating_mode, requested_locale, package_status, package_design_dir, package_base_sha, \
     package_head_sha, package_tree_sha, package_digest, package_manifest_digest, package_changed_files, \
     package_diff_stat, failure_reason";
@@ -197,12 +198,13 @@ impl ArchitectureSessionStore for Store {
         let package = session.package.as_ref();
         sqlx::query(
             "INSERT INTO architecture_session
-               (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
+               (id, project_id, brief, status, phase, acp_session_id, skill_name, skill_digest,
                 operating_mode, requested_locale, package_status, package_design_dir, package_base_sha,
                 package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
                 package_changed_files, package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
+               brief = excluded.brief,
                status = excluded.status,
                phase = excluded.phase,
                acp_session_id = excluded.acp_session_id,
@@ -224,6 +226,7 @@ impl ArchitectureSessionStore for Store {
         )
         .bind(session.id.as_str())
         .bind(session.project_id.as_str())
+        .bind(&session.brief)
         .bind(session.status.as_str())
         .bind(session.phase.as_str())
         .bind(&session.acp_session_id)
@@ -353,12 +356,13 @@ impl ArchitectureSessionStore for Store {
         let package = session.package.as_ref();
         sqlx::query(
             "INSERT INTO architecture_session
-               (id, project_id, status, phase, acp_session_id, skill_name, skill_digest,
+               (id, project_id, brief, status, phase, acp_session_id, skill_name, skill_digest,
                 operating_mode, requested_locale, package_status, package_design_dir, package_base_sha,
                 package_head_sha, package_tree_sha, package_digest, package_manifest_digest,
                 package_changed_files, package_diff_stat, failure_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
+               brief = excluded.brief,
                status = excluded.status,
                phase = excluded.phase,
                acp_session_id = excluded.acp_session_id,
@@ -380,6 +384,7 @@ impl ArchitectureSessionStore for Store {
         )
         .bind(session.id.as_str())
         .bind(session.project_id.as_str())
+        .bind(&session.brief)
         .bind(session.status.as_str())
         .bind(session.phase.as_str())
         .bind(&session.acp_session_id)
