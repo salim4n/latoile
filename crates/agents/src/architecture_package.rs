@@ -688,11 +688,15 @@ fn validate_package(
     {
         let text = read_bounded(html)?;
         let lowered = text.to_ascii_lowercase();
-        if !text.contains(&format!("data-latoile-token-digest=\"{token_digest}\""))
-            || !html_is_self_contained(&lowered)
-        {
+        if !text.contains(&format!("data-latoile-token-digest=\"{token_digest}\"")) {
             return Err(AgentError::Prompt(format!(
-                "HTML artifact {} is external or does not pin the shared design tokens",
+                "HTML artifact {} does not pin the shared design tokens",
+                html.display()
+            )));
+        }
+        if !html_is_self_contained(&lowered) {
+            return Err(AgentError::Prompt(format!(
+                "HTML artifact {} contains forbidden external or active content",
                 html.display()
             )));
         }
@@ -792,6 +796,10 @@ fn html_is_self_contained(html: &str) -> bool {
         && attributes(html, "href").iter().all(|value| {
             value.starts_with('#')
                 || value == &"gallery.html"
+                // Mockups live one directory below the package gallery. This
+                // exact navigation link changes no rendered bytes and cannot
+                // escape to an arbitrary file or network resource.
+                || value == &"../gallery.html"
                 || (value.starts_with("mockups/") && value.ends_with(".html"))
         })
         && css_urls(html)
@@ -1347,3 +1355,7 @@ mod html_safety_tests {
         assert!(!bound.contains("\"wrong\""));
     }
 }
+
+#[cfg(test)]
+#[path = "architecture_package/qa_regression_issue_008.rs"]
+mod qa_regression_issue_008;
