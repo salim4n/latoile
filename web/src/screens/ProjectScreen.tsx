@@ -29,17 +29,21 @@ function DeliveryPanel({ project }: { project: string }) {
   const delivery = useAsync(() => api.delivery(project), [project]);
   const [latest, setLatest] = useState<Delivery | null>(null);
   const [delivering, setDelivering] = useState(false);
-  const [actionError, setActionError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const current = latest ?? delivery.data;
 
   async function deliver() {
     if (delivering) return;
     setDelivering(true);
-    setActionError(false);
+    setActionError(null);
     try {
       setLatest(await api.deliverProject(project));
-    } catch {
-      setActionError(true);
+    } catch (error) {
+      setActionError(
+        error instanceof ApiError && [409, 422].includes(error.status)
+          ? error.message
+          : t("delivery.action.error"),
+      );
       delivery.reload();
     } finally {
       setDelivering(false);
@@ -77,7 +81,7 @@ function DeliveryPanel({ project }: { project: string }) {
             {t("delivery.sha")} {current.local_sha?.slice(0, 12)}
           </code>
         )}
-        {actionError && <p className="decision-error" role="alert">{t("delivery.action.error")}</p>}
+        {actionError && <p className="decision-error" role="alert">{actionError}</p>}
       </div>
       {current.pull_request_url ? (
         <a className="btn btn--primary btn--sm" href={current.pull_request_url} target="_blank" rel="noreferrer">
