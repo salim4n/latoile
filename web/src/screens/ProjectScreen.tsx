@@ -146,6 +146,10 @@ type ActionRow = {
   status?: string;
   title?: string;
   sub?: string;
+  version?: number;
+  design_dir?: string;
+  file_count?: number;
+  package_commit_sha?: string;
 };
 
 function parseActions(actions: string | null): ActionRow[] {
@@ -163,11 +167,27 @@ function parseActions(actions: string | null): ActionRow[] {
   );
 }
 
-function messageDisplayContent(message: Message): string {
-  const architecture = parseActions(message.actions).find(
+function messageDisplayContent(message: Message, t: (key: Key) => string): string {
+  const actions = parseActions(message.actions);
+  const architecture = actions.find(
     (action) => action.type === "architecture" && action.sub,
   );
+  if (actions.some((action) => action.type === "architecture_package")) {
+    return t("architecture.package.message");
+  }
   return architecture?.sub ?? message.content;
+}
+
+function packageDisplaySub(row: ActionRow, t: (key: Key) => string): string | undefined {
+  if (row.design_dir && typeof row.file_count === "number") {
+    const commit = row.package_commit_sha?.slice(0, 12);
+    return [
+      row.design_dir,
+      `${row.file_count} ${t("architecture.package.files")}`,
+      commit ? `commit ${commit}` : undefined,
+    ].filter(Boolean).join(" · ");
+  }
+  return row.sub?.replace(/\b(\d+)\s+(?:fichiers|files)\b/, `$1 ${t("architecture.package.files")}`);
 }
 
 function ActionCard({ actions }: { actions: string }) {
@@ -187,9 +207,13 @@ function ActionCard({ actions }: { actions: string }) {
                       ? "architecture.action.complete"
                       : "architecture.action.question",
                   )
+                : row.type === "architecture_package"
+                  ? t("architecture.action.package_ready")
                 : row.title ?? JSON.stringify(row)}
             </strong>
-            {row.type !== "architecture" && row.sub && <p>{row.sub}</p>}
+            {row.type !== "architecture" && packageDisplaySub(row, t) && (
+              <p>{packageDisplaySub(row, t)}</p>
+            )}
           </div>
         </div>
       ))}
@@ -454,7 +478,7 @@ function ChatTab({ project }: { project: string }) {
                 {time && ` · ${time}`}
               </div>
               <div className="msg-body">
-                <p>{messageDisplayContent(message)}</p>
+                <p>{messageDisplayContent(message, t)}</p>
                 {message.actions && <ActionCard actions={message.actions} />}
               </div>
             </div>

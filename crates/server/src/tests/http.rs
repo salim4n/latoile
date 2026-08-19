@@ -152,7 +152,8 @@ async fn an_architecture_brief_starts_a_persistent_socratic_session() {
             &format!("/api/projects/{project}/messages"),
             Some(serde_json::json!({
                 "content": "Construire un portail de facturation pour cabinets.",
-                "intent": "architecture_brief"
+                "intent": "architecture_brief",
+                "locale": "fr-FR"
             })),
         )))
         .await

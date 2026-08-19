@@ -125,15 +125,20 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
         .for_project(project)
         .await?
         .ok_or(UseCaseError::NotFound("conversation"))?;
+    let copy = package_copy(&session.requested_locale, version);
     let actions = serde_json::json!([{
         "type": "architecture_package",
-        "title": format!("Paquet architecture v{version} prêt"),
+        "title": copy.title,
         "sub": format!(
-            "{} · {} fichiers · commit {}",
+            "{} · {} {} · commit {}",
             design_dir,
             generated.evidence.changed_files.len(),
+            copy.files,
             &generated.evidence.head_sha[..generated.evidence.head_sha.len().min(12)]
         ),
+        "version": version,
+        "design_dir": design_dir,
+        "file_count": generated.evidence.changed_files.len(),
         "spec_version_id": spec.id.as_str(),
         "skill_name": skill_name,
         "skill_digest": skill_digest,
@@ -147,7 +152,7 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
         MessageId::new(ulid::Ulid::new().to_string())?,
         conversation.id,
         Author::Manager,
-        "L'Architecte a produit un paquet confiné et vérifié. La spec attend maintenant votre validation.",
+        copy.message,
         Some(actions.to_string()),
     )?;
     ConversationStore::append(store, &message).await?;
@@ -162,3 +167,29 @@ pub(crate) async fn produce_architecture_package<A: AgentChannel>(
     .await?;
     Ok(message)
 }
+
+struct PackageCopy {
+    title: String,
+    message: &'static str,
+    files: &'static str,
+}
+
+fn package_copy(locale: &str, version: u32) -> PackageCopy {
+    if locale == "fr-FR" {
+        PackageCopy {
+            title: format!("Paquet architecture v{version} prêt"),
+            message: "L'Architecte a produit un paquet confiné et vérifié. La spec attend maintenant votre validation.",
+            files: "fichiers",
+        }
+    } else {
+        PackageCopy {
+            title: format!("Architecture package v{version} ready"),
+            message: "The Architect produced a confined, verified package. The specification is ready for your validation.",
+            files: "files",
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "produce_architecture_package/qa_regression_issue_014.rs"]
+mod qa_regression_issue_014;
