@@ -19,6 +19,7 @@
 //! dev servers exist.
 
 mod alloc;
+mod command;
 mod error;
 mod logs;
 mod process;

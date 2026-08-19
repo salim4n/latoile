@@ -11,9 +11,6 @@ use latoile_core::ports::{
 use std::path::Path;
 use tokio::process::Command;
 
-const FALLBACK_DEV_COMMAND: &str =
-    "printf 'LaToile: no dev command detected; configure dev_command for this project\\n' >&2; exit 64";
-
 impl<S: SecretStore> WorkspaceProvisioner for GitHub<S> {
     async fn provision(&self, input: &ProvisionWorkspaceInput) -> PortResult<ProvisionedWorkspace> {
         provision(self, input).await.map_err(Into::into)
@@ -210,9 +207,10 @@ async fn provision<S: SecretStore>(
     checkout_work_branch(&canonical, &token, &input.work_branch, &default_branch).await?;
     let dev_command = match input.dev_command.as_deref().map(str::trim) {
         Some(command) if !command.is_empty() => command.to_string(),
-        _ => detect_dev_command(&canonical)
-            .await
-            .unwrap_or_else(|| FALLBACK_DEV_COMMAND.into()),
+        // An empty command deliberately means "automatic". Preview resolves
+        // it again at start time because greenfield repositories are commonly
+        // empty during onboarding and gain their package metadata later.
+        _ => detect_dev_command(&canonical).await.unwrap_or_default(),
     };
 
     Ok(ProvisionedWorkspace {

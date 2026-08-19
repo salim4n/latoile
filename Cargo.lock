@@ -1631,6 +1631,8 @@ version = "0.1.0"
 dependencies = [
  "latoile-core",
  "libc",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
 ]

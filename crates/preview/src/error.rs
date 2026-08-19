@@ -6,6 +6,11 @@ use latoile_core::ports::PortError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PreviewError {
+    /// Automatic detection still has no runnable project metadata.
+    #[error(
+        "no preview command detected yet; configure dev_command or generate a dev/start script"
+    )]
+    NoDevCommand,
     /// The dev command could not be launched at all.
     #[error("spawning the dev server failed: {0}")]
     Spawn(String),
