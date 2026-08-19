@@ -401,7 +401,7 @@ fn package_prompt(bundle: &ArchitectSkillBundle, request: &ArchitecturePackageRe
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
-        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable and unique; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
+        "{}\n\n---\n\nPACKAGE-ONLY AUTHORITY\nOperating mode: {}\nPinned skill SHA-256: {}\nWrite ONLY under `{}`. Do not execute commands. Do not modify source, configuration, scripts, dependencies or files outside that directory. Produce specifications, Mermaid diagrams and self-contained static HTML only.\n\nDURABLE OWNER DECISIONS\n{}\n\nMANDATORY PACKAGE CONTRACT\nCreate every file below:\n- package-manifest.md\n- architecture-spec.md\n- domain-model.md\n- data-model.md\n- api-contract.md\n- architecture-blueprint.md\n- component-specification.md\n- stack-decisions.md\n- architecture-contract.md\n- guardian-checklist.md\n- user-flows.md\n- screen-inventory.md\n- design-tokens.md\n- gallery.html\n- adrs/ADR-001-*.md (at least one ADR)\n- mockups/<scenario>.html (one self-contained page for every P0 scenario)\n\n`package-manifest.md` MUST contain exactly one fenced `latoile-package` JSON object with schema_version 2, the pinned skill_digest and operating_mode. Its `deliverables` array must enumerate EVERY package file exactly once as `{{path, kind}}`. Its non-empty `p0_scenarios` array must define each visual contract as `{{comparison_id, screen, state, locale, theme, route, fixture, readiness_selector, stable_selectors, allowed_masks, viewport: {{width, height, device_scale_factor_milli}}, mockup}}`. Theme is light or dark; route starts with `/`; fixture names synthetic data only; readiness_selector must identify the deterministic ready state; stable_selectors must uniquely identify measured elements; allowed_masks is an explicit subset of stable_selectors and may be empty. Comparison ids are stable, unique, at most 128 characters, and use only ASCII letters, digits, `.`, `-`, or `_`; viewport values are explicit. Every comparison_id must appear in screen-inventory.md. Gallery must link every P0 mockup. Each mockup root must pin its comparison id, screen, state, locale, theme, route, fixture and viewport with `data-latoile-comparison-id`, `data-latoile-screen`, `data-latoile-state`, `data-latoile-locale`, `data-latoile-theme`, `data-latoile-route`, `data-latoile-fixture`, and `data-latoile-viewport=\"<width>x<height>@<device_scale_factor_milli>\"`. Compute SHA-256 of the exact `design-tokens.md` bytes and include `data-latoile-token-digest=\"<digest>\"` on the root element of gallery.html and every mockup. No scripts, event handlers, forms, frames, external assets or network URLs. Finish with a concise summary; LaToile validates and commits the package.",
         bundle.render(),
         request.operating_mode.as_str(),
         request.skill_digest,
@@ -565,12 +565,13 @@ fn validate_package(
     for scenario in &manifest.p0_scenarios {
         let mockup_path = Path::new(&scenario.mockup);
         let stable_selectors = scenario.stable_selectors.iter().collect::<BTreeSet<_>>();
-        if scenario.comparison_id.trim().is_empty()
-            || scenario.comparison_id.len() > 128
-            || !scenario.comparison_id.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-            })
-            || scenario.screen.trim().is_empty()
+        if !comparison_id_safe(&scenario.comparison_id) {
+            return Err(AgentError::Prompt(
+                "P0 comparison_id must use at most 128 ASCII letters, digits, dots, dashes or underscores"
+                    .into(),
+            ));
+        }
+        if scenario.screen.trim().is_empty()
             || scenario.screen.len() > 128
             || scenario.state.trim().is_empty()
             || scenario.state.len() > 128
@@ -749,6 +750,14 @@ fn validate_manifest_header(
 
 fn selector_contract_safe(selector: &str) -> bool {
     !selector.trim().is_empty() && selector.len() <= 256 && !selector.chars().any(char::is_control)
+}
+
+fn comparison_id_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
 }
 
 fn html_is_self_contained(html: &str) -> bool {
@@ -1359,3 +1368,7 @@ mod html_safety_tests {
 #[cfg(test)]
 #[path = "architecture_package/qa_regression_issue_008.rs"]
 mod qa_regression_issue_008;
+
+#[cfg(test)]
+#[path = "architecture_package/qa_regression_issue_011.rs"]
+mod qa_regression_issue_011;
