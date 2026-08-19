@@ -352,6 +352,9 @@ impl ArchitectureSession {
             ));
         }
         self.status = ArchitectureStatus::Failed;
+        if self.package_status == ArchitecturePackageStatus::Generating {
+            self.package_status = ArchitecturePackageStatus::NotStarted;
+        }
         self.failure_reason = Some(reason);
         Ok(())
     }
@@ -366,9 +369,16 @@ impl ArchitectureSession {
             .into());
         }
         self.status = ArchitectureStatus::Cancelled;
+        if self.package_status == ArchitecturePackageStatus::Generating {
+            self.package_status = ArchitecturePackageStatus::NotStarted;
+        }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "architecture/qa_regression_issue_009.rs"]
+mod qa_regression_issue_009;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchitectureQuestionStatus {

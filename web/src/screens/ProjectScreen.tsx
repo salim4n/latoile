@@ -272,8 +272,10 @@ function ArchitecturePanel({
   const active =
     !["failed", "cancelled"].includes(session.status) &&
     session.package_status !== "draft_ready";
-  const statusLabel =
-    session.package_status === "draft_ready"
+  const terminal = session.status === "failed" || session.status === "cancelled";
+  const statusLabel = terminal
+    ? t(ARCHITECTURE_STATUS_KEYS[session.status])
+    : session.package_status === "draft_ready"
       ? t("architecture.package.ready")
       : session.package_status === "generating"
         ? t("architecture.package.generating")
@@ -389,6 +391,11 @@ function ChatTab({ project }: { project: string }) {
       architecture.reload();
     } catch {
       setSendError(true);
+      // Architecture generation can fail after the owner's message has been
+      // durably stored. Refresh both resources so the terminal reason is
+      // visible immediately even though no success event was emitted.
+      messages.reload();
+      architecture.reload();
     } finally {
       setSending(false);
     }
