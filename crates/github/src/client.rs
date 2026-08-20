@@ -13,6 +13,7 @@
 use crate::error::GitHubError;
 use latoile_core::ports::{GitHubClient, PortResult, RepoInfo, SecretStore};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// The default secret name in the vault.
 pub const DEFAULT_TOKEN_NAME: &str = "github_token";
@@ -22,6 +23,11 @@ pub struct GitHubConfig {
     /// `https://api.github.com` in production; tests point it at a mock.
     pub api_base: String,
     pub token_name: String,
+    /// Root below which project checkouts are provisioned.
+    pub workspace_root: PathBuf,
+    /// Git smart-HTTP base. Tests use a local file URL; production uses
+    /// GitHub without putting credentials in the URL.
+    pub git_remote_base: String,
 }
 
 impl Default for GitHubConfig {
@@ -29,14 +35,16 @@ impl Default for GitHubConfig {
         Self {
             api_base: "https://api.github.com".into(),
             token_name: DEFAULT_TOKEN_NAME.into(),
+            workspace_root: PathBuf::from("workspace"),
+            git_remote_base: "https://github.com".into(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct GitHub<S> {
-    config: GitHubConfig,
-    secrets: S,
+    pub(crate) config: GitHubConfig,
+    pub(crate) secrets: S,
     http: reqwest::Client,
 }
 
@@ -44,6 +52,7 @@ pub struct GitHub<S> {
 struct RepoJson {
     full_name: String,
     description: Option<String>,
+    private: bool,
 }
 
 /// The 422 body: `{"message": "...", "errors": [...]}`. The message is the
@@ -76,7 +85,7 @@ impl<S: SecretStore> GitHub<S> {
             .expect("a reqwest client with default settings builds")
     }
 
-    async fn token(&self) -> Result<String, GitHubError> {
+    pub(crate) async fn token(&self) -> Result<String, GitHubError> {
         self.secrets
             .get(&self.config.token_name)
             .await
@@ -85,7 +94,10 @@ impl<S: SecretStore> GitHub<S> {
     }
 
     /// Map a response's status to an error, or hand it back for decoding.
-    async fn checked(response: reqwest::Response, what: &str) -> Result<reqwest::Response, GitHubError> {
+    async fn checked(
+        response: reqwest::Response,
+        what: &str,
+    ) -> Result<reqwest::Response, GitHubError> {
         let status = response.status();
         if status.is_success() {
             return Ok(response);
@@ -125,6 +137,7 @@ impl<S: SecretStore> GitHubClient for GitHub<S> {
             .map(|r| RepoInfo {
                 full_name: r.full_name,
                 description: r.description,
+                private: r.private,
             })
             .collect())
     }
@@ -153,6 +166,41 @@ impl<S: SecretStore> GitHubClient for GitHub<S> {
             .await
             .map_err(|e| GitHubError::Decode(e.to_string()))?;
         Ok(url.html_url)
+    }
+
+    async fn find_open_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> PortResult<Option<String>> {
+        let owner = repo
+            .split_once('/')
+            .map(|(owner, _)| owner)
+            .filter(|owner| !owner.is_empty())
+            .ok_or_else(|| {
+                GitHubError::Validation("repository must look like owner/name".into())
+            })?;
+        let token = self.token().await?;
+        let response = self
+            .http
+            .get(format!("{}/repos/{repo}/pulls", self.config.api_base))
+            .bearer_auth(token)
+            .query(&[
+                ("state", "open".to_string()),
+                ("head", format!("{owner}:{head}")),
+                ("base", base.to_string()),
+                ("per_page", "1".to_string()),
+            ])
+            .send()
+            .await
+            .map_err(GitHubError::from)?;
+        let pulls = Self::checked(response, repo)
+            .await?
+            .json::<Vec<PullJson>>()
+            .await
+            .map_err(|e| GitHubError::Decode(e.to_string()))?;
+        Ok(pulls.into_iter().next().map(|pull| pull.html_url))
     }
 }
 

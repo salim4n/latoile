@@ -5,18 +5,18 @@
 
 use super::UseCaseError;
 use crate::store::Store;
-use latoile_core::event::{EventKind, NewEvent};
-use latoile_core::ids::SpecVersionId;
-use latoile_core::ports::{EventLog, ProjectStore, SpecStore, TaskStore};
 use latoile_core::SpecVersion;
+use latoile_core::ids::SpecVersionId;
+use latoile_core::ports::{AgentChannel, ProjectStore, SpecStore};
 
-pub struct ApproveSpec {
+pub struct ApproveSpec<A> {
     store: Store,
+    agents: A,
 }
 
-impl ApproveSpec {
-    pub fn new(store: Store) -> Self {
-        Self { store }
+impl<A: AgentChannel> ApproveSpec<A> {
+    pub fn new(store: Store, agents: A) -> Self {
+        Self { store, agents }
     }
 
     pub async fn execute(&self, id: &SpecVersionId) -> Result<SpecVersion, UseCaseError> {
@@ -26,45 +26,33 @@ impl ApproveSpec {
             .spec_by_id(id)
             .await?
             .ok_or(UseCaseError::NotFound("spec version"))?;
-        let previous = self.store.approved_for_project(&spec.project_id).await?;
+        if spec.provenance.is_none() {
+            return Err(latoile_core::DomainError::Invariant(
+                "only a complete immutable Architect package can be approved",
+            )
+            .into());
+        }
+        let project_id = spec.project_id.clone();
+        let verification = self
+            .agents
+            .verify_architecture_package(&project_id, &spec)
+            .await?;
 
         // 3. Domain. approve() refuses anything but a draft; supersede()
         // refuses anything but the approved one.
-        spec.approve()?;
-        let mut previous = previous;
+        spec.approve(&verification)?;
+        let mut previous = self.store.approved_for_project(&project_id).await?;
         if let Some(prev) = previous.as_mut() {
             prev.supersede()?;
         }
 
-        // 4. Persist, and the project is now specced.
-        if let Some(prev) = previous {
-            SpecStore::save(&self.store, &prev).await?;
-        }
-        SpecStore::save(&self.store, &spec).await?;
-        let mut project = ProjectStore::get(&self.store, &spec.project_id)
+        // 4. Persist every approval consequence in one SQLite transaction.
+        let mut project = ProjectStore::get(&self.store, &project_id)
             .await?
             .ok_or(UseCaseError::NotFound("project"))?;
         project.mark_specced();
-        ProjectStore::save(&self.store, &project).await?;
-
-        // Tasks waiting on the board materialize THIS spec (§5.2): bind
-        // every task that has no spec yet, so the next dispatch passes the
-        // spec-before-code guard. Tasks already bound keep their spec.
-        let tasks = self.store.list_for_project(&spec.project_id).await?;
-        for mut task in tasks {
-            if task.spec_version_id.is_none() {
-                task.bind_spec(spec.id.clone());
-                TaskStore::save(&self.store, &task).await?;
-            }
-        }
-
-        // 5. Journal.
         self.store
-            .append(&NewEvent {
-                project_id: spec.project_id.clone(),
-                kind: EventKind::SpecApproved,
-                payload: format!("{{\"spec_version_id\":\"{}\"}}", spec.id),
-            })
+            .approve_spec_atomically(&spec, previous.as_ref(), &project)
             .await?;
 
         // 6. DTO.
@@ -77,7 +65,46 @@ mod tests {
     use super::*;
     use crate::store::test_fixtures;
     use latoile_core::ids::SpecVersionId;
+    use latoile_core::ports::{ManagerReply, PortResult, TaskStore};
     use latoile_core::{ProjectStatus, SpecStatus, SpecVersion};
+
+    #[derive(Clone)]
+    struct FakeAgents {
+        valid: bool,
+    }
+
+    impl AgentChannel for FakeAgents {
+        async fn tell_manager(
+            &self,
+            _project: &latoile_core::ProjectId,
+            _message: &str,
+        ) -> PortResult<ManagerReply> {
+            unimplemented!()
+        }
+
+        async fn verify_architecture_package(
+            &self,
+            _project: &latoile_core::ProjectId,
+            spec: &SpecVersion,
+        ) -> PortResult<latoile_core::ArchitecturePackageValidation> {
+            let mut verification = test_fixtures::test_verification(spec);
+            verification.valid = self.valid;
+            Ok(verification)
+        }
+
+        async fn start_run(
+            &self,
+            _project: &latoile_core::ProjectId,
+            _run: &latoile_core::Run,
+            _prompt: &str,
+        ) -> PortResult<String> {
+            unimplemented!()
+        }
+
+        async fn cancel_run(&self, _run: &latoile_core::RunId) -> PortResult<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn approving_supersedes_the_previous_approved_spec() {
@@ -90,9 +117,11 @@ mod tests {
             None,
         )
         .unwrap();
+        let mut draft = draft;
+        test_fixtures::attach_test_provenance(&mut draft);
         SpecStore::save(&store, &draft).await.unwrap();
 
-        let approved = ApproveSpec::new(store.clone())
+        let approved = ApproveSpec::new(store.clone(), FakeAgents { valid: true })
             .execute(&draft.id)
             .await
             .unwrap();
@@ -114,8 +143,16 @@ mod tests {
         let id = SpecVersionId::new(test_fixtures::SPEC).unwrap();
         // s1 is already approved — approving again must fail, and the store
         // must stay exactly as it was.
-        assert!(ApproveSpec::new(store.clone()).execute(&id).await.is_err());
-        let still = store.approved_for_project(&test_fixtures::PROJECT).await.unwrap();
+        assert!(
+            ApproveSpec::new(store.clone(), FakeAgents { valid: true })
+                .execute(&id)
+                .await
+                .is_err()
+        );
+        let still = store
+            .approved_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(still.unwrap().status, SpecStatus::Approved);
     }
 
@@ -143,8 +180,10 @@ mod tests {
             None,
         )
         .unwrap();
+        let mut draft = draft;
+        test_fixtures::attach_test_provenance(&mut draft);
         SpecStore::save(&store, &draft).await.unwrap();
-        ApproveSpec::new(store.clone())
+        ApproveSpec::new(store.clone(), FakeAgents { valid: true })
             .execute(&draft.id)
             .await
             .unwrap();
@@ -159,9 +198,42 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(t1.spec_version_id.as_ref().map(|s| s.as_str()), Some("s1"));
+    }
+
+    #[tokio::test]
+    async fn invalid_package_cannot_partially_change_the_database() {
+        let store = test_fixtures::store_with_approved_spec().await;
+        let mut draft = SpecVersion::new(
+            SpecVersionId::new("s2").unwrap(),
+            test_fixtures::PROJECT.clone(),
+            2,
+            "design/v0002-test/",
+            None,
+        )
+        .unwrap();
+        test_fixtures::attach_test_provenance(&mut draft);
+        SpecStore::save(&store, &draft).await.unwrap();
+
+        assert!(
+            ApproveSpec::new(store.clone(), FakeAgents { valid: false })
+                .execute(&draft.id)
+                .await
+                .is_err()
+        );
         assert_eq!(
-            t1.spec_version_id.as_ref().map(|s| s.as_str()),
-            Some("s1")
+            store.spec_by_id(&draft.id).await.unwrap().unwrap().status,
+            SpecStatus::Draft
+        );
+        assert_eq!(
+            store
+                .approved_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+                .as_str(),
+            "s1"
         );
     }
 }

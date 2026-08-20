@@ -6,7 +6,56 @@
 //! tree, tests point it at a tempdir. Nothing here reads a hardcoded path.
 
 use latoile_core::ids::RoleId;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+
+pub(crate) const ARCHITECT_SKILL_FILES: &[&str] = &[
+    "SKILL.md",
+    "references/brainstorming-method.md",
+    "references/reverse-architecture.md",
+    "references/database-modeling-uml.md",
+    "references/archetype-patterns.md",
+    "references/stack-selection-trees.md",
+    "references/ui-ux-design.md",
+    "references/ui-patterns.md",
+    "references/development-guardian.md",
+    "assets/ARCHITECTURE_CONTRACT.md",
+    "assets/VALIDATION-CHECKLIST.md",
+    "assets/templates/architecture-audit-template.md",
+    "assets/templates/arch-spec-template.md",
+    "assets/templates/adr-template.md",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDocument {
+    pub path: String,
+    pub contents: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectSkillBundle {
+    pub name: String,
+    pub digest: String,
+    pub documents: Vec<SkillDocument>,
+}
+
+impl ArchitectSkillBundle {
+    pub fn render(&self) -> String {
+        let mut rendered = format!(
+            "PINNED SKILL BUNDLE\nname: {}\nsha256: {}\nfiles: {}\n",
+            self.name,
+            self.digest,
+            self.documents.len()
+        );
+        for document in &self.documents {
+            rendered.push_str(&format!(
+                "\n<skill-document path=\"{}\">\n{}\n</skill-document>\n",
+                document.path, document.contents
+            ));
+        }
+        rendered
+    }
+}
 
 /// The fixed mapping from role id to skill directory
 /// (architecture-spec.md §3.3, and the skills tree convention).
@@ -44,6 +93,37 @@ impl Preambles {
             Ok(contents) if !contents.trim().is_empty() => contents,
             _ => role.as_str().to_string(),
         }
+    }
+
+    /// The Architect is the exception to thin-role fallback: architecture
+    /// decisions and mockups are only trusted when every mandatory skill
+    /// reference is present and content-addressed as one bundle.
+    pub fn architect_bundle(&self) -> std::io::Result<ArchitectSkillBundle> {
+        let root = self.skills_dir.join("app-architect-brainstorm");
+        let mut documents = Vec::with_capacity(ARCHITECT_SKILL_FILES.len());
+        let mut hasher = Sha256::new();
+        for relative in ARCHITECT_SKILL_FILES {
+            let contents = std::fs::read_to_string(root.join(relative))?;
+            if contents.trim().is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("mandatory Architect skill document is empty: {relative}"),
+                ));
+            }
+            hasher.update(relative.as_bytes());
+            hasher.update([0]);
+            hasher.update(contents.as_bytes());
+            hasher.update([0]);
+            documents.push(SkillDocument {
+                path: relative.to_string(),
+                contents,
+            });
+        }
+        Ok(ArchitectSkillBundle {
+            name: "app-architect-brainstorm".into(),
+            digest: format!("{:x}", hasher.finalize()),
+            documents,
+        })
     }
 }
 
@@ -96,5 +176,26 @@ mod tests {
             preambles.for_role(&RoleId::new("reviewer").unwrap()),
             "reviewer"
         );
+    }
+
+    #[test]
+    fn the_architect_bundle_is_complete_and_content_addressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("app-architect-brainstorm");
+        for relative in ARCHITECT_SKILL_FILES {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("material for {relative}")).unwrap();
+        }
+        let preambles = Preambles::new(dir.path().to_path_buf());
+        let first = preambles.architect_bundle().unwrap();
+        let second = preambles.architect_bundle().unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.documents.len(), ARCHITECT_SKILL_FILES.len());
+        assert_eq!(first.digest.len(), 64);
+        assert!(first.render().contains("references/ui-ux-design.md"));
+
+        std::fs::write(root.join("references/ui-ux-design.md"), "changed").unwrap();
+        assert_ne!(preambles.architect_bundle().unwrap().digest, first.digest);
     }
 }

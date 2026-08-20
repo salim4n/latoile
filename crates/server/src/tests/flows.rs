@@ -1,13 +1,51 @@
 //! Flow tests: approvals, spec approval, SSE resume, preview proxy, roles.
 
 use super::*;
+use crate::driver;
 use axum::http::StatusCode;
+use latoile_agents::{RunOutcome, RunReport, RunState};
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ApprovalId, RunId, SpecVersionId, TaskId};
-use latoile_core::ports::{ApprovalStore, EventLog, RunStore, SpecStore, TaskStore};
-use latoile_core::{Approval, ApprovalKind, Preview, PreviewId, SpecVersion, Task};
+use latoile_core::ports::{
+    ApprovalStore, EventLog, RunStore, SpecStore, TaskStore, VisualComparisonStore,
+};
+use latoile_core::{
+    Approval, ApprovalKind, Preview, PreviewId, SpecVersion, Task, VisualComparison,
+    VisualComparisonStatus,
+};
 use latoile_core::{RoleId, TriggeredBy};
 use tower::ServiceExt;
+
+fn original_visual_evidence(project: &str) -> VisualComparison {
+    VisualComparison {
+        id: latoile_core::VisualComparisonId::new("visual:executor-1:home-default-fr-mobile")
+            .unwrap(),
+        spec_version_id: SpecVersionId::new("s1").unwrap(),
+        project_id: ProjectId::new(project).unwrap(),
+        run_id: RunId::new("executor-1").unwrap(),
+        comparison_id: "home-default-fr-mobile".into(),
+        manifest_digest: "c".repeat(64),
+        package_commit_sha: "1".repeat(40),
+        baseline_png_digest: "d".repeat(64),
+        status: VisualComparisonStatus::Reservation,
+        changed_pixels: 2_633,
+        total_pixels: 390 * 844,
+        pixel_ratio_micros: 8_000,
+        max_geometry_delta_milli: 4_000,
+        accessibility_changes: 1,
+        render_png_digest: Some("7".repeat(64)),
+        pixel_diff_digest: Some("8".repeat(64)),
+        heatmap_png_digest: Some("9".repeat(64)),
+        geometry_diff_digest: Some("4".repeat(64)),
+        accessibility_diff_digest: Some("5".repeat(64)),
+        environment_digest: Some("6".repeat(64)),
+        browser_version: Some("Chrome/151".into()),
+        font_fingerprint: Some("b".repeat(64)),
+        failure_code: None,
+        failure_message: None,
+        recovery_action: None,
+    }
+}
 
 /// Seed the fixture chain project → approved spec → task → run, with the
 /// task driven to `review`.
@@ -20,7 +58,7 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(store, &mut spec).await;
     SpecStore::save(store, &spec).await.unwrap();
 
     let mut task = Task::new(
@@ -37,23 +75,162 @@ async fn seed_review_pending(store: &Store, project: &str) -> Approval {
     task.submit_for_review().unwrap();
     TaskStore::save(store, &task).await.unwrap();
 
-    let mut run = Run::new(
-        RunId::new("r1").unwrap(),
+    let mut executor = Run::new(
+        RunId::new("executor-1").unwrap(),
         task.id.clone(),
         RoleId::new("frontend").unwrap(),
         TriggeredBy::Manager,
     );
-    run.begin().unwrap();
-    RunStore::save(store, &run).await.unwrap();
+    executor.begin().unwrap();
+    executor.finish("login implemented").unwrap();
+    executor
+        .attach_evidence(
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            "{}".into(),
+        )
+        .unwrap();
+    RunStore::save(store, &executor).await.unwrap();
+    let visual_evidence = original_visual_evidence(project);
+    VisualComparisonStore::save(store, &visual_evidence)
+        .await
+        .unwrap();
+
+    let mut reviewer = Run::new(
+        RunId::new("r1").unwrap(),
+        task.id.clone(),
+        RoleId::new("reviewer").unwrap(),
+        TriggeredBy::Manager,
+    );
+    reviewer.begin().unwrap();
+    reviewer.bind_review_subject(executor.id.clone()).unwrap();
+    reviewer.finish("review complete").unwrap();
+    RunStore::save(store, &reviewer).await.unwrap();
 
     let approval = Approval::new(
         ApprovalId::new("a1").unwrap(),
-        run.id,
+        reviewer.id,
         ApprovalKind::Review,
-        "{}".into(),
+        serde_json::json!({
+            "schema_version": 2,
+            "reviewed_run_id": executor.id.as_str(),
+            "verdict": "approve_with_reservations",
+            "summary": "Le rendu est approuvable avec une réserve clavier.",
+            "findings": [{
+                "severity": "reservation",
+                "text": "Focus clavier absent.",
+                "location": "web/src/Login.tsx:42"
+            }],
+            "suggested_follow_ups": ["Corriger le focus clavier."],
+            "visual_evidence": {
+                "applicability": "required",
+                "references": [{
+                    "evidence_id": visual_evidence.id.as_str(),
+                    "comparison_id": visual_evidence.comparison_id,
+                    "status": visual_evidence.status.as_str(),
+                    "manifest_digest": visual_evidence.manifest_digest,
+                    "baseline_png_digest": visual_evidence.baseline_png_digest,
+                    "render_png_digest": visual_evidence.render_png_digest,
+                    "pixel_diff_digest": visual_evidence.pixel_diff_digest,
+                    "heatmap_png_digest": visual_evidence.heatmap_png_digest,
+                    "geometry_diff_digest": visual_evidence.geometry_diff_digest,
+                    "accessibility_diff_digest": visual_evidence.accessibility_diff_digest,
+                    "environment_digest": visual_evidence.environment_digest,
+                    "changed_pixels": visual_evidence.changed_pixels,
+                    "total_pixels": visual_evidence.total_pixels,
+                    "pixel_ratio_micros": visual_evidence.pixel_ratio_micros,
+                    "max_geometry_delta_milli": visual_evidence.max_geometry_delta_milli,
+                    "accessibility_changes": visual_evidence.accessibility_changes
+                }]
+            },
+            "gate": {
+                "trusted_v2": true,
+                "approvable": true,
+                "code": "trusted",
+                "message": "Verdict lié aux preuves serveur."
+            }
+        })
+        .to_string(),
     );
     ApprovalStore::save(store, &approval).await.unwrap();
     approval
+}
+
+#[tokio::test]
+async fn explicit_delivery_exposes_verified_sha_and_idempotent_pull_request() {
+    let (state, store, _) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+    seed_review_pending(&store, &project).await;
+    let grant = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({"granted": true})),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(grant.status(), StatusCode::OK);
+
+    let before = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let before = body_json(before).await;
+    assert_eq!(before["status"], "not_started");
+    assert_eq!(before["work_branch"], "work");
+
+    let delivered = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(delivered.status(), StatusCode::OK);
+    let delivered = body_json(delivered).await;
+    assert_eq!(delivered["status"], "pull_request_open");
+    assert_eq!(delivered["local_sha"], delivered["remote_sha"]);
+    assert_eq!(
+        delivered["pull_request_url"],
+        "https://github.com/salim4n/mon-app/pull/1"
+    );
+
+    let retried = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(body_json(retried).await, delivered);
+}
+
+#[tokio::test]
+async fn delivery_route_refuses_a_project_with_unapproved_work() {
+    let (state, _, _) = state().await;
+    let app = router(state);
+    let project = create_project(&app).await;
+    let response = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            &format!("/api/projects/{project}/delivery"),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -68,9 +245,41 @@ async fn a_granted_review_closes_the_task() {
         .oneshot(authed(request("GET", "/api/approvals", None)))
         .await
         .unwrap();
-    assert_eq!(body_json(pending).await.as_array().unwrap().len(), 1);
+    let pending = body_json(pending).await;
+    assert_eq!(pending.as_array().unwrap().len(), 1);
+    assert_eq!(pending[0]["project_id"], project);
+    assert_eq!(pending[0]["project_name"], "Mon App");
+    assert_eq!(pending[0]["task_title"], "Page de connexion");
+    assert_eq!(pending[0]["role_id"], "reviewer");
+    assert!(pending[0]["created_at"].as_str().unwrap().ends_with('Z'));
 
     let decided = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({
+                "granted": true,
+                "comment": "Validé après contrôle du rendu."
+            })),
+        )))
+        .await
+        .unwrap();
+    let decided = body_json(decided).await;
+    assert_eq!(decided["status"], "granted");
+    assert_eq!(
+        decided["decision_comment"],
+        "Validé après contrôle du rendu."
+    );
+    assert_eq!(approval.kind, ApprovalKind::Review);
+
+    let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.status, latoile_core::TaskStatus::Done);
+
+    let retry = app
         .clone()
         .oneshot(authed(request(
             "POST",
@@ -79,45 +288,218 @@ async fn a_granted_review_closes_the_task() {
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(decided).await["status"], "granted");
-    assert_eq!(approval.kind, ApprovalKind::Review);
-
-    let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(task.status, latoile_core::TaskStatus::Done);
+    assert_eq!(body_json(retry).await["status"], "granted");
+    let events = store.events_since(0).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|(_, event)| event.kind == EventKind::ApprovalGranted)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
-async fn a_rejected_review_leaves_the_task_in_review() {
-    let (state, store, _) = state().await;
-    let app = router(state);
+async fn a_rejected_review_starts_one_audited_corrective_run() {
+    let (state, store, agents) = state().await;
+    let app = router(state.clone());
     let project = create_project(&app).await;
     seed_review_pending(&store, &project).await;
+    let original_evidence =
+        VisualComparisonStore::list_for_run(&store, &RunId::new("executor-1").unwrap())
+            .await
+            .unwrap();
+    assert_eq!(original_evidence.len(), 1);
 
     let decided = app
         .clone()
         .oneshot(authed(request(
             "POST",
             "/api/approvals/a1",
-            Some(serde_json::json!({"granted": false})),
+            Some(serde_json::json!({
+                "granted": false,
+                "comment": "Corriger le focus et ajouter un test clavier."
+            })),
         )))
         .await
         .unwrap();
-    assert_eq!(body_json(decided).await["status"], "rejected");
+    let decided = body_json(decided).await;
+    assert_eq!(decided["status"], "rejected");
+    assert_eq!(
+        decided["decision_comment"],
+        "Corriger le focus et ajouter un test clavier."
+    );
+    let corrective = decided["corrective_run_id"].as_str().unwrap().to_string();
 
     let task = TaskStore::get(&store, &TaskId::new("t1").unwrap())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(task.status, latoile_core::TaskStatus::Review);
+    assert_eq!(task.status, latoile_core::TaskStatus::InProgress);
+    let corrective_run = RunStore::get(&store, &RunId::new(&corrective).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(corrective_run.role_id.as_str(), "frontend");
+    let correction_prompt = {
+        let prompts = agents.run_prompts.lock().unwrap();
+        prompts
+            .iter()
+            .find(|(role, _)| role == "frontend")
+            .map(|(_, prompt)| prompt.clone())
+            .unwrap()
+    };
+    assert!(correction_prompt.contains("Focus clavier absent"));
+    assert!(correction_prompt.contains("Corriger le focus et ajouter un test clavier"));
+
+    let board = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}/tasks"),
+            None,
+        )))
+        .await
+        .unwrap();
+    let board = body_json(board).await;
+    assert_eq!(board[0]["next_action"], "corrective_run_in_progress");
+    assert_eq!(
+        board[0]["latest_decision_comment"],
+        "Corriger le focus et ajouter un test clavier."
+    );
+
+    // The detail endpoint keeps the terminal decision visible after reload.
+    let detail = app
+        .clone()
+        .oneshot(authed(request("GET", "/api/approvals/a1", None)))
+        .await
+        .unwrap();
+    let detail = body_json(detail).await;
+    assert_eq!(detail["status"], "rejected");
+    assert_eq!(detail["corrective_run_id"], corrective);
+
+    // Same HTTP decision is idempotent: no second agent run.
+    let retry = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/approvals/a1",
+            Some(serde_json::json!({
+                "granted": false,
+                "comment": "retry"
+            })),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(body_json(retry).await["corrective_run_id"], corrective);
+    assert_eq!(agents.run_prompts.lock().unwrap().len(), 1);
 
     let pending = app
+        .clone()
         .oneshot(authed(request("GET", "/api/approvals", None)))
         .await
         .unwrap();
     assert!(body_json(pending).await.as_array().unwrap().is_empty());
+
+    // The corrected executor returns through the same Reviewer-first cycle.
+    let handle = driver::spawn_every(state, std::time::Duration::from_millis(30));
+    agents.run_states.lock().unwrap().insert(
+        corrective.clone(),
+        RunState::Done(RunReport::terminal(
+            RunOutcome::Finished,
+            "Focus corrected and keyboard test added",
+        )),
+    );
+
+    let task_id = TaskId::new("t1").unwrap();
+    let mut second_reviewer = None;
+    for _ in 0..150 {
+        second_reviewer = RunStore::list_for_task(&store, &task_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|run| run.role_id.as_str() == "reviewer" && run.id.as_str() != "r1");
+        if second_reviewer.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let second_reviewer = second_reviewer.expect("corrected work must dispatch a new Reviewer");
+    assert_eq!(second_reviewer.status, latoile_core::RunStatus::Running);
+
+    let comparisons = VisualComparisonStore::list_for_run(
+        &store,
+        second_reviewer.reviewed_run_id.as_ref().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(comparisons.len(), 1);
+    let evidence = &comparisons[0];
+    assert_ne!(evidence.id, original_evidence[0].id);
+    assert_ne!(evidence.run_id, original_evidence[0].run_id);
+    assert_eq!(evidence.comparison_id, original_evidence[0].comparison_id);
+    assert_eq!(
+        evidence.baseline_png_digest,
+        original_evidence[0].baseline_png_digest
+    );
+
+    let corrected_review = serde_json::json!({
+        "schema_version": 2,
+        "verdict": "approve",
+        "summary": "Le focus et le test clavier sont conformes.",
+        "findings": [],
+        "suggested_follow_ups": [],
+        "visual_evidence": {
+            "applicability": "required",
+            "references": [{
+                "evidence_id": evidence.id.as_str(),
+                "manifest_digest": evidence.manifest_digest,
+                "baseline_png_digest": evidence.baseline_png_digest,
+                "render_png_digest": evidence.render_png_digest,
+                "pixel_diff_digest": evidence.pixel_diff_digest,
+                "heatmap_png_digest": evidence.heatmap_png_digest,
+                "geometry_diff_digest": evidence.geometry_diff_digest,
+                "accessibility_diff_digest": evidence.accessibility_diff_digest,
+                "environment_digest": evidence.environment_digest,
+            }]
+        }
+    })
+    .to_string();
+    agents.run_states.lock().unwrap().insert(
+        second_reviewer.id.as_str().into(),
+        RunState::Done(RunReport::terminal(RunOutcome::Finished, corrected_review)),
+    );
+
+    let mut fresh = Vec::new();
+    for _ in 0..100 {
+        fresh = ApprovalStore::list_pending(&store).await.unwrap();
+        if !fresh.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    handle.abort();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].run_id, second_reviewer.id);
+    let fresh_payload: serde_json::Value = serde_json::from_str(&fresh[0].payload).unwrap();
+    assert_eq!(fresh_payload["verdict"], "approve");
+    assert_eq!(fresh_payload["reviewed_run_id"], corrective);
+    assert_eq!(
+        fresh_payload["visual_evidence"]["references"][0]["evidence_id"],
+        evidence.id.as_str()
+    );
+    assert_eq!(
+        fresh_payload["visual_evidence"]["references"][0]["baseline_png_digest"],
+        original_evidence[0].baseline_png_digest
+    );
+    assert_eq!(
+        TaskStore::get(&store, &task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        latoile_core::TaskStatus::Review
+    );
 }
 
 #[tokio::test]
@@ -126,7 +508,7 @@ async fn approving_a_spec_marks_the_project_specced() {
     let app = router(state);
     let project = create_project(&app).await;
 
-    let draft = SpecVersion::new(
+    let mut draft = SpecVersion::new(
         SpecVersionId::new("s1").unwrap(),
         ProjectId::new(&project).unwrap(),
         1,
@@ -134,6 +516,7 @@ async fn approving_a_spec_marks_the_project_specced() {
         None,
     )
     .unwrap();
+    crate::tests::attach_test_spec_provenance(&store, &mut draft).await;
     SpecStore::save(&store, &draft).await.unwrap();
 
     let list = app
@@ -147,16 +530,91 @@ async fn approving_a_spec_marks_the_project_specced() {
         .unwrap();
     assert_eq!(body_json(list).await[0]["status"], "draft");
 
+    let validation = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/validation",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(validation.status(), StatusCode::OK);
+    let validation = body_json(validation).await;
+    assert_eq!(validation["valid"], true);
+    assert_eq!(
+        validation["scenarios"][0]["comparison_id"],
+        "home-default-fr-mobile"
+    );
+
+    let gallery = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/artifacts/gallery.html",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(gallery.status(), StatusCode::OK);
+    assert_eq!(
+        gallery.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    let gallery = http_body_util::BodyExt::collect(gallery.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(String::from_utf8(gallery.to_vec())
+        .unwrap()
+        .contains("stub artifact gallery.html"));
+
+    let captured = app
+        .clone()
+        .oneshot(authed(request(
+            "POST",
+            "/api/spec-versions/s1/baselines",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(captured.status(), StatusCode::OK);
+    let captured = body_json(captured).await;
+    assert_eq!(captured[0]["status"], "ready");
+    assert_eq!(captured[0]["browser_version"], "Chrome/151");
+    assert_eq!(captured[0]["png_digest"], "d".repeat(64));
+
+    let png = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            "/api/spec-versions/s1/baselines/home-default-fr-mobile/image",
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(png.status(), StatusCode::OK);
+    assert_eq!(png.headers()["content-type"], "image/png");
+    assert_eq!(png.headers()["etag"], format!("\"{}\"", "d".repeat(64)));
+
     let approved = app
         .clone()
-        .oneshot(authed(request("POST", "/api/spec-versions/s1/approve", None)))
+        .oneshot(authed(request(
+            "POST",
+            "/api/spec-versions/s1/approve",
+            None,
+        )))
         .await
         .unwrap();
     assert_eq!(approved.status(), StatusCode::OK);
     assert_eq!(body_json(approved).await["status"], "approved");
 
     let detail = app
-        .oneshot(authed(request("GET", &format!("/api/projects/{project}"), None)))
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/projects/{project}"),
+            None,
+        )))
         .await
         .unwrap();
     assert_eq!(body_json(detail).await["status"], "specced");
@@ -220,7 +678,9 @@ async fn the_preview_proxy_forwards_to_the_dev_server() {
     let project = create_project(&app).await;
 
     // A throwaway dev server on 127.0.0.1.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -291,7 +751,11 @@ async fn the_roles_route_lists_the_seeded_team() {
         .unwrap();
     let roles = body_json(response).await;
     assert_eq!(roles.as_array().unwrap().len(), 5);
-    assert!(roles.as_array().unwrap().iter().any(|r| r["id"] == "manager"));
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["id"] == "manager"));
 }
 
 /// The documented D9 exception: `?token=` works for preview paths only.
@@ -317,7 +781,11 @@ async fn the_query_token_only_opens_preview_paths() {
     // The data API refuses the query token: headers only.
     let data = app
         .clone()
-        .oneshot(request("GET", &format!("/api/projects?token={TOKEN}"), None))
+        .oneshot(request(
+            "GET",
+            &format!("/api/projects?token={TOKEN}"),
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(data.status(), StatusCode::UNAUTHORIZED);

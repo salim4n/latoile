@@ -12,21 +12,32 @@
 //! maintained by SQLite (ISO-8601 TEXT) and never read back.
 
 mod approval;
+mod architecture;
+mod architecture_draft;
 mod conversation;
+mod delivery;
 mod event;
 mod preview;
 mod project;
 mod role;
 mod run;
+mod setting;
 mod spec;
+mod spec_approval;
 mod task;
+mod visual_baseline;
+mod visual_comparison;
 
+pub use approval::InboxApprovalRow;
+pub use conversation::ProjectMessageRow;
+pub use project::ProjectListRow;
 pub use role::RoleRow;
+pub use task::ProjectTaskRow;
 
 use latoile_core::error::DomainError;
 use latoile_core::ports::PortError;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -108,21 +119,133 @@ impl Store {
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Cheap readiness proof used by the open health endpoint. Migrations
+    /// have already completed when this can be called, so a failed read means
+    /// the process must not advertise a healthy database.
+    pub async fn health(&self) -> Result<(), StoreError> {
+        let value: i64 = sqlx::query_scalar("SELECT 1").fetch_one(&self.pool).await?;
+        if value != 1 {
+            return Err(StoreError::CorruptRow(
+                "database readiness query returned an unexpected value".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Produce a transactionally consistent, standalone SQLite file while
+    /// the source uses WAL. `VACUUM INTO` never copies a half-checkpointed
+    /// database and refuses to overwrite the destination.
+    pub async fn backup_to(&self, destination: &Path) -> Result<(), StoreError> {
+        if destination.exists() {
+            return Err(StoreError::CorruptRow(format!(
+                "backup destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let destination = destination.to_str().ok_or_else(|| {
+            StoreError::CorruptRow("backup destination is not valid UTF-8".into())
+        })?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(destination)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Full SQLite structural check. Restore runs this on a disposable copy
+    /// before any file is installed into the deployment home.
+    pub async fn integrity_check(&self) -> Result<(), StoreError> {
+        let rows = sqlx::query("PRAGMA integrity_check")
+            .fetch_all(&self.pool)
+            .await?;
+        let findings = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>(0))
+            .collect::<Result<Vec<_>, _>>()?;
+        if findings.as_slice() != ["ok"] {
+            return Err(StoreError::CorruptRow(format!(
+                "SQLite integrity check failed: {}",
+                findings.join("; ")
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Shared fixtures so each aggregate's tests stay focused on its own table.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::*;
-    use latoile_core::ports::{ProjectStore, RunStore, SpecStore, TaskStore};
+    use latoile_core::ports::{
+        ArchitectureSessionStore, ProjectStore, RunStore, SpecStore, TaskStore, VisualBaselineStore,
+    };
     use latoile_core::{
-        Project, ProjectId, RoleId, Run, RunId, SpecVersion, SpecVersionId, Task, TaskId,
+        ArchitectureOperatingMode, ArchitecturePackageValidation, ArchitectureVisualScenario,
+        Project, ProjectId, RoleId, Run, RunId, SpecProvenance, SpecVersion, SpecVersionId, Task,
+        TaskId, VisualBaseline, VisualBaselineStatus,
     };
     use std::sync::LazyLock;
 
     pub(crate) static PROJECT: LazyLock<ProjectId> =
         LazyLock::new(|| ProjectId::new("p1").unwrap());
     pub(crate) const SPEC: &str = "s1";
+    pub(crate) const FINISHED_RUN: &str = "r-finished";
+
+    pub(crate) fn attach_test_provenance(spec: &mut SpecVersion) {
+        spec.attach_provenance(SpecProvenance {
+            architecture_session_id: latoile_core::ArchitectureSessionId::new("architecture-1")
+                .unwrap(),
+            skill_name: latoile_core::ARCHITECT_SKILL_NAME.into(),
+            skill_digest: "a".repeat(64),
+            operating_mode: ArchitectureOperatingMode::Greenfield,
+            package_digest: "b".repeat(64),
+            manifest_digest: "c".repeat(64),
+            package_commit_sha: "1".repeat(40),
+            package_tree_sha: "2".repeat(40),
+        })
+        .unwrap();
+    }
+
+    pub(crate) async fn seed_test_architecture_session(store: &Store) {
+        let session = latoile_core::ArchitectureSession::new(
+            latoile_core::ArchitectureSessionId::new("architecture-1").unwrap(),
+            PROJECT.clone(),
+        );
+        ArchitectureSessionStore::save(store, &session)
+            .await
+            .unwrap();
+    }
+
+    pub(crate) fn test_verification(spec: &SpecVersion) -> ArchitecturePackageValidation {
+        let provenance = spec.provenance.as_ref().unwrap();
+        ArchitecturePackageValidation {
+            valid: true,
+            package_digest: provenance.package_digest.clone(),
+            manifest_digest: provenance.manifest_digest.clone(),
+            commit_sha: provenance.package_commit_sha.clone(),
+            tree_sha: provenance.package_tree_sha.clone(),
+            file_count: 16,
+            gallery_path: "gallery.html".into(),
+            scenarios: vec![ArchitectureVisualScenario {
+                comparison_id: "home-default".into(),
+                screen: "home".into(),
+                state: "default".into(),
+                locale: "fr-FR".into(),
+                theme: "light".into(),
+                route: "/".into(),
+                fixture: "synthetic-default".into(),
+                readiness_selector: "main".into(),
+                stable_selectors: vec!["main".into()],
+                allowed_masks: Vec::new(),
+                viewport_width: 390,
+                viewport_height: 844,
+                device_scale_factor_milli: 1000,
+                mockup: "mockups/home-default.html".into(),
+            }],
+            findings: Vec::new(),
+        }
+    }
 
     pub(crate) async fn store_with_project() -> Store {
         let store = Store::open_ephemeral().await.unwrap();
@@ -140,13 +263,43 @@ pub(crate) mod test_fixtures {
         store
     }
 
-    pub(crate) async fn store_with_approved_spec() -> Store {
+    pub(crate) async fn store_with_approved_spec_without_baseline() -> Store {
         let store = store_with_project().await;
-        let mut spec =
-            SpecVersion::new(SpecVersionId::new(SPEC).unwrap(), PROJECT.clone(), 1, "design/", None)
-                .unwrap();
-        spec.approve().unwrap();
+        seed_test_architecture_session(&store).await;
+        let mut spec = SpecVersion::new(
+            SpecVersionId::new(SPEC).unwrap(),
+            PROJECT.clone(),
+            1,
+            "design/",
+            None,
+        )
+        .unwrap();
+        attach_test_provenance(&mut spec);
+        spec.approve(&test_verification(&spec)).unwrap();
         SpecStore::save(&store, &spec).await.unwrap();
+        store
+    }
+
+    pub(crate) async fn store_with_approved_spec() -> Store {
+        let store = store_with_approved_spec_without_baseline().await;
+        let baseline = VisualBaseline {
+            spec_version_id: SpecVersionId::new(SPEC).unwrap(),
+            project_id: PROJECT.clone(),
+            comparison_id: "home-default".into(),
+            manifest_digest: "c".repeat(64),
+            package_commit_sha: "1".repeat(40),
+            status: VisualBaselineStatus::Ready,
+            png_digest: Some("d".repeat(64)),
+            geometry_digest: Some("e".repeat(64)),
+            accessibility_digest: Some("f".repeat(64)),
+            environment_digest: Some("a".repeat(64)),
+            browser_version: Some("Chrome/151".into()),
+            font_fingerprint: Some("b".repeat(64)),
+            failure_code: None,
+            failure_message: None,
+            recovery_action: None,
+        };
+        VisualBaselineStore::save(&store, &baseline).await.unwrap();
         store
     }
 
@@ -178,5 +331,73 @@ pub(crate) mod test_fixtures {
         );
         RunStore::save(&store, &run).await.unwrap();
         (store, run.id)
+    }
+
+    pub(crate) async fn store_with_finished_frontend_run() -> Store {
+        let (store, task_id) = store_with_task().await;
+        let mut task = TaskStore::get(&store, &task_id).await.unwrap().unwrap();
+        task.start().unwrap();
+        TaskStore::save(&store, &task).await.unwrap();
+        let mut run = Run::new(
+            RunId::new(FINISHED_RUN).unwrap(),
+            task_id,
+            RoleId::new("frontend").unwrap(),
+            latoile_core::TriggeredBy::Manager,
+        );
+        run.begin().unwrap();
+        run.finish("frontend implementation complete").unwrap();
+        RunStore::save(&store, &run).await.unwrap();
+        store
+    }
+}
+
+#[cfg(test)]
+mod operational_tests {
+    use super::*;
+    use latoile_core::ports::ProjectStore;
+
+    #[tokio::test]
+    async fn vacuum_backup_is_consistent_and_refuses_overwrite() {
+        let root = std::env::temp_dir().join(format!(
+            "latoile-store-backup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source_path = root.join("source.db");
+        let backup_path = root.join("backup.db");
+        let source = Store::open(&source_path).await.unwrap();
+        let project = latoile_core::Project::new(
+            latoile_core::ProjectId::new("p-backup").unwrap(),
+            "Backup",
+            "backup",
+            "owner/backup",
+            "work",
+            "/srv/backup",
+            "npm run dev -- --port $PORT",
+        )
+        .unwrap();
+        ProjectStore::save(&source, &project).await.unwrap();
+
+        source.health().await.unwrap();
+        source.backup_to(&backup_path).await.unwrap();
+        assert!(source.backup_to(&backup_path).await.is_err());
+
+        let restored = Store::open(&backup_path).await.unwrap();
+        restored.integrity_check().await.unwrap();
+        assert_eq!(
+            ProjectStore::get(&restored, &project.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            project
+        );
+
+        drop(restored);
+        drop(source);
+        std::fs::remove_dir_all(root).ok();
     }
 }

@@ -1,5 +1,6 @@
-//! `/api/runs/:id` — run detail. V1 returns the run entity; the event/diff
-//! drill-down the spec mentions comes with the orchestrator pass.
+//! `/api/runs/:id` — run detail with sanitized summary, Git SHAs and bounded
+//! artifact metadata. Raw diffs stay in Git; the Reviewer supplies the
+//! owner-facing excerpt in its approval payload.
 
 use super::dto::RunDto;
 use crate::error::ApiError;

@@ -4,11 +4,19 @@
 
 use super::*;
 use crate::driver;
-use latoile_agents::{RunOutcome, RunState};
+use axum::http::HeaderValue;
+use latoile_agents::{ChangedFileEvidence, CommitEvidence, RunOutcome, RunReport, RunState};
 use latoile_core::event::EventKind;
-use latoile_core::ids::{RunId, SpecVersionId, TaskId};
-use latoile_core::ports::{ApprovalStore, RunStore, SpecStore, TaskStore};
-use latoile_core::{RoleId, Run, RunStatus, SpecVersion, Task, TaskStatus, TriggeredBy};
+use latoile_core::ids::{ArchitectureSessionId, PreviewId, RunId, SpecVersionId, TaskId};
+use latoile_core::ports::PermissionRequest;
+use latoile_core::ports::{
+    ApprovalStore, ArchitectureSessionStore, PreviewStore, RunStore, SpecStore, TaskStore,
+    VisualComparisonStore,
+};
+use latoile_core::{
+    Approval, ApprovalId, ApprovalKind, ApprovalStatus, ArchitectureSession, ArchitectureStatus,
+    Preview, RoleId, Run, RunStatus, SpecVersion, Task, TaskStatus, TriggeredBy,
+};
 use std::time::Duration;
 
 /// A running run on an in-progress task, straight into the store.
@@ -21,7 +29,7 @@ async fn seed_running_run(store: &Store, project: &str, run_id: &str) -> RunId {
         None,
     )
     .unwrap();
-    spec.approve().unwrap();
+    crate::tests::approve_test_spec(store, &mut spec).await;
     SpecStore::save(store, &spec).await.unwrap();
 
     let mut task = Task::new(
@@ -64,30 +72,301 @@ async fn wait_terminal(store: &Store, run: &RunId) -> RunStatus {
     panic!("run never left an active status");
 }
 
+async fn wait_blocked_with_approval(store: &Store, run: &RunId) -> Approval {
+    for _ in 0..100 {
+        if run_status(store, run).await == RunStatus::Blocked {
+            if let Some(approval) = store.list_pending().await.unwrap().into_iter().next() {
+                return approval;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("permission request never reached the Inbox");
+}
+
+#[tokio::test]
+async fn permission_decisions_block_and_resume_the_exact_http_request_once() {
+    for granted in [true, false] {
+        let (state, store, agents) = state().await;
+        let app = router(state.clone());
+        let project = create_project(&app).await;
+        let run = seed_running_run(&store, &project, "r-permission").await;
+        let request_id = "perm-http";
+        agents
+            .live_permissions
+            .lock()
+            .unwrap()
+            .insert(run.as_str().to_string(), request_id.into());
+        agents.run_states.lock().unwrap().insert(
+            run.as_str().to_string(),
+            RunState::Blocked(PermissionRequest {
+                id: request_id.into(),
+                summary: "Execute a command inside the project workspace".into(),
+            }),
+        );
+
+        let handle = driver::spawn_every(state, Duration::from_millis(20));
+        let approval = wait_blocked_with_approval(&store, &run).await;
+        assert_eq!(approval.kind, ApprovalKind::Permission);
+        let payload: serde_json::Value = serde_json::from_str(&approval.payload).unwrap();
+        assert_eq!(payload["request_id"], request_id);
+        assert_eq!(
+            payload["summary"],
+            "Execute a command inside the project workspace"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(authed(request(
+                "POST",
+                &format!("/api/approvals/{}", approval.id.as_str()),
+                Some(serde_json::json!({
+                    "granted": granted,
+                    "comment": if granted { "Autorisé une fois" } else { "Refusé" },
+                })),
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let decided = body_json(response).await;
+        assert_eq!(
+            decided["status"],
+            if granted { "granted" } else { "rejected" }
+        );
+        assert_eq!(run_status(&store, &run).await, RunStatus::Running);
+        assert_eq!(
+            agents.permission_decisions.lock().unwrap().as_slice(),
+            [(run.as_str().to_string(), request_id.into(), granted)]
+        );
+
+        let retry = app
+            .clone()
+            .oneshot(authed(request(
+                "POST",
+                &format!("/api/approvals/{}", approval.id.as_str()),
+                Some(serde_json::json!({"granted": granted})),
+            )))
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(agents.permission_decisions.lock().unwrap().len(), 1);
+        handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_restart_rejects_an_orphan_permission_and_fails_the_run() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let run_id = seed_running_run(&store, &project, "r-orphan").await;
+    let mut run = RunStore::get(&store, &run_id).await.unwrap().unwrap();
+    run.block().unwrap();
+    RunStore::save(&store, &run).await.unwrap();
+    let approval = Approval::new(
+        ApprovalId::new("permission-orphan").unwrap(),
+        run_id.clone(),
+        ApprovalKind::Permission,
+        serde_json::json!({
+            "schema_version": 1,
+            "request_id": "orphan",
+            "summary": "Modify files inside the project workspace",
+        })
+        .to_string(),
+    );
+    ApprovalStore::save(&store, &approval).await.unwrap();
+    // No channel state or live responder simulates the fresh server process.
+
+    let handle = driver::spawn_every(state, Duration::from_millis(20));
+    assert_eq!(wait_terminal(&store, &run_id).await, RunStatus::Error);
+    let closed = ApprovalStore::get(&store, &approval.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.status, ApprovalStatus::Rejected);
+    assert!(closed
+        .decision_comment
+        .as_deref()
+        .unwrap()
+        .contains("server restart"));
+    assert!(store.list_pending().await.unwrap().is_empty());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn startup_recovery_closes_all_process_claims_before_serving() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let run_id = seed_running_run(&store, &project, "r-startup").await;
+    let mut run = RunStore::get(&store, &run_id).await.unwrap().unwrap();
+    run.block().unwrap();
+    RunStore::save(&store, &run).await.unwrap();
+    let permission = Approval::new(
+        ApprovalId::new("permission-startup").unwrap(),
+        run_id.clone(),
+        ApprovalKind::Permission,
+        serde_json::json!({
+            "schema_version": 1,
+            "request_id": "startup",
+            "summary": "Modify files inside the project workspace",
+        })
+        .to_string(),
+    );
+    ApprovalStore::save(&store, &permission).await.unwrap();
+
+    let mut preview = Preview::new(
+        PreviewId::new("preview-startup").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        4100,
+        "work",
+    );
+    preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &preview).await.unwrap();
+
+    let architecture = ArchitectureSession::new(
+        ArchitectureSessionId::new("architecture-startup").unwrap(),
+        ProjectId::new(&project).unwrap(),
+    );
+    ArchitectureSessionStore::save(&store, &architecture)
+        .await
+        .unwrap();
+
+    let recovered = driver::recover_startup(&state).await.unwrap();
+    assert_eq!(recovered.runs, 1);
+    assert_eq!(recovered.blocked_permissions, 1);
+    assert_eq!(recovered.previews, 1);
+    assert_eq!(recovered.architecture_sessions, 1);
+    assert_eq!(run_status(&store, &run_id).await, RunStatus::Error);
+    assert_eq!(
+        ApprovalStore::get(&store, &permission.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ApprovalStatus::Rejected
+    );
+    assert!(store.active_previews().await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .latest_for_project(&ProjectId::new(&project).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ArchitectureStatus::Failed
+    );
+    assert_eq!(
+        TaskStore::get(&store, &run.task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::Ready
+    );
+    assert!(store
+        .events_since(0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|(_, event)| event.kind == EventKind::PreviewError
+            && event.payload.contains("restart_preview")));
+
+    assert_eq!(
+        driver::recover_startup(&state).await.unwrap(),
+        driver::RecoverySummary {
+            runs: 0,
+            blocked_permissions: 0,
+            previews: 0,
+            architecture_sessions: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn the_health_loop_marks_a_dead_preview_as_error() {
+    let (state, store, _agents) = state().await;
+    let app = router(state.clone());
+    let project = create_project(&app).await;
+    let mut preview = Preview::new(
+        PreviewId::new("preview-dead").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        4100,
+        "work",
+    );
+    preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &preview).await.unwrap();
+
+    let handle = driver::spawn_every(state, Duration::from_millis(20));
+    for _ in 0..100 {
+        if store.active_previews().await.unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(store.active_previews().await.unwrap().is_empty());
+    assert!(store
+        .events_since(0)
+        .await
+        .unwrap()
+        .iter()
+        .any(|(_, event)| event.kind == EventKind::PreviewError
+            && event.payload.contains("process_exited")));
+    handle.abort();
+}
+
 #[tokio::test]
 async fn a_finished_run_drives_review_and_journals() {
     let (state, store, agents) = state().await;
     let app = router(state.clone());
     let project = create_project(&app).await;
     let run = seed_running_run(&store, &project, "r-fin").await;
-
-    let handle = driver::spawn_every(state, Duration::from_millis(30));
+    let mut previous_preview = Preview::new(
+        PreviewId::new("preview-before-r-fin").unwrap(),
+        ProjectId::new(&project).unwrap(),
+        26100,
+        "work",
+    );
+    previous_preview.mark_ready(4242).unwrap();
+    PreviewStore::save(&store, &previous_preview).await.unwrap();
     // The "agent" completes its turn.
-    agents
-        .run_states
-        .lock()
-        .unwrap()
-        .insert("r-fin".into(), RunState::Done(RunOutcome::Finished));
+    agents.run_states.lock().unwrap().insert(
+        "r-fin".into(),
+        RunState::Done(RunReport {
+            outcome: RunOutcome::Finished,
+            summary: "endpoint implemented".into(),
+            activity: vec!["finished: cargo test".into()],
+            base_sha: Some("1111111".into()),
+            head_sha: Some("2222222".into()),
+            commits: vec![CommitEvidence {
+                sha: "2222222".into(),
+                subject: "feat: implement endpoint".into(),
+            }],
+            changed_files: vec![ChangedFileEvidence {
+                status: "M".into(),
+                path: "src/endpoint.rs".into(),
+            }],
+            diff_stat: "1 file changed, 12 insertions(+)".into(),
+        }),
+    );
+    let handle = driver::spawn_every(state, Duration::from_millis(30));
 
     assert_eq!(wait_terminal(&store, &run).await, RunStatus::Finished);
+    let stored_run = RunStore::get(&store, &run).await.unwrap().unwrap();
+    assert_eq!(stored_run.summary.as_deref(), Some("endpoint implemented"));
+    assert_eq!(stored_run.base_sha.as_deref(), Some("1111111"));
+    assert_eq!(stored_run.head_sha.as_deref(), Some("2222222"));
+    let artifacts: serde_json::Value =
+        serde_json::from_str(stored_run.artifacts.as_deref().unwrap()).unwrap();
+    assert_eq!(artifacts["changed_files"][0]["path"], "src/endpoint.rs");
+    assert_eq!(artifacts["activity"][0], "finished: cargo test");
     let task = TaskStore::get(&store, &TaskId::new("t-r-fin").unwrap())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(task.status, TaskStatus::Review);
-    let pending = store.list_pending().await.unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].kind, latoile_core::ApprovalKind::Review);
+    // Executor completion alone never creates the human decision.
+    assert!(store.list_pending().await.unwrap().is_empty());
 
     let kinds: Vec<_> = store
         .events_since(0)
@@ -97,7 +376,16 @@ async fn a_finished_run_drives_review_and_journals() {
         .map(|(_, e)| e.kind)
         .collect();
     assert!(kinds.contains(&EventKind::RunFinished));
-    assert!(kinds.contains(&EventKind::ApprovalRequested));
+    assert!(kinds.contains(&EventKind::PreviewStale));
+    assert!(!kinds.contains(&EventKind::ApprovalRequested));
+    assert!(
+        kinds
+            .iter()
+            .position(|kind| *kind == EventKind::RunFinished)
+            < kinds
+                .iter()
+                .position(|kind| *kind == EventKind::PreviewStale)
+    );
 
     // §5.2: the reviewer run is dispatched on the task — after the preview
     // step, so give the tick a moment to get there.
@@ -112,6 +400,122 @@ async fn a_finished_run_drives_review_and_journals() {
     }
     let reviewer = reviewer.expect("a reviewer run should have been dispatched");
     assert_eq!(reviewer.status, RunStatus::Running);
+    assert!(store.list_pending().await.unwrap().is_empty());
+    let comparisons = VisualComparisonStore::list_for_run(&store, &run)
+        .await
+        .unwrap();
+    assert_eq!(comparisons.len(), 1);
+    assert_eq!(
+        comparisons[0].status,
+        latoile_core::VisualComparisonStatus::Passed
+    );
+    let listed = app
+        .clone()
+        .oneshot(authed(request(
+            "GET",
+            &format!("/api/runs/{}/visual-comparisons", run.as_str()),
+            None,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    assert_eq!(listed[0]["status"], "passed");
+    assert_eq!(listed[0]["changed_pixels"], 0);
+    for artifact in ["render", "heatmap"] {
+        let response = app
+            .clone()
+            .oneshot(authed(request(
+                "GET",
+                &format!(
+                    "/api/visual-comparisons/{}/{}",
+                    comparisons[0].id.as_str(),
+                    artifact
+                ),
+                None,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            HeaderValue::from_static("image/png")
+        );
+        assert!(response.headers().contains_key("etag"));
+    }
+
+    let prompt = {
+        let prompts = agents.run_prompts.lock().unwrap();
+        prompts
+            .iter()
+            .find(|(role, _)| role == "reviewer")
+            .map(|(_, prompt)| prompt.clone())
+            .expect("the Reviewer prompt was recorded")
+    };
+    assert!(prompt.contains("Page de connexion"), "{prompt}");
+    assert!(prompt.contains("spec s1 v1 (approved)"), "{prompt}");
+    assert!(prompt.contains("1111111"), "{prompt}");
+    assert!(prompt.contains("2222222"), "{prompt}");
+    assert!(prompt.contains("src/endpoint.rs"), "{prompt}");
+    assert!(prompt.contains("TRUSTED VISUAL EVIDENCE"), "{prompt}");
+    assert!(prompt.contains(comparisons[0].id.as_str()), "{prompt}");
+    assert!(prompt.contains("latoile-review"), "{prompt}");
+    assert!(prompt.contains("schema_version 2"), "{prompt}");
+    assert!(prompt.contains("server binds the complete evidence set"), "{prompt}");
+    assert!(prompt.contains("VERDICT RUBRIC"), "{prompt}");
+    assert!(
+        prompt.contains("only for a concrete blocking correctness"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "Optional enhancements, framework preferences and unstated scope are never blocking"
+        ),
+        "{prompt}"
+    );
+    let reviewer_result = serde_json::json!({
+        "schema_version": 2,
+        "verdict": "approve_with_reservations",
+        "summary": "Conforme avec une réserve non bloquante.",
+        "findings": [{
+            "severity": "reservation",
+            "text": "Ajouter un état de chargement.",
+            "location": "web/src/Login.tsx:42",
+            "fix": "Désactiver le bouton pendant la requête."
+        }],
+        "suggested_follow_ups": ["Ajouter le test de double clic."],
+        "visual_evidence": {
+            "applicability": "required",
+            "references": []
+        }
+    })
+    .to_string();
+    agents.run_states.lock().unwrap().insert(
+        reviewer.id.as_str().into(),
+        RunState::Done(RunReport::terminal(RunOutcome::Finished, reviewer_result)),
+    );
+    assert_eq!(
+        wait_terminal(&store, &reviewer.id).await,
+        RunStatus::Finished
+    );
+
+    let mut pending = Vec::new();
+    for _ in 0..100 {
+        pending = store.list_pending().await.unwrap();
+        if !pending.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].kind, latoile_core::ApprovalKind::Review);
+    assert_eq!(pending[0].run_id, reviewer.id);
+    let payload: serde_json::Value = serde_json::from_str(&pending[0].payload).unwrap();
+    assert_eq!(payload["schema_version"], 2);
+    assert_eq!(payload["verdict"], "approve_with_reservations");
+    assert_eq!(payload["gate"]["trusted_v2"], true);
+    assert_eq!(payload["gate"]["approvable"], true);
+    assert_eq!(payload["reviewed_run_id"], run.as_str());
     // Re-read: the reviewer's RunStarted lands after the snapshot above.
     let later: Vec<_> = store
         .events_since(0)
@@ -121,6 +525,7 @@ async fn a_finished_run_drives_review_and_journals() {
         .map(|(_, e)| e.kind)
         .collect();
     assert!(later.contains(&EventKind::RunStarted));
+    assert!(later.contains(&EventKind::ApprovalRequested));
     handle.abort();
 }
 

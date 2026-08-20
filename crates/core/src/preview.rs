@@ -27,7 +27,10 @@ impl PreviewStatus {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, PreviewStatus::Starting | PreviewStatus::Ready | PreviewStatus::Stale)
+        matches!(
+            self,
+            PreviewStatus::Starting | PreviewStatus::Ready | PreviewStatus::Stale
+        )
     }
 }
 
@@ -64,9 +67,7 @@ impl Preview {
                 | (PreviewStatus::Stale, PreviewStatus::Error)
         );
         if !allowed {
-            return Err(
-                TransitionError::new("preview", self.status.as_str(), to.as_str()).into(),
-            );
+            return Err(TransitionError::new("preview", self.status.as_str(), to.as_str()).into());
         }
         self.status = to;
         Ok(())
@@ -86,23 +87,23 @@ impl Preview {
     /// Only a stale preview can refresh — a starting one uses `mark_ready`.
     pub fn refresh(&mut self) -> Result<(), DomainError> {
         if self.status != PreviewStatus::Stale {
-            return Err(
-                TransitionError::new("preview", self.status.as_str(), "ready").into(),
-            );
+            return Err(TransitionError::new("preview", self.status.as_str(), "ready").into());
         }
         self.status = PreviewStatus::Ready;
         Ok(())
     }
 
     pub fn fail(&mut self) -> Result<(), DomainError> {
-        self.go(PreviewStatus::Error)
+        self.go(PreviewStatus::Error)?;
+        // A failed supervisor no longer owns a trustworthy process. Keeping
+        // its numeric pid would invite a restart path to signal a reused pid.
+        self.pid = None;
+        Ok(())
     }
 
     pub fn stop(&mut self) -> Result<(), DomainError> {
         if !self.status.is_active() && self.status != PreviewStatus::Error {
-            return Err(
-                TransitionError::new("preview", self.status.as_str(), "stopped").into(),
-            );
+            return Err(TransitionError::new("preview", self.status.as_str(), "stopped").into());
         }
         self.status = PreviewStatus::Stopped;
         self.pid = None;
@@ -143,5 +144,14 @@ mod tests {
         p.fail().unwrap();
         assert!(p.mark_ready(1).is_err()); // Error → Ready requires a restart
         p.stop().unwrap(); // Error → Stopped is allowed
+    }
+
+    #[test]
+    fn failure_forgets_the_untrusted_process_id() {
+        let mut p = preview();
+        p.mark_ready(4242).unwrap();
+        p.fail().unwrap();
+        assert_eq!(p.status, PreviewStatus::Error);
+        assert!(p.pid.is_none());
     }
 }

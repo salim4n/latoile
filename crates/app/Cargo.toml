@@ -18,6 +18,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 thiserror = "2"
 # The Manager's actions block is JSON; parsed by hand into typed actions.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Ids are minted by the application layer (core/ids.rs); ulid is the spec's
 # id format (architecture-spec.md §4).

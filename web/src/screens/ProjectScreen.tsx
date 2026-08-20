@@ -1,43 +1,219 @@
-// The project workspace: Chat with the Manager, the task board, the live
-// preview — one tab visible at a time (the mockup annotates exactly this).
-// All three refresh from the SSE journal (D10).
+// The project workspace: Chat with the Manager, the task board, and the live
+// preview. The HTML mockup is the visual contract; only one tab is mounted at
+// a time and all live data refreshes from the SSE journal.
 
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, getToken, type Message, type Task } from "../api";
-import { useAsync, useEventReload } from "../hooks";
-import { useT, type Key } from "../i18n";
+import {
+  ApiError,
+  api,
+  getToken,
+  type ArchitectureSession,
+  type Delivery,
+  type Message,
+  type Preview,
+  type SpecVersion,
+  type Task,
+} from "../api";
+import { useAsync, useEventReload, type Async } from "../hooks";
+import { useT, type Key, type Lang } from "../i18n";
 import { Shell } from "../components/Shell";
-import { EmptyState, ErrorState, Skeletons } from "../components/states";
-import { CheckIcon, PlayIcon, SendIcon, WarningIcon } from "../components/icons";
+import { EmptyState, ErrorState } from "../components/states";
+import { CheckIcon, GearIcon, PlayIcon, SendIcon, WarningIcon } from "../components/icons";
+import { ArchitectureApproval } from "./ArchitectureApproval";
 
 type Tab = "chat" | "board" | "preview";
 
+function DeliveryPanel({ project }: { project: string }) {
+  const { t } = useT();
+  const delivery = useAsync(() => api.delivery(project), [project]);
+  const [latest, setLatest] = useState<Delivery | null>(null);
+  const [delivering, setDelivering] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const current = latest ?? delivery.data;
+
+  async function deliver() {
+    if (delivering) return;
+    setDelivering(true);
+    setActionError(null);
+    try {
+      setLatest(await api.deliverProject(project));
+    } catch (error) {
+      setActionError(
+        error instanceof ApiError && [409, 422].includes(error.status)
+          ? error.message
+          : t("delivery.action.error"),
+      );
+      delivery.reload();
+    } finally {
+      setDelivering(false);
+    }
+  }
+
+  if (delivery.loading && !current) {
+    return <div className="skel delivery-skeleton" role="status" aria-label={t("delivery.loading")} />;
+  }
+  if (delivery.error && !current) {
+    return (
+      <div className="delivery-card delivery-card--error">
+        <p>{t("delivery.load.error")}</p>
+        <button className="btn btn--ghost btn--sm" type="button" onClick={delivery.reload}>
+          {t("inbox.error.retry")}
+        </button>
+      </div>
+    );
+  }
+  if (!current) return null;
+
+  const verified = current.local_sha && current.local_sha === current.remote_sha;
+  return (
+    <section className="delivery-card" aria-label={t("delivery.aria")}>
+      <div className="delivery-copy">
+        <div className="delivery-heading">
+          <strong>{t("delivery.title")}</strong>
+          <span className={current.status === "pull_request_open" ? "badge badge--success" : "badge badge--neutral"}>
+            {t(`delivery.status.${current.status}` as Key)}
+          </span>
+        </div>
+        <p>{current.work_branch}</p>
+        {verified && (
+          <code className="delivery-sha">
+            {t("delivery.sha")} {current.local_sha?.slice(0, 12)}
+          </code>
+        )}
+        {actionError && <p className="decision-error" role="alert">{actionError}</p>}
+      </div>
+      {current.pull_request_url ? (
+        <a className="btn btn--primary btn--sm" href={current.pull_request_url} target="_blank" rel="noreferrer">
+          {t("delivery.open_pr")}
+        </a>
+      ) : (
+        <button className="btn btn--primary btn--sm" type="button" onClick={deliver} disabled={delivering}>
+          {delivering && <span className="spin" aria-hidden="true" />}
+          {current.status === "pushed" ? t("delivery.retry_pr") : t("delivery.deliver")}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function ProjectLoading({ label }: { label: string }) {
+  return (
+    <div className="project-loading" role="status" aria-label={label} aria-busy="true">
+      <div className="skel project-tabs-skeleton" aria-hidden="true" />
+      {[68, 84, 58].map((width) => (
+        <div className="project-message-skeleton" data-testid="project-message-skeleton" key={width}>
+          <div className="skel skel-line skel-line--short" />
+          <div className="skel project-message-body" style={{ width: `${width}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BoardLoading({ label }: { label: string }) {
+  return (
+    <div className="board board--loading" role="status" aria-label={label} aria-busy="true">
+      {[0, 1, 2, 3].map((column) => (
+        <div className="col" aria-hidden="true" key={column}>
+          <div className="skel skel-line skel-line--short" />
+          <div className="skel board-task-skeleton" />
+          <div className="skel board-task-skeleton" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PreviewLoading({ label }: { label: string }) {
+  return (
+    <div className="preview-loading" role="status" aria-label={label} aria-busy="true">
+      <div className="skel preview-toolbar-skeleton" />
+      <div className="phone" aria-hidden="true">
+        <div className="phone-screen">
+          <div className="skel preview-screen-skeleton" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
-/// The Manager's structured actions, when they parse. The format is the
-/// orchestrator pass's to define; V1 renders title-ish fields as cards and
-/// ignores the rest.
-function ActionCard({ actions }: { actions: string }) {
+type ActionRow = {
+  type?: string;
+  kind?: string;
+  status?: string;
+  title?: string;
+  sub?: string;
+  version?: number;
+  design_dir?: string;
+  file_count?: number;
+  package_commit_sha?: string;
+};
+
+function parseActions(actions: string | null): ActionRow[] {
+  if (!actions) return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(actions);
   } catch {
-    return null;
+    return [];
   }
-  if (!Array.isArray(parsed)) return null;
-  const rows = parsed.filter(
-    (a): a is { title?: string; sub?: string } => typeof a === "object" && a !== null,
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (action): action is ActionRow =>
+      typeof action === "object" && action !== null,
   );
+}
+
+function messageDisplayContent(message: Message, t: (key: Key) => string): string {
+  const actions = parseActions(message.actions);
+  const architecture = actions.find(
+    (action) => action.type === "architecture" && action.sub,
+  );
+  if (actions.some((action) => action.type === "architecture_package")) {
+    return t("architecture.package.message");
+  }
+  return architecture?.sub ?? message.content;
+}
+
+function packageDisplaySub(row: ActionRow, t: (key: Key) => string): string | undefined {
+  if (row.design_dir && typeof row.file_count === "number") {
+    const commit = row.package_commit_sha?.slice(0, 12);
+    return [
+      row.design_dir,
+      `${row.file_count} ${t("architecture.package.files")}`,
+      commit ? `commit ${commit}` : undefined,
+    ].filter(Boolean).join(" · ");
+  }
+  return row.sub?.replace(/\b(\d+)\s+(?:fichiers|files)\b/, `$1 ${t("architecture.package.files")}`);
+}
+
+function ActionCard({ actions }: { actions: string }) {
+  const { t } = useT();
+  const rows = parseActions(actions);
   if (rows.length === 0) return null;
   return (
     <div className="action-card">
-      {rows.map((row, i) => (
-        <div className="action-row" key={i}>
-          {i % 2 === 0 ? <CheckIcon /> : <PlayIcon />}
+      {rows.map((row, index) => (
+        <div className="action-row" key={index}>
+          {index % 2 === 0 ? <CheckIcon /> : <PlayIcon />}
           <div>
-            <strong>{row.title ?? JSON.stringify(row)}</strong>
-            {row.sub && <p>{row.sub}</p>}
+            <strong>
+              {row.type === "architecture"
+                ? t(
+                    row.kind === "ready_to_draft" || row.status === "ready_to_draft"
+                      ? "architecture.action.complete"
+                      : "architecture.action.question",
+                  )
+                : row.type === "architecture_package"
+                  ? t("architecture.action.package_ready")
+                : row.title ?? JSON.stringify(row)}
+            </strong>
+            {row.type !== "architecture" && packageDisplaySub(row, t) && (
+              <p>{packageDisplaySub(row, t)}</p>
+            )}
           </div>
         </div>
       ))}
@@ -45,64 +221,301 @@ function ActionCard({ actions }: { actions: string }) {
   );
 }
 
-function ChatTab({ project }: { project: string }) {
+function messageTime(createdAt: string | undefined, lang: Lang): string {
+  if (!createdAt) return "";
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+const ARCHITECTURE_STATUS_KEYS: Record<ArchitectureSession["status"], Key> = {
+  discovering: "architecture.status.discovering",
+  awaiting_answer: "architecture.status.awaiting_answer",
+  ready_to_draft: "architecture.status.ready_to_draft",
+  failed: "architecture.status.failed",
+  cancelled: "architecture.status.cancelled",
+};
+
+const ARCHITECTURE_PHASE_KEYS: Record<ArchitectureSession["phase"], Key> = {
+  domain_discovery: "architecture.phase.domain_discovery",
+  requirements: "architecture.phase.requirements",
+  ux_discovery: "architecture.phase.ux_discovery",
+  ready_to_draft: "architecture.phase.ready_to_draft",
+};
+
+function ArchitecturePanel({
+  project,
+  architecture,
+  specs,
+  retryPrepared,
+  onPrepareRetry,
+}: {
+  project: string;
+  architecture: Async<ArchitectureSession | null>;
+  specs: Async<SpecVersion[]>;
+  retryPrepared: boolean;
+  onPrepareRetry: () => void;
+}) {
   const { t } = useT();
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
+  const session = architecture.data;
+
+  async function cancel() {
+    if (cancelling) return;
+    setCancelling(true);
+    setCancelError(false);
+    try {
+      await api.cancelArchitecture(project);
+      architecture.reload();
+    } catch {
+      setCancelError(true);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  if (architecture.loading && !session) {
+    return (
+      <div
+        className="skel architecture-skeleton"
+        role="status"
+        aria-label={t("architecture.loading")}
+      />
+    );
+  }
+  if (architecture.error && !session) {
+    return (
+      <section className="architecture-card architecture-card--error">
+        <p>{t("architecture.load.error")}</p>
+        <button className="btn btn--ghost btn--sm" type="button" onClick={architecture.reload}>
+          {t("inbox.error.retry")}
+        </button>
+      </section>
+    );
+  }
+  if (!session) return null;
+
+  const openQuestion = session.questions.find((question) => question.status === "open");
+  const active =
+    !["failed", "cancelled"].includes(session.status) &&
+    session.package_status !== "draft_ready";
+  const terminal = session.status === "failed" || session.status === "cancelled";
+  const statusLabel = terminal
+    ? t(ARCHITECTURE_STATUS_KEYS[session.status])
+    : session.package_status === "draft_ready"
+      ? t("architecture.package.ready")
+      : session.package_status === "generating"
+        ? t("architecture.package.generating")
+        : t(ARCHITECTURE_STATUS_KEYS[session.status]);
+  return (
+    <section className="architecture-card" aria-label={t("architecture.aria")}>
+      <div className="architecture-heading">
+        <div>
+          <span className="architecture-eyebrow">{t("architecture.role")}</span>
+          <h3>{t("architecture.title")}</h3>
+        </div>
+        <span
+          className={`badge ${session.status === "failed" ? "badge--danger" : session.status === "ready_to_draft" ? "badge--success" : "badge--neutral"}`}
+        >
+          {statusLabel}
+        </span>
+      </div>
+      <p className="architecture-phase">
+        {t("architecture.phase.label")} {t(ARCHITECTURE_PHASE_KEYS[session.phase])}
+      </p>
+      {session.skill_digest && (
+        <p className="architecture-provenance">
+          {session.skill_name} · {t("architecture.skill.sha")} {session.skill_digest.slice(0, 12)} ·{" "}
+          {session.operating_mode === "reverse_engineering"
+            ? t("architecture.mode.reverse_engineering")
+            : t("architecture.mode.greenfield")}
+        </p>
+      )}
+      {session.package && (
+        <div className="architecture-package">
+          <strong>{t("architecture.package.evidence")}</strong>
+          <code>{session.package.design_dir}</code>
+          <span>
+            {session.package.changed_files.length} {t("architecture.package.files")} · commit{" "}
+            {session.package.head_sha.slice(0, 12)} · tree {session.package.tree_sha.slice(0, 12)}
+          </span>
+        </div>
+      )}
+      {session.package_status === "draft_ready" && (
+        <ArchitectureApproval
+          draft={(specs.data ?? []).find(
+            (spec) =>
+              spec.status === "draft" && spec.architecture_session_id === session.id,
+          )}
+          specs={specs}
+        />
+      )}
+      {active && openQuestion && (
+        <div className="architecture-current">
+          <strong>{t("architecture.current_question")}</strong>
+          <p>{openQuestion.prompt}</p>
+        </div>
+      )}
+      {session.questions.length > 0 && (
+        <ol className="architecture-history" aria-label={t("architecture.history")}>
+          {session.questions.map((question) => (
+            <li key={question.id}>
+              <span>{question.sequence}</span>
+              <div>
+                <strong>{question.prompt}</strong>
+                {question.answer && <p>{question.answer}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {session.failure_reason && (
+        <p className="architecture-failure" role="alert">
+          {session.failure_reason}
+        </p>
+      )}
+      {session.status === "failed" &&
+        (retryPrepared ? (
+          <p className="architecture-retry-ready" role="status">
+            {t("architecture.retry.prepared")}
+          </p>
+        ) : (
+          <button
+            className="btn btn--ghost btn--sm architecture-retry"
+            type="button"
+            onClick={onPrepareRetry}
+          >
+            {t("architecture.retry.prepare")}
+          </button>
+        ))}
+      {cancelError && (
+        <p className="decision-error" role="alert">
+          {t("architecture.cancel.error")}
+        </p>
+      )}
+      {active && (
+        <button
+          className="btn btn--ghost btn--sm architecture-cancel"
+          type="button"
+          onClick={cancel}
+          disabled={cancelling}
+        >
+          {cancelling ? t("architecture.cancelling") : t("architecture.cancel")}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function ChatTab({ project }: { project: string }) {
+  const { t, lang } = useT();
   const messages = useAsync(() => api.messages(project), [project]);
+  const architecture = useAsync(() => api.architecture(project), [project]);
+  const specs = useAsync(() => api.specs(project), [project]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(false);
+  const [architectureRetry, setArchitectureRetry] = useState(false);
   useEventReload(["message_posted"], messages.reload);
+  useEventReload(["message_posted"], architecture.reload);
+  useEventReload(["spec_version_created", "spec_approved"], specs.reload);
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
+  async function send(event: React.FormEvent) {
+    event.preventDefault();
     const content = draft.trim();
     if (!content || sending) return;
     setSending(true);
+    setSendError(false);
     try {
-      await api.sendMessage(project, content);
+      await api.sendMessage(
+        project,
+        content,
+        architectureRetry ? "architecture_brief" : undefined,
+        architectureRetry ? (lang === "fr" ? "fr-FR" : "en-US") : undefined,
+      );
       setDraft("");
+      setArchitectureRetry(false);
       messages.reload();
+      architecture.reload();
+    } catch {
+      setSendError(true);
+      // Architecture generation can fail after the owner's message has been
+      // durably stored. Refresh both resources so the terminal reason is
+      // visible immediately even though no success event was emitted.
+      messages.reload();
+      architecture.reload();
     } finally {
       setSending(false);
     }
   }
 
   const list = messages.data ?? [];
+  const awaitingArchitect = architecture.data?.status === "awaiting_answer";
   return (
-    <>
-      {messages.loading && <Skeletons />}
-      {messages.error && (
-        <ErrorState title={t("inbox.error.title")} body={t("inbox.error.body")} onRetry={messages.reload} />
-      )}
-      {messages.data && list.length === 0 && (
-        <EmptyState title={t("tabs.chat")} body={t("chat.empty")} />
-      )}
-      {list.map((m: Message) => (
-        <div className={m.author === "user" ? "msg msg--user" : "msg"} key={m.id}>
-          <div className="msg-meta">{m.author === "user" ? t("chat.you") : t("chat.manager")}</div>
-          <div className="msg-body">
-            {m.content}
-            {m.actions && <ActionCard actions={m.actions} />}
-          </div>
-        </div>
-      ))}
+    <div className="chat-panel">
+      <ArchitecturePanel
+        project={project}
+        architecture={architecture}
+        specs={specs}
+        retryPrepared={architectureRetry}
+        onPrepareRetry={() => setArchitectureRetry(true)}
+      />
+      <div className="chat-thread">
+        {messages.loading && <ProjectLoading label={t("chat.loading")} />}
+        {messages.error && (
+          <ErrorState title={t("chat.error.title")} body={t("chat.error.body")} onRetry={messages.reload} />
+        )}
+        {messages.data && list.length === 0 && (
+          <EmptyState title={t("tabs.chat")} body={t("chat.empty")} />
+        )}
+        {list.map((message: Message) => {
+          const time = messageTime(message.created_at, lang);
+          return (
+            <div className={message.author === "user" ? "msg msg--user" : "msg"} key={message.id}>
+              <div className="msg-meta">
+                {message.author === "user" ? t("chat.you") : t("chat.manager")}
+                {time && ` · ${time}`}
+              </div>
+              <div className="msg-body">
+                <p>{messageDisplayContent(message, t)}</p>
+                {message.actions && <ActionCard actions={message.actions} />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-      <form className="composer" onSubmit={send} aria-label={t("chat.placeholder")}>
+      <form className="composer" onSubmit={send} aria-label={t("chat.composer.aria")}>
+        {sendError && <p className="composer-error" role="alert">{t("chat.send.error")}</p>}
         <label htmlFor="composer-input" className="sr-only">
-          {t("chat.placeholder")}
+          {t(
+            architectureRetry
+              ? "architecture.retry.placeholder"
+              : awaitingArchitect
+                ? "architecture.answer.placeholder"
+                : "chat.placeholder",
+          )}
         </label>
         <input
           id="composer-input"
           type="text"
-          placeholder={t("chat.placeholder")}
+          placeholder={t(
+            architectureRetry
+              ? "architecture.retry.placeholder"
+              : awaitingArchitect
+                ? "architecture.answer.placeholder"
+                : "chat.placeholder",
+          )}
           autoComplete="off"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
         />
         <button className="send" type="submit" aria-label={t("chat.send")} disabled={sending}>
-          <SendIcon />
+          {sending ? <span className="spin" aria-hidden="true" /> : <SendIcon />}
         </button>
       </form>
-    </>
+    </div>
   );
 }
 
@@ -115,74 +528,144 @@ const COLUMNS: { key: Key; statuses: Task["status"][] }[] = [
   { key: "board.done", statuses: ["done"] },
 ];
 
+const ROLE_KEYS: Partial<Record<string, Key>> = {
+  manager: "role.manager",
+  architect: "role.architect",
+  backend: "role.backend",
+  frontend: "role.frontend",
+  reviewer: "role.reviewer",
+};
+
+const NEXT_ACTION_KEYS: Record<Task["next_action"], Key> = {
+  ready_to_start: "board.next.ready_to_start",
+  agent_working: "board.next.agent_working",
+  reviewer_working: "board.next.reviewer_working",
+  awaiting_owner_decision: "board.next.awaiting_owner_decision",
+  changes_requested: "board.next.changes_requested",
+  correction_ready: "board.next.correction_ready",
+  corrective_run_in_progress: "board.next.corrective_run_in_progress",
+  completed: "board.next.completed",
+};
+
+function taskReference(task: Task): string {
+  return task.latest_run_id ? `${task.id} · run #${task.latest_run_id}` : task.id;
+}
+
 function BoardTab({ project }: { project: string }) {
   const { t } = useT();
   const tasks = useAsync(() => api.tasks(project), [project]);
-  useEventReload(["task_ready", "run_started", "run_finished", "approval_granted"], tasks.reload);
+  useEventReload(
+    ["task_ready", "run_started", "run_finished", "approval_granted", "approval_rejected"],
+    tasks.reload,
+  );
 
-  if (tasks.loading) return <Skeletons />;
+  if (tasks.loading) return <BoardLoading label={t("board.loading")} />;
   if (tasks.error) {
-    return <ErrorState title={t("inbox.error.title")} body={t("inbox.error.body")} onRetry={tasks.reload} />;
+    return <ErrorState title={t("board.error.title")} body={t("board.error.body")} onRetry={tasks.reload} />;
   }
   const list = tasks.data ?? [];
   return (
-    <div className="board" aria-label={t("tabs.board")}>
-      {COLUMNS.map((col) => {
-        const inColumn = list.filter((task) => col.statuses.includes(task.status));
-        return (
-          <div className="col" key={col.key}>
-            <div className="col-head">
-              <span>{t(col.key)}</span> <span>{inColumn.length}</span>
+    <div className="board-panel" role="region" aria-label={t("board.aria")}>
+      {list.length === 0 && <p className="board-empty">{t("board.empty")}</p>}
+      <div className="board">
+        {COLUMNS.map((column) => {
+          const inColumn = list.filter((task) => column.statuses.includes(task.status));
+          return (
+            <div className="col" role="group" aria-label={t(column.key)} key={column.key}>
+              <div className="col-head">
+                <span>{t(column.key)}</span> <span>{inColumn.length}</span>
+              </div>
+              {inColumn.map((task) => {
+                const roleKey = ROLE_KEYS[task.role_id];
+                return (
+                  <article className="task" key={task.id}>
+                    <h4>{task.title}</h4>
+                    <p className="task-next-action">{t(NEXT_ACTION_KEYS[task.next_action])}</p>
+                    {task.latest_decision_comment && (
+                      <p className="task-decision-comment">
+                        <strong>{t("board.decision.comment")}</strong>{" "}
+                        {task.latest_decision_comment}
+                      </p>
+                    )}
+                    <div className="task-foot">
+                      <span className="agent">{roleKey ? t(roleKey) : task.role_id}</span>
+                      <span>{taskReference(task)}</span>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
-            {inColumn.map((task) => (
-              <article className="task" key={task.id}>
-                <h4>{task.title}</h4>
-                <div className="task-foot">
-                  <span className="agent">{task.role_id}</span>
-                  <span>{task.id.slice(0, 6)}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 // ── Preview ──────────────────────────────────────────────────────────────────
 
-function PreviewTab({ project }: { project: string }) {
+async function loadPreview(project: string): Promise<Preview | null> {
+  try {
+    return await api.preview(project);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+function PreviewTab({
+  project,
+  preview,
+}: {
+  project: string;
+  preview: Async<Preview | null>;
+}) {
   const { t } = useT();
-  const preview = useAsync(
-    () => api.preview(project).catch(() => null), // 404 = nothing running
-    [project],
-  );
   const [desktop, setDesktop] = useState(false);
-  useEventReload(["preview_ready", "preview_stale", "preview_error"], preview.reload);
+  const [actionError, setActionError] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   const current = preview.data;
   const url = `/api/projects/${project}/preview/?token=${getToken() ?? ""}`;
+  const live = current?.status === "ready" && current.alive;
+  const failed = current && (current.status === "error" || current.status === "stale" || !current.alive);
 
   async function ensure() {
-    await api.ensurePreview(project);
-    preview.reload();
+    setStarting(true);
+    setActionError(false);
+    try {
+      await api.ensurePreview(project);
+      preview.reload();
+    } catch {
+      setActionError(true);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  if (preview.loading) return <PreviewLoading label={t("preview.loading")} />;
+  if (preview.error) {
+    return (
+      <ErrorState
+        title={t("preview.load.error.title")}
+        body={t("preview.load.error.body")}
+        onRetry={preview.reload}
+      />
+    );
   }
 
   return (
-    <>
+    <div className="preview-panel">
       <div className="preview-toolbar">
         <span className="url">{url.replace(/\?token=.*/, "")}</span>
-        {current?.status === "ready" && (
+        {live && (
           <span className="badge badge--success">
             <span className="pulse-dot" aria-hidden="true" />
             {t("preview.live")}
           </span>
         )}
-        {(current?.status === "error" || current?.status === "stale") && (
-          <span className="badge badge--danger">{t("preview.error.badge")}</span>
-        )}
-        <span className="seg" aria-label="Format">
+        {failed && <span className="badge badge--danger">{t("preview.error.badge")}</span>}
+        <span className="seg" role="group" aria-label={t("preview.format")}>
           <button type="button" aria-pressed={!desktop} onClick={() => setDesktop(false)}>
             {t("preview.mobile")}
           </button>
@@ -192,46 +675,51 @@ function PreviewTab({ project }: { project: string }) {
         </span>
       </div>
 
-      {preview.loading && <Skeletons />}
-      {!preview.loading && !current && (
+      {!current && (
         <EmptyState
           title={t("preview.off.title")}
           body={t("preview.off.body")}
           action={
-            <button className="btn btn--primary" type="button" onClick={ensure}>
+            <button className="btn btn--primary" type="button" onClick={ensure} disabled={starting}>
+              {starting && <span className="spin" aria-hidden="true" />}
               {t("preview.start")}
             </button>
           }
         />
       )}
-      {current && (current.status === "ready" || current.status === "starting") && (
-        <div className={desktop ? "phone phone--desktop" : "phone"}>
+      {actionError && <p className="preview-action-error" role="alert">{t("preview.action.error")}</p>}
+
+      {current && !failed && (current.status === "ready" || current.status === "starting") && (
+        <div className={desktop ? "phone phone--desktop" : "phone"} data-testid="preview-frame">
           <div className="phone-screen">
-            {current.status === "ready" && <iframe title="preview" src={url} />}
+            {current.status === "ready" && (
+              <iframe title={t("preview.iframe.title")} src={url} />
+            )}
             {current.status === "starting" && (
               <div className="build-error">
-                <span className="spin" aria-hidden="true" />
-                <p>{t("state.loading")}</p>
+                <span className="spin spin--accent" aria-hidden="true" />
+                <p>{t("preview.starting")}</p>
               </div>
             )}
           </div>
         </div>
       )}
-      {current && (current.status === "error" || current.status === "stale") && (
-        <div className="phone">
+      {failed && (
+        <div className={desktop ? "phone phone--desktop" : "phone"} data-testid="preview-frame">
           <div className="phone-screen">
             <div className="build-error">
               <WarningIcon size={28} />
               <h5>{t("preview.error.title")}</h5>
               <p>{t("preview.error.body")}</p>
-              <button className="btn btn--ghost btn--sm" type="button" onClick={ensure}>
+              {current.logs.length > 0 && <pre className="build-log">{current.logs.slice(-5).join("\n")}</pre>}
+              <button className="btn btn--ghost btn--sm" type="button" onClick={ensure} disabled={starting}>
                 {t("preview.retry")}
               </button>
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -241,43 +729,80 @@ export function ProjectScreen() {
   const { t } = useT();
   const { id = "" } = useParams();
   const project = useAsync(() => api.project(id), [id]);
+  const preview = useAsync(() => loadPreview(id), [id]);
   const [tab, setTab] = useState<Tab>("chat");
+  useEventReload(["preview_ready", "preview_stale", "preview_error"], preview.reload);
 
+  const live = preview.data?.status === "ready" && preview.data.alive;
   const tabs: { key: Tab; label: string }[] = [
     { key: "chat", label: t("tabs.chat") },
     { key: "board", label: t("tabs.board") },
     { key: "preview", label: t("tabs.preview") },
   ];
 
+  const title = project.data?.name ?? "…";
   return (
     <Shell
       back={t("shell.back.projects")}
-      title={project.data?.name ?? "…"}
+      title={title}
       crumb={
         <>
           <Link to="/projects">{t("nav.projects")}</Link>
           {" / "}
-          {project.data?.name ?? "…"}
+          {title}
         </>
+      }
+      action={
+        <Link className="icon-btn" to="/settings" aria-label={t("project.settings")}>
+          <GearIcon />
+        </Link>
       }
       wide
     >
-      <div className="tabs" role="tablist" aria-label="Project tabs">
-        {tabs.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.key}
-            onClick={() => setTab(item.key)}
+      {project.loading && <ProjectLoading label={t("project.loading")} />}
+      {project.error && (
+        <ErrorState
+          title={t("project.error.title")}
+          body={t("project.error.body")}
+          onRetry={project.reload}
+        />
+      )}
+      {project.data && (
+        <>
+          <DeliveryPanel project={id} />
+          <div className="tabs" role="tablist" aria-label={t("tabs.aria")}>
+            {tabs.map((item) => (
+              <button
+                id={`project-tab-${item.key}`}
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-controls={`project-panel-${item.key}`}
+                aria-selected={tab === item.key}
+                onClick={() => setTab(item.key)}
+              >
+                {item.label}
+                {item.key === "preview" && live && (
+                  <span className="badge badge--success">
+                    <span className="pulse-dot" aria-hidden="true" />
+                    {t("preview.live")}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <section
+            id={`project-panel-${tab}`}
+            className="project-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`project-tab-${tab}`}
           >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      {tab === "chat" && <ChatTab project={id} />}
-      {tab === "board" && <BoardTab project={id} />}
-      {tab === "preview" && <PreviewTab project={id} />}
+            {tab === "chat" && <ChatTab project={id} />}
+            {tab === "board" && <BoardTab project={id} />}
+            {tab === "preview" && <PreviewTab project={id} preview={preview} />}
+          </section>
+        </>
+      )}
     </Shell>
   );
 }

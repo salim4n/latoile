@@ -38,7 +38,9 @@ impl Mock {
         tokio::spawn(async move {
             while let Some((status, body)) = scripts.pop_front() {
                 let accept = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await;
-                let Ok(Ok((mut socket, _))) = accept else { break };
+                let Ok(Ok((mut socket, _))) = accept else {
+                    break;
+                };
                 let request = read_request(&mut socket).await;
                 recorded.lock().unwrap().push(request);
                 let reason = match status {
@@ -136,7 +138,7 @@ fn github(mock: &Mock, token: Option<&str>) -> GitHub<MemSecrets> {
 async fn list_repos_maps_the_picker_fields() {
     let mock = Mock::start(vec![(
         200,
-        r#"[{"full_name":"salim4n/mon-app","description":"Mon app"},{"full_name":"salim4n/empty","description":null}]"#.into(),
+        r#"[{"full_name":"salim4n/mon-app","description":"Mon app","private":true},{"full_name":"salim4n/empty","description":null,"private":false}]"#.into(),
     )])
     .await;
     let gh = github(&mock, Some("tok123"));
@@ -148,18 +150,27 @@ async fn list_repos_maps_the_picker_fields() {
             RepoInfo {
                 full_name: "salim4n/mon-app".into(),
                 description: Some("Mon app".into()),
+                private: true,
             },
             RepoInfo {
                 full_name: "salim4n/empty".into(),
                 description: None,
+                private: false,
             },
         ]
     );
 
     let sent = mock.take_requests();
     assert_eq!(sent.len(), 1);
-    assert!(sent[0].request_line.starts_with("GET /user/repos"), "{}", sent[0].request_line);
-    assert_eq!(sent[0].headers.get("authorization").unwrap(), "Bearer tok123");
+    assert!(
+        sent[0].request_line.starts_with("GET /user/repos"),
+        "{}",
+        sent[0].request_line
+    );
+    assert_eq!(
+        sent[0].headers.get("authorization").unwrap(),
+        "Bearer tok123"
+    );
 }
 
 #[tokio::test]
@@ -186,6 +197,30 @@ async fn open_pull_request_returns_its_url() {
 }
 
 #[tokio::test]
+async fn an_existing_open_pull_request_is_found_by_head_and_base() {
+    let mock = Mock::start(vec![(
+        200,
+        r#"[{"html_url":"https://github.com/salim4n/mon-app/pull/3"}]"#.into(),
+    )])
+    .await;
+    let gh = github(&mock, Some("tok123"));
+
+    let url = GitHubClient::find_open_pull_request(&gh, "salim4n/mon-app", "work", "main")
+        .await
+        .unwrap();
+    assert_eq!(
+        url.as_deref(),
+        Some("https://github.com/salim4n/mon-app/pull/3")
+    );
+    let sent = mock.take_requests();
+    assert!(sent[0]
+        .request_line
+        .starts_with("GET /repos/salim4n/mon-app/pulls?"));
+    assert!(sent[0].request_line.contains("state=open"));
+    assert!(sent[0].request_line.contains("base=main"));
+}
+
+#[tokio::test]
 async fn a_401_is_an_auth_error() {
     let mock = Mock::start(vec![(401, r#"{"message":"Bad credentials"}"#.into())]).await;
     let gh = github(&mock, Some("expired"));
@@ -207,7 +242,8 @@ async fn a_404_is_a_not_found() {
 async fn a_422_surfaces_githubs_own_message() {
     let mock = Mock::start(vec![(
         422,
-        r#"{"message":"Validation Failed","errors":[{"message":"A pull request already exists"}]}"#.into(),
+        r#"{"message":"Validation Failed","errors":[{"message":"A pull request already exists"}]}"#
+            .into(),
     )])
     .await;
     let gh = github(&mock, Some("tok123"));
@@ -222,7 +258,10 @@ async fn a_malformed_success_body_is_a_decode_error() {
     let mock = Mock::start(vec![(200, "this is not json".into())]).await;
     let gh = github(&mock, Some("tok123"));
     let err = GitHubClient::list_repos(&gh).await.unwrap_err();
-    assert!(err.to_string().contains("unexpected GitHub response"), "{err}");
+    assert!(
+        err.to_string().contains("unexpected GitHub response"),
+        "{err}"
+    );
 }
 
 #[tokio::test]
@@ -248,5 +287,8 @@ async fn a_dead_host_is_a_network_error() {
         GitHub::<MemSecrets>::default_http(),
     );
     let err = GitHubClient::list_repos(&gh).await.unwrap_err();
-    assert!(err.to_string().contains("talking to GitHub failed"), "{err}");
+    assert!(
+        err.to_string().contains("talking to GitHub failed"),
+        "{err}"
+    );
 }

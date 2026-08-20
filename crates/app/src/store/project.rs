@@ -34,6 +34,40 @@ fn row_to_project(row: &SqliteRow) -> Result<Project, StoreError> {
 const COLUMNS: &str = "id, name, slug, github_repo, default_branch, work_branch, \
                        local_path, status, dev_command, deleted";
 
+/// Query-side projection for project lists. "Activity" includes journal
+/// events, not just edits to the project aggregate itself.
+pub struct ProjectListRow {
+    pub project: Project,
+    pub last_activity_at: String,
+}
+
+impl Store {
+    pub async fn list_project_rows(&self) -> PortResult<Vec<ProjectListRow>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS},
+                    COALESCE((SELECT MAX(e.created_at) FROM event e
+                              WHERE e.project_id = project.id), updated_at)
+                      AS last_activity_at
+             FROM project
+             WHERE deleted = 0
+             ORDER BY created_at, id"
+        ))
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(ProjectListRow {
+                    project: row_to_project(row)?,
+                    last_activity_at: row.try_get("last_activity_at")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
+            .map_err(Into::into)
+    }
+}
+
 impl ProjectStore for Store {
     async fn get(&self, id: &ProjectId) -> PortResult<Option<Project>> {
         let row = sqlx::query(&format!("SELECT {COLUMNS} FROM project WHERE id = ?"))
@@ -163,7 +197,13 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].slug, "kept");
         // …but a direct fetch still finds it (audit trail).
-        assert!(ProjectStore::get(&s, &gone.id).await.unwrap().unwrap().deleted);
+        assert!(
+            ProjectStore::get(&s, &gone.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .deleted
+        );
     }
 
     #[tokio::test]
@@ -171,5 +211,16 @@ mod tests {
         let s = store().await;
         s.save(&project("p1", "dup")).await.unwrap();
         assert!(s.save(&project("p2", "dup")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn project_list_projection_has_real_activity_time() {
+        let s = store().await;
+        s.save(&project("p1", "mon-app")).await.unwrap();
+
+        let rows = s.list_project_rows().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project.id.as_str(), "p1");
+        assert!(rows[0].last_activity_at.ends_with('Z'));
     }
 }

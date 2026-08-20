@@ -9,7 +9,7 @@ LaToile shares roughly 80% of its technical DNA with AionCore (local Rust daemon
 
 ## Decision
 
-Rewrite as a modular monolith in a Cargo workspace, with selective reuse: the official `agent-client-protocol` crate, the `aionui-process` supervision pattern (identity-gated orphan reaping), and the spawn builder policy (env scrubbing, kill_on_drop, process-tree kill).
+Rewrite as a modular monolith in a Cargo workspace, with selective reuse: the official `agent-client-protocol` crate and the process-supervision patterns observed in AionCore (`kill_on_drop`, dedicated process groups and bounded shutdown).
 
 ## Rationale
 
@@ -36,7 +36,13 @@ Three observed approaches: PTY/tmux (Firetower — heuristics-based status, docu
 
 ## Decision
 
-All agents go through the `agent-client-protocol` v2 crate behind an `agents/` port defined in `core`. The Manager holds a persistent session per project (resumed on each message); executors are ephemeral runs (spawn → task → exit). Permissions follow the AionCore pattern: allow/approval/reject heuristics (auto-reject: `.env`, absolute paths, `docker`), then a human approval queue.
+All agents go through the `agent-client-protocol` v2 crate behind an `agents/` port defined in `core`. The Manager holds a persistent session per project (resumed on each message); executors are ephemeral runs (spawn → task → exit). Permissions follow a fail-closed allow/ask/reject policy: `.env`, Docker and paths outside the project checkout are hard-denied; executor mutations create a sanitized human approval; Manager mutations are rejected.
+
+Each fixed role is routed to either Claude or Codex through a persisted
+setting. The provider's native CLI owns login/status/logout; LaToile only
+supervises that interactive flow and then launches the matching ACP adapter.
+Changing executor routing applies to the next run. Changing Manager routing
+evicts the persistent session so its next message starts with the new adapter.
 
 ## Rationale
 
@@ -87,3 +93,799 @@ One project = one `work_branch`; all runs commit to it; the preview serves it. S
 
 + Preview is never ambiguous; no intermediate merge step; trivial mental model.
 − Collision risk if two runs touch the same files — accepted and monitored; if the pain shows up, a new ADR switches to branch-per-run.
+
+---
+
+# ADR-005 — Reviewer evidence precedes the human decision
+
+- **Date**: 2026-08-18
+- **Status**: accepted and canary-verified
+
+## Context
+
+An executor saying “done” is not decision-grade evidence. Asking the owner at that point makes the owner perform the review and turns the approval inbox into a status feed. The product has a dedicated Reviewer role and a visual contract, so the machine review must happen before human attention is requested.
+
+## Decision
+
+When an executor finishes, LaToile persists bounded Git evidence, moves the task to `review`, refreshes the preview, and starts a fresh Reviewer run. The Reviewer receives the task, approved spec excerpts, visual-contract references, base/head SHAs and sanitized artifacts. Only a terminal, schema-validated Reviewer result creates the human review approval.
+
+A granted review moves the task to `done`. A rejected review requires an owner comment and starts exactly one corrective run linked from the immutable decision. Reviewer spawn/transport failure creates an honest fallback `changes_requested` approval instead of silently skipping review.
+
+## Rejected alternatives
+
+- Ask the owner directly after executor completion: cheaper in tokens, but makes every owner a manual reviewer.
+- Let the Reviewer modify code: collapses executor and judge into one authority and destroys the value of an independent verdict.
+- Drop malformed Reviewer output: hides a failed control; the fallback approval keeps the failure visible and non-deliverable.
+
+## Consequences
+
++ The owner decides from a localized verdict, diff excerpt and spec/render comparison.
++ No approved task can bypass the Reviewer-before-human ordering.
+− Every executor run pays Reviewer latency and provider usage, accepted because owner attention is the scarcer resource.
+
+---
+
+# ADR-006 — GitHub delivery is explicit, verified and never merges
+
+- **Date**: 2026-08-18
+- **Status**: accepted and canary-verified
+
+## Context
+
+A green task board does not prove that the checkout being pushed is the code the owner approved. A dirty worktree, wrong branch, mismatched origin, missing executor commit or retry after a partial GitHub failure can publish different code or create duplicate PRs.
+
+## Decision
+
+Delivery is one explicit owner action after all selected tasks are `done`. The app supplies the approved executor SHAs to a dedicated `WorkBranchPublisher` port. The GitHub adapter verifies the canonical checkout, stored origin, exact work branch, clean worktree and SHA ancestry, pushes without force, then reads the remote ref and requires `local_sha = remote_sha`.
+
+The app persists `Delivery(status = pushed)` before calling the PR API. It then finds an existing open PR for the stored head/base pair or creates one and upgrades the same delivery to `pull_request_open`. A retry re-verifies the push and reuses the PR. No port or route exposes merge.
+
+## Rejected alternatives
+
+- Push automatically after review: removes the owner-controlled publication boundary.
+- Trust `git push` exit status: does not prove the ref GitHub now serves equals the selected local commit.
+- Open a new PR on every retry: turns network ambiguity into duplicate owner work.
+- Merge from LaToile: expands an evidence and orchestration tool into a deployment authority.
+
+## Consequences
+
++ The UI can show a durable PR URL and the exact verified SHA.
++ A PR API outage leaves truthful `pushed` evidence that a retry can complete.
+− V1 delivers the whole project work branch; selecting a subset of commits needs branch-per-run integration in a later ADR.
+
+---
+
+# ADR-007 — New runs carry explicit project context before persistence
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The initial implementation resolved an executor directory by loading its run, task and project from SQLite. `DispatchTask` intentionally starts the ACP handshake before saving a new task/run so a failed spawn cannot leave an active database ghost. The first real-provider canary exposed the cycle: the channel needed a row that correctly did not exist yet.
+
+## Decision
+
+`AgentChannel::start_run` receives both `ProjectId` and the transient `Run`. Directory resolution uses the persisted project checkout directly. The new task and run are saved only after the handshake succeeds. Reviewer and corrective runs use the same explicit context.
+
+## Rejected alternatives
+
+- Persist `starting` rows before spawn: requires compensating writes and exposes transient ghosts to the board and restart recovery.
+- Put `project_id` permanently on `RUN`: duplicates the `RUN → TASK → PROJECT` relation only to solve a pre-persistence concern.
+- Let the agent choose a working directory: crosses the adapter trust boundary and permits workspace escape.
+
+## Consequences
+
++ Adapter startup has the context it needs without weakening persistence atomicity.
++ The project path remains server-owned and is checked before any process spawn.
+− The agent port carries one extra identifier that is derivable after persistence but necessary before it.
+
+---
+
+# ADR-008 — Invalidate process-backed state before startup readiness
+
+- **Date**: 2026-08-18
+- **Status**: accepted
+
+## Context
+
+Agent connections and preview registries are process-local. After a restart,
+SQLite may still contain `starting`, `running`, `blocked`, `ready` or `stale`
+rows, but the new process cannot own the corresponding callback, child handle
+or permission responder. A persisted numeric PID is not proof of identity;
+the operating system may have reused it.
+
+## Decision
+
+Server assembly performs recovery before returning the HTTP router. Every
+active run is observed as `Lost` and follows the existing domain wind-down:
+pending permissions reject fail-safe, executor tasks requeue, and a lost
+Reviewer produces an owner-visible fallback decision. Every active preview is
+marked `error` and its PID is cleared. The periodic driver performs the same
+preview reconciliation when an owned ready process exits.
+
+LaToile never kills a PID loaded from SQLite. The supported systemd service
+uses `KillMode=control-group` to reap child trees on parent failure; graceful
+shutdown still kills adapter-owned process groups directly.
+
+## Rejected alternatives
+
+- Resume an ACP session from its stored id: the responder and transport are
+  gone, so this would display false progress and leave permissions unanswerable.
+- Signal the stored PID: PID reuse can kill an unrelated process.
+- Reconcile on the first timer tick: health could briefly advertise a state
+  the new process does not own.
+
+## Consequences
+
++ HTTP readiness never races stale active state.
++ Lost work has a deterministic next action and an audit event.
++ Crash orphans are reaped by an identity-safe service cgroup.
+− A running task does not resume across process restart; it must be dispatched again.
+
+---
+
+# ADR-009 — Backup SQLite and the external vault key as one restore unit
+
+- **Date**: 2026-08-18
+- **Status**: accepted
+
+## Context
+
+SQLite is in WAL mode and can be written while a backup runs. Secret rows are
+useless without the root key deliberately stored outside the database. A raw
+file copy can miss WAL pages; a database-only backup can permanently orphan
+credentials; an in-place restore can destroy the last recoverable pair.
+
+## Decision
+
+`latoile backup create` uses SQLite `VACUUM INTO`, checks integrity, opens every
+encrypted row with the current root key, and writes the snapshot, root key and
+versioned manifest into a private directory. `backup restore` refuses to
+overwrite live state. It validates and migrates a disposable copy, verifies
+the database/key pair, builds a standalone install database and uses a
+`.restore-in-progress` marker while installing both files. It never touches
+project checkouts.
+
+## Rejected alternatives
+
+- Copy `latoile.db` directly: unsafe while WAL contains committed pages.
+- Back up the database without `master.key`: encrypted secrets would not be recoverable.
+- Include checkouts in the state archive: repositories have a separate Git
+  durability model and can make the operational backup unbounded.
+- Add an overwrite flag: a typo could destroy the only live database/key pair.
+
+## Consequences
+
++ Backup creation can run against the live SQLite database.
++ Restore failure is non-destructive and wrong-key backups fail validation.
++ Existing repositories survive restore drills unchanged.
+− Unpushed repository work needs delivery to GitHub or a separate workspace snapshot.
+
+---
+
+# ADR-010 — Architect packages are generated in a confined detached worktree
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+Injecting only `SKILL.md` does not prove that the Architect saw its mandatory
+references. Letting the agent write directly in the project checkout makes an
+after-the-fact path check too late: production source may already be damaged,
+and a directory alone cannot identify the approved bytes.
+
+## Decision
+
+Discovery loads every mandatory `app-architect-brainstorm` reference, hashes
+the ordered bundle and embeds it read-only in the ACP prompt. The detected
+greenfield or reverse-engineering mode and digest are persisted on the session.
+
+Generation uses a fresh ACP session in a detached temporary worktree at the
+recorded project HEAD. Its permission scope permits only `.md` and `.html`
+writes under one server-chosen `design/v…/` directory and never permits shell.
+LaToile verifies the complete inventory, manifest-to-P0 traceability,
+self-contained HTML, shared token digest, file/byte bounds and Git diff. It
+then creates the commit itself and fast-forwards the live checkout only when
+its HEAD still equals the base. The draft pins package digest, commit and tree.
+
+## Rejected alternatives
+
+- Trust a prompt-only “write only in design/” rule: advisory, not authority.
+- Validate the live checkout after generation: detects damage after mutation.
+- Store mockups in SQLite: loses Git identity and makes visual artifacts opaque.
+- Allow the Architect to commit or run scripts: exceeds a specification role.
+
+## Consequences
+
++ An out-of-scope agent write never reaches the project branch.
++ A draft identifies exact skill inputs and exact Git output.
++ A concurrent project HEAD change refuses integration instead of merging stale architecture.
+− Package generation uses an extra worktree and a second ACP process after discovery.
+
+---
+
+# ADR-011 — Approve only a freshly revalidated immutable architecture package
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+A package that was valid when generated can drift before the owner clicks
+approve. A tree digest alone also does not make visual capture deterministic:
+screen state, locale, viewport and stable comparison identity must be explicit.
+Saving spec status, project state, task bindings and an event as separate writes
+can expose a partially approved system after a failure.
+
+## Decision
+
+The fenced manifest enumerates every package file exactly once and declares
+every P0 visual contract with a stable comparison id, screen, state, locale,
+theme, route, synthetic fixture, readiness/stable selectors, allowed masks,
+viewport, device scale and mockup. Each mockup pins the durable identity fields
+plus the shared design-token digest in its HTML.
+
+Before approval, LaToile proves the pinned commit exists, its full tree matches,
+it is an ancestor of HEAD, the versioned design path is unchanged and clean,
+and every inventory, safety and content digest still passes. The UI exposes the
+structured findings and renders HTML read from that exact commit under a
+restrictive CSP. The domain requires the matching verification proof. SQLite
+then supersedes the predecessor, approves the draft, updates the project, binds
+waiting tasks and writes the immutable audit payload in one transaction.
+Dispatch and Reviewer context revalidate again; any later design drift makes the
+version unusable and requires a new draft.
+
+## Rejected alternatives
+
+- Reuse generation-time validation at approval: leaves a time-of-check gap.
+- Approve a design directory without manifest metadata: baselines become
+  dependent on undocumented browser conventions.
+- Render the mutable checkout directly: the owner may inspect bytes different
+  from the version being approved.
+- Persist approval consequences one row at a time: permits partial state.
+
+## Consequences
+
++ Owner approval refers to exact bytes and deterministic visual scenarios.
++ Drift fails closed everywhere the approved package is consumed.
++ Approval is one auditable database fact with all provenance hashes.
+− Any intentional design edit requires generating and approving a new version.
+
+---
+
+# ADR-012 — Capture real deterministic visual baselines before approval
+
+- **Date**: 2026-08-18
+- **Status**: accepted, real local Chromium capture verified
+
+## Context
+
+An HTML mockup is inspectable but is not itself a browser-rendered fact. An
+ad-hoc screenshot omits readiness, viewport, font/browser provenance, DOM
+geometry and accessibility semantics. If the Reviewer can report those values
+itself, a plausible JSON answer can be mistaken for measured evidence.
+
+## Decision
+
+Manifest schema 2 makes each required P0 scenario executable: mockup file,
+live route, synthetic fixture, locale, light/dark theme, viewport/scale,
+readiness selector, unique stable selectors and the only selectors permitted
+to be masked.
+
+After immutable package validation, LaToile automatically launches a fresh
+headless Chromium profile through the capture adapter. HTTP, WebSocket, file
+and other external URL schemes are blocked; background services and animation
+are disabled. Capture waits for the declared selector and fonts, then records a
+real viewport PNG, canonical selector geometry and the browser's full
+accessibility tree. Environment evidence includes Chromium product/binary hash
+and a rendered font fingerprint. The artifact directory is content-addressed,
+written atomically and never overwritten. SQLite stores bounded hashes and an
+actionable ready/failed row against the exact spec manifest and commit.
+
+The approval route ensures every capture is ready, and executor dispatch checks
+the same complete set again before any ACP process starts. The authenticated UI
+shows progress, failures, recovery actions and the real PNG.
+
+## Rejected alternatives
+
+- Browser screenshots taken manually: neither reproducible nor gateable.
+- Render HTML to a synthetic canvas: not the browser layout/accessibility tree.
+- Store only PNG: hides geometry, accessibility and environment drift.
+- Let the Reviewer claim measurements: evidence must be produced by LaToile.
+- Silently mask dynamic regions: only approved scenario selectors may be masked.
+
+## Consequences
+
++ Owner approval is backed by browser-produced evidence, not a static preview alone.
++ Missing browsers, readiness timeouts and unstable selectors fail closed with recovery actions.
++ Live comparison reuses the exact scenario/environment contract and immutable baseline.
+− A supported Chromium installation is required for execution-ready visual specs.
+
+---
+
+# ADR-013 — Classify live visual evidence outside the Reviewer
+
+- **Date**: 2026-08-18
+- **Status**: accepted, real local Chromium comparison verified
+
+## Context
+
+A Reviewer can inspect code and explain intent, but its prose cannot prove what
+a browser rendered. A live screenshot alone is also insufficient: without the
+approved scenario, baseline bytes, geometry, accessibility and environment,
+visual similarity is neither reproducible nor safe to gate.
+
+## Decision
+
+After a frontend executor finishes and its supervised preview is ready,
+LaToile revalidates the immutable architecture package and replays every P0
+scenario against `127.0.0.1:<preview-port>`. The browser process inherits no
+service environment. CDP permits requests only to that exact HTTP origin and
+blocks HTTPS, file, FTP and WebSockets; approved dynamic selectors are the only
+masks. Route, synthetic fixture, locale, theme, viewport, scale, readiness and
+measured selectors come unchanged from the approved manifest.
+
+The capture adapter stores the real render, absolute pixel diff, heatmap,
+geometry change document, accessibility change document and complete
+environment provenance atomically under immutable content hashes. Browser and
+font fingerprints must match the baseline. The pure domain computes fixed
+thresholds: at least 2% changed pixels, an 8 px geometry delta, or three AX
+changes is blocking; smaller measured drift is a reservation; no drift passes.
+Capture/environment failure is `invalid` with zero similarity metrics and an
+explicit recovery action. Complete comparison rows and artifacts never change.
+
+The supervision driver performs this capture before Reviewer dispatch and
+passes only server-produced ids, hashes, metrics and status into its context.
+Authenticated routes expose comparison metadata, render and heatmap bytes.
+
+## Rejected alternatives
+
+- Ask the Reviewer to estimate similarity or spacing: narration is not evidence.
+- Allow the live app general network access: project JavaScript could exfiltrate
+  service context or make the render depend on mutable remote state.
+- Reuse an existing browser profile: cookies, cache and extensions contaminate evidence.
+- Treat capture failure as 100% similarity: fabricates an approvable result.
+- Add undeclared masks after seeing a diff: mutates the approved visual contract.
+
+## Consequences
+
++ A known 16 px spacing regression is detected by both pixel and geometry evidence.
++ Reviewers and UI consumers receive stable ids and hashes, not self-reported frames.
++ Missing routes, selectors, browsers or environment parity remain actionable and non-reviewable.
+− Live evidence requires a ready loopback preview and the same Chromium/font runtime as approval.
+
+---
+
+# ADR-014 — Bind Reviewer V2 to one server-owned evidence set
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+Passing trusted ids to a Reviewer prompt is useful context but asking the model
+to copy them back is neither proof that it reviewed them nor a safe selector.
+The fourth greenfield canary produced exact `passed` evidence, then failed
+because the model's copied V2 references did not match the server rows. This
+was availability loss without additional trust. Inferring the executor from
+task chronology remains ambiguous after corrective runs. Existing V1 approvals
+contain synthetic target/render frames and must remain readable without gaining
+V2 trust.
+
+## Decision
+
+Every Reviewer run stores one immutable `reviewed_run_id` foreign key before
+ACP dispatch. V2 output contains judgement plus an explicit visual
+applicability decision; new prompts require an empty references array. It has no
+model-writable evidence selector, status, metric or gate field. On termination,
+LaToile reloads the bound finished executor, task, current approved spec and
+complete comparison set. It rejects missing, stale, cross-project, wrong-run or
+wrong-spec server evidence, then reconstructs all trusted ids, hashes, statuses
+and metrics from those rows. Legacy untrusted reference echoes remain accepted
+for wire compatibility but are ignored and never copied into the trusted
+envelope.
+
+Frontend evidence that is missing, invalid or blocking is non-approvable.
+Server reservations must be acknowledged by a reservation verdict. Non-visual
+runs must explicitly declare `not_applicable` with no references. Every failed
+gate is stored as `changes_requested` with an actionable blocking finding, and
+the grant use case independently requires a trusted, approvable V2 envelope.
+V1 rows are not rewritten and never pass that check.
+
+## Rejected alternatives
+
+- Require the model to echo ids and hashes: copying is brittle and proves no
+  additional relationship beyond the immutable server-owned subject run.
+- Trust ids mentioned by the model: it can omit, substitute or alter them.
+- Infer the reviewed run from the latest task run: retries and corrections make chronology unsafe.
+- Let the Reviewer emit status/metrics: recreates self-reported visual truth.
+- Upgrade V1 rows in place: would falsely confer trust without server evidence.
+- Hide malformed or failed reviews: removes the recovery path from the owner.
+
+## Consequences
+
++ A review approval is cryptographically and relationally tied to the exact run and spec evidence.
++ Model output cannot select, omit or override the server evidence set.
++ Complete blocking evidence stays trusted evidence while remaining impossible to approve.
++ Backend and other non-visual work remains reviewable through an explicit applicability branch.
++ Migration preserves audit history without presenting legacy frames as trusted capture.
+− Legacy pending reviews must be rerun before they can be granted.
+
+---
+
+# ADR-015 — Make immutable visual evidence the owner decision surface
+
+- **Date**: 2026-08-18
+- **Status**: accepted, hermetically verified
+
+## Context
+
+Server-owned capture and Reviewer V2 prevent invented evidence, but a trusted
+JSON envelope alone still forces the owner to decide from prose. Static or
+unauthenticated image links also lose token enforcement, provenance and the
+relationship between a failed scenario and its corrective run.
+
+## Decision
+
+The Review screen resolves only evidence ids from the trusted V2 envelope,
+reloads their immutable server rows and the approved manifest scenarios, and
+fetches baseline, live render and heatmap through bearer-authenticated routes.
+It supports scenario, viewport and locale selection plus side-by-side, overlay
+and heatmap modes. Pixel, geometry and accessibility metrics, capture status,
+browser/font environment and content hashes stay server-owned and inspectable.
+
+Invalid captures show their failure code, message and recovery action without
+fabricating images. Missing, legacy or non-approvable V2 gates disable approval.
+A rejection requires the owner's comment and starts exactly one corrective run;
+that run creates distinct evidence ids against the same immutable baseline, so
+the original decision and correction history remain auditable.
+
+## Rejected alternatives
+
+- Render the Reviewer narrative as the comparison: prose is not an artifact.
+- Put bearer tokens in image URLs: URLs leak through history and logs.
+- Show only a percentage: it hides location, provenance and accessibility drift.
+- Replace the original evidence after correction: destroys decision history.
+
+## Consequences
+
++ The owner can inspect the actual browser output that controls the gate.
++ Mobile/desktop and FR/EN scenarios use the same manifest-backed interaction.
++ Correction history proves new output against an unchanged approved target.
+− The UI must manage authenticated object URLs and release them after use.
+
+---
+
+# ADR-016 — Recycle the preview process before every frontend capture
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The first greenfield mismatch/correction canary proved that changing files is
+not enough to refresh a long-lived dev server. The corrective executor removed
+the deliberate 16 px injection, but the ready Node process had loaded the old
+module and `EnsurePreview` returned it untouched. The second Chromium capture
+therefore reproduced the original blocking evidence exactly.
+
+## Decision
+
+After every finished frontend run and before `EnsurePreview`, LaToile marks an
+existing ready preview `stale`, persists a `PreviewStale` event and recycles the
+supervised process. Initial runs with no preview remain a no-op; an already
+stale preview is idempotent. Live comparison and Reviewer dispatch happen only
+after this refresh attempt, so corrective evidence observes the current commit.
+
+## Rejected alternatives
+
+- Rely on filesystem watching or HMR: the V1 proxy does not guarantee either.
+- Ask the executor to restart the server: process ownership belongs to LaToile.
+- Add a delay before recapture: time cannot invalidate a loaded module.
+- Accept identical corrective evidence: that would hide a stale runtime.
+
+## Consequences
+
++ Corrective capture measures the corrected commit rather than cached code.
++ `PreviewStale → PreviewReady` is explicit and auditable for every frontend run.
+− Frontend completion pays one bounded dev-server restart before review.
+
+---
+
+# ADR-017 — Normalize only the accessibility root transport URL
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The second greenfield canary recycled the corrected preview and produced an
+exact PNG and geometry match, but the comparison remained `reservation` with
+two accessibility changes. A direct installed-Chromium reproduction showed
+that Chrome reports the baseline root as `about:blank` after
+`Page.setDocumentContent`, and the identical live document root as its
+supervised loopback URL after navigation. The removed and added `RootWebArea`
+records were the entire difference.
+
+## Decision
+
+Canonical accessibility evidence omits the `url` property only when the node
+role is `RootWebArea`. Every other root property and every URL on semantic
+nodes such as links remains in the snapshot. Capture installs the same
+non-routable synthetic document base, including route and fixture fields, in
+both baseline and live documents so a relative link resolves independently of
+the transport origin. An installed-Chromium contract test requires identical
+HTML with a relative link served over HTTP to classify `passed` with zero
+pixel, geometry and accessibility drift. A destination-only change must remain
+an AX `reservation`, and the real 16 px regression must remain `blocking`.
+
+This evidence semantic is capture protocol V3. V2 environments do not compare
+under V3; the existing environment mismatch path requires a new architecture
+version and approved baseline.
+
+The opt-in canary also writes a bounded observation of decision metrics before
+asserting the expected state, so a failed run retains its measured seam without
+storing provider prose or unbounded payloads.
+
+## Rejected alternatives
+
+- Treat two AX changes as passing: weakens the global accessibility gate and
+  could hide a real semantic change.
+- Remove every AX `url` property: would stop detecting changed link targets.
+- Strip origins from every URL after capture: relative fragments and paths
+  still resolve differently under `about:blank` and would remain ambiguous.
+- Capture the baseline through a temporary HTTP server: adds another mutable
+  process and origin to approval when the mockup is already bounded bytes.
+- Accept `reservation` in the canary: would not prove exact mockup fidelity.
+
+## Consequences
+
++ Identical approved bytes now produce exact visual and accessibility evidence
+  across baseline installation and supervised live navigation.
++ Link destination regressions remain measurable.
++ Failed canaries retain bounded comparison metrics for diagnosis.
+− Canonicalization carries one explicit Chrome transport normalization rule.
+− Existing V2 baselines require recapture before live comparison under V3.
+
+---
+
+# ADR-018 — Recenter one premature first-turn Architect completion
+
+- **Date**: 2026-08-18
+- **Status**: accepted after repeated real-provider canary failure
+
+## Context
+
+The discovery domain correctly requires the Architect to challenge at least
+one consequential owner decision before drafting. The adapter's first prompt,
+however, still allowed either `question` or `ready_to_draft`. Two consecutive
+greenfield canaries therefore failed when the provider followed that looser
+contract and declared a detailed brief complete on its first turn. Failing the
+entire session was safe but made the automated brief-to-package flow brittle.
+
+## Decision
+
+The first adapter prompt now requires `kind=question` and explicitly forbids
+`ready_to_draft`. If the provider nevertheless returns ready, the application
+sends exactly one discovery-guard prompt through a dedicated channel method in
+the same ACP session. The guard states that no owner answer was supplied, asks
+for one unresolved decision-rich question and preserves the pinned session,
+skill digest and operating mode. It neither persists a fabricated answer nor
+grants generation/write authority.
+
+A valid guarded question becomes the first durable question. Malformed output,
+changed provenance, a lost session or a second ready signal fails closed and
+requires a new discovery attempt.
+
+## Rejected alternatives
+
+- Accept first-turn ready for detailed briefs: would make the required owner
+  challenge optional and weaken the product contract.
+- Invent a generic question in the application: would no longer prove that the
+  skilled Architect identified a consequential ambiguity.
+- Send the guard as an owner answer: would contaminate the durable decision
+  record with text the owner never supplied.
+- Retry indefinitely: hides a provider that is not following the role contract.
+
+## Consequences
+
++ A compliant Architect still uses one normal turn.
++ One stochastic premature completion recovers without losing session context.
++ Repeated noncompliance remains explicit and fail-closed.
+− A guarded discovery may spend one additional provider turn.
+
+---
+
+# ADR-019 — Repair one invalid post-answer Architect contract
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The first-turn guard solved premature completion, but a later greenfield
+canary failed after five valid owner decisions. The real Architect returned a
+syntactically readable contract whose `kind` and `phase` contradicted each
+other. The owner answers and pinned skill provenance were intact; terminating
+the whole discovery on one machine-protocol error was safe but unnecessarily
+brittle.
+
+## Decision
+
+After a durable owner answer, LaToile validates the provider turn against both
+the wire schema and a cloned domain session. If parsing or the phase transition
+is invalid, it sends exactly one protocol-repair prompt through a dedicated
+port in the same ACP session. The prompt carries the current persisted phase
+and the allowed current-or-later question phases, but no new owner answer. It
+requires the Architect to preserve the underlying question or readiness
+decision and return only a corrected contract.
+
+The repaired reply must retain the ACP session id, skill name, skill digest and
+operating mode. LaToile parses and applies it again from the unchanged domain
+state. A lost session, changed provenance, adapter failure or second invalid
+contract marks discovery failed with a bounded reason. There is no silent
+normalization and no unbounded retry.
+
+## Rejected alternatives
+
+- Infer `phase` from `kind`: accepts model output the server did not actually
+  receive and can hide a regressing question.
+- Restart discovery: discards valid owner decisions and breaks session
+  provenance for a recoverable serialization defect.
+- Replay the last owner answer: duplicates user input and may change the
+  Architect's decision instead of repairing its representation.
+- Retry until valid: hides systematic provider noncompliance and creates an
+  unbounded paid loop.
+
+## Consequences
+
++ One stochastic wire/domain mismatch no longer destroys valid discovery.
++ Owner input, skill identity and ACP context remain auditable and unchanged.
++ Regressing phases and malformed repairs still fail closed.
+− A repaired discovery may spend one additional provider turn.
+
+---
+
+# ADR-020 — Calibrate Reviewer verdicts without overriding code judgement
+
+- **Date**: 2026-08-18
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+A greenfield canary proved an exact corrected render: zero changed pixels,
+zero geometry drift, zero accessibility changes and a render digest equal to
+the approved baseline. The Reviewer still returned `changes_requested`. The
+server correctly preserved that model judgement, but the prompt had no verdict
+rubric and the canary task description incorrectly presented the temporary
+regression as final task scope. Optional preferences and contradictory test
+setup were therefore hard to distinguish from true blockers.
+
+## Decision
+
+Reviewer prompts now define three explicit levels. `changes_requested` is only
+for a concrete blocking correctness, security, approved-spec or stated
+acceptance defect and must carry an actionable blocking finding.
+`approve_with_reservations` means deliverable with only non-blocking findings;
+`approve` means no finding. Optional enhancements, framework preferences and
+unstated scope cannot become hidden acceptance criteria.
+
+Passed visual evidence remains necessary but does not force approval: a real
+blocking code defect can still stop delivery. The server continues to bind and
+classify visual evidence independently of model judgement. The canary's task
+description now states the final exact visual contract; its deliberate initial
+regression is labeled intermediate test setup only.
+
+## Rejected alternatives
+
+- Auto-approve every pixel-identical run: would erase security and correctness
+  review outside the rendered frame.
+- Ignore every Reviewer `changes_requested`: would turn Reviewer V2 into a
+  decorative step.
+- Treat optional preferences as blockers: creates stochastic hidden scope and
+  makes the automated delivery path non-repeatable.
+
+## Consequences
+
++ Reviewer judgement remains meaningful beyond visual similarity.
++ Final task intent is no longer contradicted by canary setup.
++ Non-blocking advice can remain visible without preventing delivery.
+− Verdict quality still depends on provider reasoning, but its decision
+  boundary is now explicit and test-covered.
+
+---
+
+# ADR-021 — Bind Architect manifest provenance on the server
+
+- **Date**: 2026-08-19
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+The package prompt included the exact SHA-256 of the complete
+`app-architect-brainstorm` bundle and required the model to copy it into
+`package-manifest.md`. A real provider eventually copied a different digest,
+so the adapter correctly rejected an otherwise generated package. This echo
+was brittle and had no trust value: a model cannot attest which skill bytes the
+server actually injected into its session.
+
+## Decision
+
+The Architect still authors the complete deliverable inventory and P0 scenario
+contract. The prompt now uses an explicit server-bound placeholder for
+`skill_digest` and `operating_mode`. After the isolated turn, and before any
+validation or commit, the adapter requires a regular manifest file, parses the
+strict JSON contract, then rewrites `schema_version`, `skill_digest` and
+`operating_mode` from the pinned server request. The canonical manifest is
+written inside the detached package worktree and traverses the same full
+validation, digest, Git commit and fast-forward checks as every other byte.
+
+Model-supplied values for these three provenance fields are never trusted or
+preserved. Unknown fields, malformed JSON, missing inventory, invalid P0
+scenarios and every other package defect still fail closed.
+
+## Rejected alternatives
+
+- Retry until the model copies 64 hex characters: spends paid turns without
+  improving provenance.
+- Accept a mismatched digest: would record false skill identity.
+- Remove provenance from the committed package: makes offline review and
+  approval evidence incomplete.
+- Let the model overwrite server metadata after binding: restores the same
+  self-attestation defect.
+
+## Consequences
+
++ Skill identity and operating mode now come from the authority that owns them.
++ Stochastic digest-copy failures disappear without weakening validation.
++ The committed package remains self-describing and content-addressed.
+− The adapter performs one explicit deterministic write inside the already
+  confined package worktree before validation.
+
+---
+
+# ADR-022 — Repair bounded package-content validation failures in place
+
+- **Date**: 2026-08-19
+- **Status**: accepted after real-provider canary failure
+
+## Context
+
+Even with correct server-bound provenance, a real 16-file package may contain
+one local inconsistency. A canary produced a `gallery.html` that was external
+or failed to pin the shared design-token digest. One-shot generation discarded
+the entire valid discovery and package work for a defect that the Architect
+could correct from the deterministic validator result.
+
+## Decision
+
+Package generation now validates after each finished turn inside the same ACP
+session and detached worktree. A package-content or manifest-validation error
+may trigger at most two repair turns. The prompt states that no new owner
+answer exists, includes only the bounded validator result and confines the fix
+to the original server-selected package directory. Provenance is rebound and
+the complete validator reruns after every repair.
+
+Changed-path validation remains outside this recovery loop. Any file outside
+the package root, unsafe extension, path traversal or evidence-bound breach
+fails immediately and is never presented as a repairable content issue. A
+non-finished repair, provider failure, timeout or third invalid validation also
+fails closed; the temporary worktree is removed and nothing is integrated.
+
+## Rejected alternatives
+
+- Regenerate the whole discovery: discards durable owner decisions for a local
+  packaging defect.
+- Patch model-authored HTML in the server: would make the server the designer
+  rather than a validator.
+- Allow unlimited repair turns: creates an unbounded paid loop.
+- Repair path escapes: weakens the hard security boundary into a suggestion.
+
+## Consequences
+
++ Local manifest/gallery/token inconsistencies can recover automatically.
++ Repairs preserve owner decisions, ACP context and worktree evidence.
++ Security confinement remains an immediate hard failure.
+− A difficult package may consume up to two additional provider turns.

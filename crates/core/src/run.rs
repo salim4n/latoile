@@ -29,7 +29,10 @@ impl RunStatus {
 
     /// An active run holds the task's single-run slot (invariant §3.2.1).
     pub fn is_active(&self) -> bool {
-        matches!(self, RunStatus::Starting | RunStatus::Running | RunStatus::Blocked)
+        matches!(
+            self,
+            RunStatus::Starting | RunStatus::Running | RunStatus::Blocked
+        )
     }
 }
 
@@ -48,15 +51,20 @@ pub struct Run {
     pub acp_session_id: Option<String>,
     pub status: RunStatus,
     pub summary: Option<String>,
+    /// Git evidence captured by the agent adapter. Artifacts are sanitized
+    /// JSON (activity, commits, changed files and diff statistics), never
+    /// hidden reasoning or raw tool inputs.
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub artifacts: Option<String>,
+    /// The executor run this Reviewer run evaluates. Persisting this edge is
+    /// what prevents a valid-but-stale evidence id from being replayed on a
+    /// different review. It is always `None` for non-Reviewer runs.
+    pub reviewed_run_id: Option<RunId>,
 }
 
 impl Run {
-    pub fn new(
-        id: RunId,
-        task_id: TaskId,
-        role_id: RoleId,
-        triggered_by: TriggeredBy,
-    ) -> Self {
+    pub fn new(id: RunId, task_id: TaskId, role_id: RoleId, triggered_by: TriggeredBy) -> Self {
         Self {
             id,
             task_id,
@@ -65,7 +73,35 @@ impl Run {
             acp_session_id: None,
             status: RunStatus::Starting,
             summary: None,
+            base_sha: None,
+            head_sha: None,
+            artifacts: None,
+            reviewed_run_id: None,
         }
+    }
+
+    pub fn bind_review_subject(&mut self, subject: RunId) -> Result<(), DomainError> {
+        if self.role_id.as_str() != "reviewer" {
+            return Err(DomainError::Invariant(
+                "only a Reviewer run can bind a review subject",
+            ));
+        }
+        if subject == self.id {
+            return Err(DomainError::Invariant(
+                "a Reviewer run cannot review itself",
+            ));
+        }
+        if self
+            .reviewed_run_id
+            .as_ref()
+            .is_some_and(|bound| bound != &subject)
+        {
+            return Err(DomainError::Invariant(
+                "a Reviewer run has one immutable review subject",
+            ));
+        }
+        self.reviewed_run_id = Some(subject);
+        Ok(())
     }
 
     fn go(&mut self, to: RunStatus) -> Result<(), DomainError> {
@@ -109,6 +145,23 @@ impl Run {
         Ok(())
     }
 
+    pub fn attach_evidence(
+        &mut self,
+        base_sha: Option<String>,
+        head_sha: Option<String>,
+        artifacts: String,
+    ) -> Result<(), DomainError> {
+        if self.status != RunStatus::Finished {
+            return Err(DomainError::Invariant(
+                "run evidence can only be attached to a finished run",
+            ));
+        }
+        self.base_sha = base_sha;
+        self.head_sha = head_sha;
+        self.artifacts = Some(artifacts);
+        Ok(())
+    }
+
     pub fn fail(&mut self) -> Result<(), DomainError> {
         self.go(RunStatus::Error)
     }
@@ -141,6 +194,9 @@ mod tests {
         r.finish("done: endpoint implemented").unwrap();
         assert_eq!(r.status, RunStatus::Finished);
         assert_eq!(r.summary.as_deref(), Some("done: endpoint implemented"));
+        r.attach_evidence(Some("base".into()), Some("head".into()), "{}".into())
+            .unwrap();
+        assert_eq!(r.head_sha.as_deref(), Some("head"));
         assert!(!r.status.is_active());
     }
 
@@ -148,6 +204,7 @@ mod tests {
     fn refused_transitions_are_errors() {
         let mut r = run();
         assert!(r.finish("too early").is_err()); // Starting → Finished
+        assert!(r.attach_evidence(None, None, "{}".into()).is_err());
         assert!(r.block().is_err()); // Starting → Blocked
         r.begin().unwrap();
         r.finish("ok").unwrap();
@@ -175,5 +232,30 @@ mod tests {
         let mut r = run();
         r.fail().unwrap(); // Starting → Error
         assert!(r.begin().is_err());
+    }
+
+    #[test]
+    fn only_a_reviewer_can_bind_one_immutable_subject() {
+        let mut executor = run();
+        assert!(executor
+            .bind_review_subject(RunId::new("subject").unwrap())
+            .is_err());
+
+        let mut reviewer = Run::new(
+            RunId::new("reviewer").unwrap(),
+            TaskId::new("t1").unwrap(),
+            RoleId::new("reviewer").unwrap(),
+            TriggeredBy::Manager,
+        );
+        reviewer
+            .bind_review_subject(RunId::new("subject").unwrap())
+            .unwrap();
+        reviewer
+            .bind_review_subject(RunId::new("subject").unwrap())
+            .unwrap();
+        assert!(reviewer
+            .bind_review_subject(RunId::new("other").unwrap())
+            .is_err());
+        assert!(reviewer.bind_review_subject(reviewer.id.clone()).is_err());
     }
 }

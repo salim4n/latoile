@@ -18,21 +18,32 @@
 //!   at runtime; everything above it is testable without a process.
 //! - [`channel`] — the `AgentChannel` implementation itself.
 
+mod auth;
+mod architecture_package;
 mod channel;
 mod config;
 mod error;
-mod preamble;
+mod permissions;
 mod policy;
+mod preamble;
 mod transport;
 mod updates;
 
-pub use channel::{AcpChannel, ProjectDirs, RootDirs, RunState};
+pub use auth::{
+    AgentAuthManager, AuthError, AuthProvider, AuthSessionView, AuthStatus, ProviderCommands,
+    ProviderStatus, DEFAULT_TTL,
+};
+pub use channel::{
+    AcpChannel, ChangedFileEvidence, CommitEvidence, ProjectDirs, RootDirs, RoutingSource,
+    RunReport, RunState, SharedRouting,
+};
 pub use config::{AgentCommand, AgentTimeouts, ChannelConfig};
 pub use error::AgentError;
+pub use permissions::PermissionBroker;
 pub use updates::{AgentUpdate, RunOutcome};
 
 pub use updates::{classify, outcome_event, outcome_of, update_event};
 
 /// The production connector: spawns real agent processes. Everything else in
 /// the crate is testable without one.
-pub use transport::{Connection, Connector, ProcessConnector, TurnResult};
+pub use transport::{Connection, Connector, PermissionContext, ProcessConnector, TurnResult};

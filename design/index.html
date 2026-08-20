@@ -24,7 +24,7 @@ Revue : ouvrir chaque écran à 390px de large, puis vérifier à 1440px que la
 :root {
   --surface-1: #0E0F12; --surface-2: #16181D; --surface-3: #1E2128;
   --border: #2A2E37;
-  --text-primary: #ECEDEF; --text-secondary: #A6ABB4; --text-muted: #6B7180;
+  --text-primary: #ECEDEF; --text-secondary: #A6ABB4; --text-muted: #858B97;
   --accent: #38BDF8; --accent-fg: #081018;
   --success: #3FB27F; --warning: #F5B042; --danger: #E5534B;
   --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -95,6 +95,7 @@ footer { margin-top: var(--space-5); font-size: var(--text-xs); color: var(--tex
     <button type="button" data-filter="projet" aria-selected="false" data-i18n="filter.projet">Projet</button>
     <button type="button" data-filter="review" aria-selected="false">Review</button>
     <button type="button" data-filter="new" aria-selected="false" data-i18n="filter.new">Nouveau projet</button>
+    <button type="button" data-filter="settings" aria-selected="false" data-i18n="filter.settings">Réglages</button>
   </nav>
 
   <section class="screen" data-screen="inbox">
@@ -149,8 +150,23 @@ footer { margin-top: var(--space-5); font-size: var(--text-xs); color: var(--tex
     </div>
   </section>
 
+  <section class="screen" data-screen="settings">
+    <div class="screen-head">
+      <h2><a href="screen-settings.html" data-i18n="settings.name">Réglages</a> <span class="p0">P0</span></h2>
+      <span class="route">/settings · screen-settings.html</span>
+    </div>
+    <p class="desc" data-i18n="settings.desc">Connexions Claude/Codex et routage des cinq rôles de l'équipe IA. Inclut le device flow Codex, les états sans connexion, chargement et erreur.</p>
+    <div class="state-links">
+      <a href="screen-settings.html#configure" data-i18n="st.configure">Configuré</a>
+      <a href="screen-settings.html#connexion" data-i18n="st.connexion">Connexion</a>
+      <a href="screen-settings.html#vide" data-i18n="st.vide">Vide</a>
+      <a href="screen-settings.html#chargement" data-i18n="st.chargement">Chargement</a>
+      <a href="screen-settings.html#erreur" data-i18n="st.erreur">Erreur</a>
+    </div>
+  </section>
+
   <footer>
-    <span data-i18n="footer.p1">Maquettes statiques auto-contenues — aucun framework, aucun fetch. Le bloc de tokens</span> <code>:root</code> <span data-i18n="footer.p2">est byte-identique dans les 5 fichiers. Tab bar mobile ↔ sidebar desktop : mêmes destinations (Inbox, Projets, Créer), même ordre. UI bilingue fr/en (D11) : langue persistée via localStorage.</span>
+    <span data-i18n="footer.p1">Maquettes statiques auto-contenues — aucun framework, aucun fetch. Le bloc de tokens</span> <code>:root</code> <span data-i18n="footer.p2">est byte-identique dans les 6 fichiers. Tab bar mobile ↔ sidebar desktop : mêmes destinations (Inbox, Projets, Créer, Réglages), même ordre. UI bilingue fr/en (D11) : langue persistée via localStorage.</span>
   </footer>
 </div>
 
@@ -180,12 +196,15 @@ const I18N = {
     "filter.tous": "Tous",
     "filter.projet": "Projet",
     "filter.new": "Nouveau projet",
+    "filter.settings": "Réglages",
     "inbox.desc": "Écran d'accueil : approbations en attente, runs bloqués, projets actifs. Répond à « qu'est-ce qui attend ma décision ? » en moins de 3 secondes.",
     "projet.name": "Projet",
     "projet.desc": "Vue projet : chat avec le Manager (actions en cartes structurées), board des tâches en scroll horizontal, preview live de l'app en construction.",
     "review.desc": "Décision humaine sur un run : verdict du Reviewer, diff mono, maquette vs rendu côte à côte, actions Approuver / Demander des changements en bas sticky.",
     "new.name": "Nouveau projet",
     "new.desc": "Création : sélecteur de dépôt GitHub, brief initial multi-lignes, bouton primaire bottom-sticky.",
+    "settings.name": "Réglages",
+    "settings.desc": "Connexions Claude/Codex et routage des cinq rôles de l'équipe IA. Inclut le device flow Codex, les états sans connexion, chargement et erreur.",
     "st.peuple": "Peuplé",
     "st.vide": "Vide",
     "st.chargement": "Chargement",
@@ -198,8 +217,10 @@ const I18N = {
     "st.approuve": "Approuvé",
     "st.defaut": "Défaut",
     "st.envoi": "Envoi",
+    "st.configure": "Configuré",
+    "st.connexion": "Connexion",
     "footer.p1": "Maquettes statiques auto-contenues — aucun framework, aucun fetch. Le bloc de tokens",
-    "footer.p2": "est byte-identique dans les 5 fichiers. Tab bar mobile ↔ sidebar desktop : mêmes destinations (Inbox, Projets, Créer), même ordre. UI bilingue fr/en (D11) : langue persistée via localStorage."
+    "footer.p2": "est byte-identique dans les 6 fichiers. Tab bar mobile ↔ sidebar desktop : mêmes destinations (Inbox, Projets, Créer, Réglages), même ordre. UI bilingue fr/en (D11) : langue persistée via localStorage."
   },
   en: {
     "meta.title": "LaToile — Mockup gallery",
@@ -212,12 +233,15 @@ const I18N = {
     "filter.tous": "All",
     "filter.projet": "Project",
     "filter.new": "New project",
+    "filter.settings": "Settings",
     "inbox.desc": "Home screen: pending approvals, blocked runs, active projects. Answers “what needs my decision?” in under 3 seconds.",
     "projet.name": "Project",
     "projet.desc": "Project view: chat with the Manager (actions as structured cards), horizontally scrolling task board, live preview of the app being built.",
     "review.desc": "Human decision on a run: Reviewer verdict, mono diff, mockup vs render side by side, Approve / Request changes actions in a sticky bottom bar.",
     "new.name": "New project",
     "new.desc": "Creation: GitHub repository picker, multi-line initial brief, bottom-sticky primary button.",
+    "settings.name": "Settings",
+    "settings.desc": "Claude/Codex connections and routing for the five AI-team roles. Includes the Codex device flow, empty, loading, and error states.",
     "st.peuple": "Populated",
     "st.vide": "Empty",
     "st.chargement": "Loading",
@@ -230,8 +254,10 @@ const I18N = {
     "st.approuve": "Approved",
     "st.defaut": "Default",
     "st.envoi": "Submitting",
+    "st.configure": "Configured",
+    "st.connexion": "Connecting",
     "footer.p1": "Self-contained static mockups — no framework, no fetch. The",
-    "footer.p2": "token block is byte-identical across all 5 files. Mobile tab bar ↔ desktop sidebar: same destinations (Inbox, Projects, Create), same order. Bilingual fr/en UI (D11): language persisted via localStorage."
+    "footer.p2": "token block is byte-identical across all 6 files. Mobile tab bar ↔ desktop sidebar: same destinations (Inbox, Projects, Create, Settings), same order. Bilingual fr/en UI (D11): language persisted via localStorage."
   }
 };
 function applyLang(lang) {

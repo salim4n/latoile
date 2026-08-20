@@ -13,6 +13,7 @@ latoile-agents = { path = "../agents" }
 latoile-preview = { path = "../preview" }
 latoile-github = { path = "../github" }
 latoile-vault = { path = "../vault" }
+latoile-capture = { path = "../capture" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
@@ -37,3 +38,4 @@ mime_guess = "2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

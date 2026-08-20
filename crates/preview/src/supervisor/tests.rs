@@ -11,6 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 const SERVER_CMD: &str = "python3 -c \"import os,http.server;\
 http.server.ThreadingHTTPServer(('127.0.0.1',int(os.environ['PORT'])),\
 http.server.SimpleHTTPRequestHandler).serve_forever()\"";
+const WORKING_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Each test gets its own 100-port window: two supervisors racing for the
 /// same base would both find it bindable before either child has bound, and
@@ -37,7 +38,9 @@ fn preview(id: &str, port: u16) -> Preview {
 }
 
 async fn listening(port: u16) -> bool {
-    TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.is_ok()
+    TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+        .await
+        .is_ok()
 }
 
 #[tokio::test]
@@ -45,7 +48,7 @@ async fn start_becomes_ready_on_a_serving_port() {
     let sup = Supervisor::new(config());
     let p = preview("pr1", 0);
 
-    let (pid, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (pid, port) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     assert!(pid > 0);
     assert!(port >= 24100);
     assert!(listening(port).await, "the dev server answers on {port}");
@@ -59,7 +62,7 @@ async fn stop_frees_the_port_and_the_slot() {
     let sup = Supervisor::new(config_at(24200));
     let p = preview("pr1", 0);
 
-    let (_, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (_, port) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     sup.stop(&p).await.unwrap();
 
     for _ in 0..50 {
@@ -68,7 +71,10 @@ async fn stop_frees_the_port_and_the_slot() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(!listening(port).await, "the port is still serving after stop");
+    assert!(
+        !listening(port).await,
+        "the port is still serving after stop"
+    );
     assert!(!sup.is_alive(&p.id).await);
 }
 
@@ -77,8 +83,8 @@ async fn a_second_ensure_recycles_the_process() {
     let sup = Supervisor::new(config_at(24300));
     let p = preview("pr1", 0);
 
-    let (first_pid, _) = sup.ensure(&p, SERVER_CMD).await.unwrap();
-    let (second_pid, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (first_pid, _) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
+    let (second_pid, port) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
 
     assert_ne!(first_pid, second_pid, "a fresh process, not the old one");
     assert!(listening(port).await);
@@ -90,10 +96,10 @@ async fn a_refresh_keeps_the_port_so_the_url_survives() {
     let sup = Supervisor::new(config_at(24400));
     let mut p = preview("pr1", 0);
 
-    let (_, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (_, port) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     // The use case's refresh path: the Preview entity carries its port.
     p.port = port;
-    let (_, again) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (_, again) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     assert_eq!(again, port, "the UI's iframe URL must not move on refresh");
     sup.stop(&p).await.unwrap();
 }
@@ -106,7 +112,7 @@ async fn a_port_taken_by_something_else_is_skipped() {
     let sup = Supervisor::new(config_at(24500));
     let p = preview("pr1", 0);
 
-    let (_, port) = sup.ensure(&p, SERVER_CMD).await.unwrap();
+    let (_, port) = sup.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     assert_ne!(port, 24500);
     assert!(listening(port).await);
 
@@ -122,14 +128,14 @@ async fn a_server_that_never_listens_is_killed_at_the_budget() {
     });
     let p = preview("pr1", 0);
 
-    let err = sup.ensure(&p, "sleep 30").await.unwrap_err();
+    let err = sup.ensure(&p, "sleep 30", WORKING_DIR).await.unwrap_err();
     assert!(err.to_string().contains("not ready"), "{err}");
 
     // The port was handed back. A fresh supervisor with a normal budget:
     // the wedged one's 500 ms is for the failure path only — a cold python
     // under parallel test load needs the real one.
     let sup2 = Supervisor::new(config_at(24600));
-    let (_, port) = sup2.ensure(&p, SERVER_CMD).await.unwrap();
+    let (_, port) = sup2.ensure(&p, SERVER_CMD, WORKING_DIR).await.unwrap();
     assert_eq!(port, 24600, "the timed-out server's port was not freed");
     assert!(listening(port).await);
     sup2.stop(&p).await.unwrap();
@@ -141,7 +147,7 @@ async fn a_command_that_exits_immediately_reports_its_last_words() {
     let p = preview("pr1", 0);
 
     let err = sup
-        .ensure(&p, "echo dying-breath >&2; exit 1")
+        .ensure(&p, "echo dying-breath >&2; exit 1", WORKING_DIR)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("dying-breath"), "{err}");
@@ -152,21 +158,35 @@ async fn logs_are_captured_and_exposed() {
     let sup = Supervisor::new(config_at(24700));
     let p = preview("pr1", 0);
 
-    sup.ensure(&p, "echo first-words; exec python3 -c \"import os,http.server;\
+    sup.ensure(
+        &p,
+        "echo first-words; echo cwd:$PWD; exec python3 -c \"import os,http.server;\
 http.server.ThreadingHTTPServer(('127.0.0.1',int(os.environ['PORT'])),\
-http.server.SimpleHTTPRequestHandler).serve_forever()\"")
-        .await
-        .unwrap();
+http.server.SimpleHTTPRequestHandler).serve_forever()\"",
+        WORKING_DIR,
+    )
+    .await
+    .unwrap();
 
     let mut found = false;
     for _ in 0..50 {
-        if sup.logs(&p.id).await.iter().any(|l| l.contains("first-words")) {
+        if sup
+            .logs(&p.id)
+            .await
+            .iter()
+            .any(|l| l.contains("first-words"))
+        {
             found = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(found, "the dev server's output never reached the ring");
+    assert!(sup
+        .logs(&p.id)
+        .await
+        .iter()
+        .any(|line| line == &format!("cwd:{WORKING_DIR}")));
     sup.stop(&p).await.unwrap();
 }
 
@@ -187,8 +207,8 @@ async fn two_projects_run_side_by_side_on_distinct_ports() {
         "work",
     );
 
-    let (_, port_a) = sup.ensure(&a, SERVER_CMD).await.unwrap();
-    let (_, port_b) = sup.ensure(&b, SERVER_CMD).await.unwrap();
+    let (_, port_a) = sup.ensure(&a, SERVER_CMD, WORKING_DIR).await.unwrap();
+    let (_, port_b) = sup.ensure(&b, SERVER_CMD, WORKING_DIR).await.unwrap();
     assert_ne!(port_a, port_b);
     assert!(listening(port_a).await && listening(port_b).await);
 

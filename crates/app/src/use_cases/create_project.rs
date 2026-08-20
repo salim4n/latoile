@@ -8,7 +8,7 @@ use super::UseCaseError;
 use crate::store::Store;
 use latoile_core::conversation::Conversation;
 use latoile_core::ids::{ConversationId, ProjectId};
-use latoile_core::ports::ProjectStore;
+use latoile_core::ports::{ProjectStore, ProvisionWorkspaceInput, WorkspaceProvisioner};
 use latoile_core::Project;
 
 pub struct CreateProjectInput {
@@ -16,31 +16,45 @@ pub struct CreateProjectInput {
     pub slug: String,
     pub github_repo: String,
     pub work_branch: String,
-    pub local_path: String,
-    pub dev_command: String,
+    pub dev_command: Option<String>,
 }
 
-pub struct CreateProject {
+pub struct CreateProject<W> {
     store: Store,
+    workspaces: W,
 }
 
-impl CreateProject {
-    pub fn new(store: Store) -> Self {
-        Self { store }
+impl<W: WorkspaceProvisioner> CreateProject<W> {
+    pub fn new(store: Store, workspaces: W) -> Self {
+        Self { store, workspaces }
     }
 
     pub async fn execute(&self, input: CreateProjectInput) -> Result<Project, UseCaseError> {
-        // 1–3. Validate and build through the domain constructor (name/slug
-        // non-empty, repo looks like owner/name).
-        let project = Project::new(
+        // 1. Validate identity before an adapter can create a checkout.
+        Project::validate_identity(&input.name, &input.slug, &input.github_repo)?;
+
+        // 2–3. Provision the repository; host paths and the default branch
+        // are adapter-owned facts, never browser input.
+        let provisioned = self
+            .workspaces
+            .provision(&ProvisionWorkspaceInput {
+                repo: input.github_repo.clone(),
+                slug: input.slug.clone(),
+                work_branch: input.work_branch,
+                dev_command: input.dev_command,
+            })
+            .await?;
+
+        let mut project = Project::new(
             ProjectId::new(ulid::Ulid::new().to_string())?,
             input.name,
             input.slug,
             input.github_repo,
-            input.work_branch,
-            input.local_path,
-            input.dev_command,
+            provisioned.work_branch,
+            provisioned.local_path,
+            provisioned.dev_command,
         )?;
+        project.default_branch = provisioned.default_branch;
 
         // 4. Persist: the project, then its single conversation.
         ProjectStore::save(&self.store, &project).await?;
@@ -60,7 +74,27 @@ impl CreateProject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use latoile_core::ports::ConversationStore as _;
+    use latoile_core::ports::{ConversationStore as _, PortResult, ProvisionedWorkspace};
+
+    #[derive(Clone)]
+    struct FakeWorkspace;
+
+    impl WorkspaceProvisioner for FakeWorkspace {
+        async fn provision(
+            &self,
+            input: &ProvisionWorkspaceInput,
+        ) -> PortResult<ProvisionedWorkspace> {
+            Ok(ProvisionedWorkspace {
+                default_branch: "trunk".into(),
+                work_branch: input.work_branch.clone(),
+                local_path: format!("/srv/latoile/{}", input.slug),
+                dev_command: input
+                    .dev_command
+                    .clone()
+                    .unwrap_or_else(|| "pnpm dev -- --port $PORT".into()),
+            })
+        }
+    }
 
     fn input() -> CreateProjectInput {
         CreateProjectInput {
@@ -68,21 +102,21 @@ mod tests {
             slug: "mon-app".into(),
             github_repo: "salim4n/mon-app".into(),
             work_branch: "work".into(),
-            local_path: "/srv/latoile/mon-app".into(),
-            dev_command: "pnpm dev --port $PORT".into(),
+            dev_command: None,
         }
     }
 
     #[tokio::test]
     async fn a_project_is_created_with_its_conversation() {
         let store = Store::open_ephemeral().await.unwrap();
-        let project = CreateProject::new(store.clone())
+        let project = CreateProject::new(store.clone(), FakeWorkspace)
             .execute(input())
             .await
             .unwrap();
 
         assert!(store.get(&project.id).await.unwrap().is_some());
         assert!(store.for_project(&project.id).await.unwrap().is_some());
+        assert_eq!(project.default_branch, "trunk");
     }
 
     #[tokio::test]
@@ -91,7 +125,10 @@ mod tests {
         let mut bad = input();
         bad.github_repo = "no-slash".into();
 
-        assert!(CreateProject::new(store.clone()).execute(bad).await.is_err());
+        assert!(CreateProject::new(store.clone(), FakeWorkspace)
+            .execute(bad)
+            .await
+            .is_err());
         assert!(store.list().await.unwrap().is_empty());
     }
 }

@@ -33,6 +33,7 @@ impl DevServer {
     /// before the error returns.
     pub async fn spawn(
         dev_command: &str,
+        working_dir: &str,
         port: u16,
         logs: LogRing,
         readiness: Duration,
@@ -41,6 +42,7 @@ impl DevServer {
         command
             .arg("-c")
             .arg(dev_command)
+            .current_dir(working_dir)
             .env("PORT", port.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -50,7 +52,7 @@ impl DevServer {
 
         let mut child = command
             .spawn()
-            .map_err(|e| PreviewError::Spawn(format!("`{dev_command}`: {e}")))?;
+            .map_err(|e| PreviewError::Spawn(format!("`{dev_command}` in `{working_dir}`: {e}")))?;
         let pid = child.id().unwrap_or(0);
 
         if let Some(stdout) = child.stdout.take() {
@@ -143,7 +145,10 @@ async fn wait_ready(
             Ok(None) => {}
             Err(e) => return Err(PreviewError::Spawn(e.to_string())),
         }
-        if TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.is_ok() {
+        if TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
         if Instant::now() >= deadline {

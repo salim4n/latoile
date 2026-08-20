@@ -36,6 +36,59 @@ fn row_to_task(row: &SqliteRow) -> Result<Task, StoreError> {
 const COLUMNS: &str =
     "id, project_id, spec_version_id, role_id, title, description, status, position";
 
+/// Board read model: the task plus its most recent run, when one exists.
+/// Run identity is presentation context, so it stays out of the Task domain
+/// entity and is joined only for the project workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectTaskRow {
+    pub task: Task,
+    pub latest_run_id: Option<String>,
+    pub latest_review_status: Option<String>,
+    pub latest_decision_comment: Option<String>,
+}
+
+impl Store {
+    pub async fn list_project_task_rows(
+        &self,
+        project: &ProjectId,
+    ) -> PortResult<Vec<ProjectTaskRow>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS},
+                    (SELECT run.id FROM run
+                     WHERE run.task_id = task.id
+                     ORDER BY run.started_at DESC, run.id DESC LIMIT 1) AS latest_run_id,
+                    (SELECT approval.status FROM approval
+                     JOIN run review_run ON review_run.id = approval.run_id
+                     WHERE review_run.task_id = task.id AND approval.kind = 'review'
+                     ORDER BY approval.created_at DESC, approval.id DESC LIMIT 1)
+                        AS latest_review_status,
+                    (SELECT approval.decision_comment FROM approval
+                     JOIN run review_run ON review_run.id = approval.run_id
+                     WHERE review_run.task_id = task.id AND approval.kind = 'review'
+                     ORDER BY approval.created_at DESC, approval.id DESC LIMIT 1)
+                        AS latest_decision_comment
+             FROM task WHERE project_id = ?
+             ORDER BY position, created_at, id"
+        ))
+        .bind(project.as_str())
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(ProjectTaskRow {
+                    task: row_to_task(row)?,
+                    latest_run_id: row.try_get("latest_run_id")?,
+                    latest_review_status: row.try_get("latest_review_status")?,
+                    latest_decision_comment: row.try_get("latest_decision_comment")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
+            .map_err(Into::into)
+    }
+}
+
 impl TaskStore for Store {
     async fn get(&self, id: &TaskId) -> PortResult<Option<Task>> {
         let row = sqlx::query(&format!("SELECT {COLUMNS} FROM task WHERE id = ?"))
@@ -43,9 +96,7 @@ impl TaskStore for Store {
             .fetch_optional(self.pool())
             .await
             .map_err(StoreError::from)?;
-        row.map(|r| row_to_task(&r))
-            .transpose()
-            .map_err(Into::into)
+        row.map(|r| row_to_task(&r)).transpose().map_err(Into::into)
     }
 
     /// Board order: position, then creation for stability.
@@ -137,8 +188,12 @@ mod tests {
     #[tokio::test]
     async fn list_for_project_is_in_board_order() {
         let s = test_fixtures::store_with_project().await;
-        s.save(&task("t2", &test_fixtures::PROJECT, 1)).await.unwrap();
-        s.save(&task("t1", &test_fixtures::PROJECT, 0)).await.unwrap();
+        s.save(&task("t2", &test_fixtures::PROJECT, 1))
+            .await
+            .unwrap();
+        s.save(&task("t1", &test_fixtures::PROJECT, 0))
+            .await
+            .unwrap();
 
         let listed = s.list_for_project(&test_fixtures::PROJECT).await.unwrap();
         assert_eq!(listed[0].id.as_str(), "t1");
@@ -151,5 +206,21 @@ mod tests {
         let mut t = task("t1", &test_fixtures::PROJECT, 0);
         t.role_id = RoleId::new("ghost").unwrap();
         assert!(s.save(&t).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn project_rows_include_the_latest_run() {
+        let (s, run_id) = test_fixtures::store_with_run().await;
+
+        let rows = s
+            .list_project_task_rows(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].task.id.as_str(), "t1");
+        assert_eq!(rows[0].latest_run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(rows[0].latest_review_status, None);
+        assert_eq!(rows[0].latest_decision_comment, None);
     }
 }

@@ -18,7 +18,7 @@ use axum::response::Response;
 use axum::Json;
 use latoile_app::use_cases::{EnsurePreview, StopPreview};
 use latoile_core::ids::ProjectId;
-use latoile_core::ports::PreviewStore;
+use latoile_core::ports::{PreviewStore, ProjectStore};
 
 /// No preview running is not an error state for the UI — it is a 404 with
 /// the contract's shape.
@@ -29,15 +29,21 @@ fn no_preview() -> ApiError {
 pub async fn status(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<PreviewDto>, ApiError> {
+) -> Result<Json<Option<PreviewDto>>, ApiError> {
     let id = ProjectId::new(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let preview = state
-        .store
-        .active_for_project(&id)
-        .await?
-        .ok_or_else(no_preview)?;
-    let alive = state.previews.is_alive(&preview.id).await;
-    Ok(Json(PreviewDto::of(&preview, alive)))
+    if state.store.get(&id).await?.is_none() {
+        return Err(ApiError::not_found("project"));
+    }
+    let preview = state.store.active_for_project(&id).await?;
+    let dto = match preview {
+        Some(preview) => {
+            let alive = state.previews.is_alive(&preview.id).await;
+            let logs = state.previews.logs(&preview.id).await;
+            Some(PreviewDto::of(&preview, alive, logs))
+        }
+        None => None,
+    };
+    Ok(Json(dto))
 }
 
 pub async fn ensure(
@@ -53,7 +59,8 @@ pub async fn ensure(
     )
     .execute(&id)
     .await?;
-    Ok(Json(PreviewDto::of(&ensured.preview, true)))
+    let logs = state.previews.logs(&ensured.preview.id).await;
+    Ok(Json(PreviewDto::of(&ensured.preview, true, logs)))
 }
 
 pub async fn stop(

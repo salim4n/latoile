@@ -6,24 +6,43 @@
 //! RPITIT) makes the traits non-dyn-compatible, so constructor injection uses
 //! type parameters instead of `Arc<dyn …>`.
 
+mod answer_architecture;
 mod approve_spec;
+mod cancel_architecture;
+mod capture_baselines;
+mod capture_visual_comparisons;
 mod create_project;
+mod decide_permission;
+mod deliver_project;
 mod dispatch_task;
 mod ensure_preview;
 mod grant_approval;
+mod invalidate_preview;
 mod manager_turn;
+mod produce_architecture_package;
 mod reject_approval;
+mod routing;
 mod send_message;
+mod start_architecture;
 mod stop_preview;
 
+pub use answer_architecture::AnswerArchitecture;
 pub use approve_spec::ApproveSpec;
+pub use cancel_architecture::CancelArchitecture;
+pub use capture_baselines::CaptureBaselines;
+pub use capture_visual_comparisons::CaptureVisualComparisons;
 pub use create_project::{CreateProject, CreateProjectInput};
+pub use decide_permission::DecidePermission;
+pub use deliver_project::DeliverProject;
 pub use dispatch_task::{DispatchTask, DispatchTaskInput, DispatchedTask};
 pub use ensure_preview::{EnsurePreview, EnsuredPreview};
 pub use grant_approval::{GrantApproval, GrantedApproval};
+pub use invalidate_preview::InvalidatePreview;
 pub use manager_turn::{ManagerOutcome, ManagerTurn};
 pub use reject_approval::RejectApproval;
+pub use routing::{PROVIDERS, ROLES, RoleRouting, Routing};
 pub use send_message::{PostedMessage, SendMessage, SendMessageInput};
+pub use start_architecture::{ArchitectureOutcome, StartArchitecture};
 pub use stop_preview::StopPreview;
 
 use latoile_core::error::DomainError;

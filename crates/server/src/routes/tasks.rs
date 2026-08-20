@@ -6,12 +6,12 @@
 use super::dto::TaskDto;
 use crate::error::ApiError;
 use crate::state::AppState;
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use latoile_app::use_cases::{DispatchTask, DispatchTaskInput};
+use latoile_core::TriggeredBy;
 use latoile_core::ids::{ProjectId, RoleId, TaskId};
 use latoile_core::ports::TaskStore;
-use latoile_core::TriggeredBy;
 use serde::Deserialize;
 
 pub async fn list(
@@ -19,7 +19,7 @@ pub async fn list(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<TaskDto>>, ApiError> {
     let id = ProjectId::new(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let tasks = state.store.list_for_project(&id).await?;
+    let tasks = state.store.list_project_task_rows(&id).await?;
     Ok(Json(tasks.iter().map(TaskDto::from).collect()))
 }
 
@@ -45,6 +45,8 @@ pub async fn dispatch(
         state.store.clone(),
         state.store.clone(),
         state.store.clone(),
+        state.store.clone(),
+        state.baselines.clone(),
         state.agents.clone(),
         state.store.clone(),
     )

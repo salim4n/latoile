@@ -25,6 +25,10 @@ pub enum GitHubError {
     /// A 200 that wasn't the JSON the API promised.
     #[error("an unexpected GitHub response: {0}")]
     Decode(String),
+    /// Local checkout or Git command failure. Messages are sanitized before
+    /// reaching this variant, so credentials can never enter logs.
+    #[error("provisioning the repository failed: {0}")]
+    Workspace(String),
 }
 
 impl From<GitHubError> for PortError {

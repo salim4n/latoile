@@ -12,16 +12,20 @@
 //! spec-list read, which ProposeSpec needs to number versions.
 
 use super::{DispatchTask, DispatchTaskInput, UseCaseError};
-use crate::manager_actions::{parse_reply, ManagerAction};
+use crate::manager_actions::{ManagerAction, parse_reply};
 use crate::store::Store;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{MessageId, ProjectId, RoleId, SpecVersionId, TaskId};
-use latoile_core::ports::{AgentChannel, ConversationStore, EventLog, ManagerReply, SpecStore, TaskStore};
+use latoile_core::ports::{
+    AgentChannel, ConversationStore, EventLog, ManagerReply, SpecStore, TaskStore,
+    VisualBaselineRenderer,
+};
 use latoile_core::{Author, Message, SpecVersion, Task, TriggeredBy};
 
-pub struct ManagerTurn<A> {
+pub struct ManagerTurn<A, B> {
     store: Store,
     agents: A,
+    baselines: B,
 }
 
 /// The reply as persisted, plus the parse warnings (already surfaced as
@@ -31,9 +35,13 @@ pub struct ManagerOutcome {
     pub warnings: Vec<String>,
 }
 
-impl<A: AgentChannel + Clone> ManagerTurn<A> {
-    pub fn new(store: Store, agents: A) -> Self {
-        Self { store, agents }
+impl<A: AgentChannel + Clone, B: VisualBaselineRenderer + Clone> ManagerTurn<A, B> {
+    pub fn new(store: Store, agents: A, baselines: B) -> Self {
+        Self {
+            store,
+            agents,
+            baselines,
+        }
     }
 
     pub async fn record_reply(
@@ -145,6 +153,8 @@ impl<A: AgentChannel + Clone> ManagerTurn<A> {
                     self.store.clone(),
                     self.store.clone(),
                     self.store.clone(),
+                    self.store.clone(),
+                    self.baselines.clone(),
                     self.agents.clone(),
                     self.store.clone(),
                 )
@@ -205,19 +215,41 @@ impl<A: AgentChannel + Clone> ManagerTurn<A> {
 mod tests {
     use super::*;
     use crate::store::test_fixtures;
+    use latoile_core::Run;
     use latoile_core::ids::RunId;
     use latoile_core::ports::PortResult;
-    use latoile_core::Run;
 
     #[derive(Clone)]
     struct FakeAgents;
+    #[derive(Clone)]
+    struct FakeBaselines;
+
+    impl VisualBaselineRenderer for FakeBaselines {
+        async fn capture(
+            &self,
+            _request: &latoile_core::VisualBaselineCaptureRequest,
+        ) -> PortResult<latoile_core::VisualBaselineCaptureOutcome> {
+            unimplemented!()
+        }
+
+        async fn read_png(&self, _baseline: &latoile_core::VisualBaseline) -> PortResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
 
     impl AgentChannel for FakeAgents {
         async fn tell_manager(&self, _p: &ProjectId, _m: &str) -> PortResult<ManagerReply> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, _p: &str) -> PortResult<String> {
+        async fn start_run(&self, _project: &ProjectId, _r: &Run, _p: &str) -> PortResult<String> {
             Ok("acp-fake".into())
+        }
+        async fn verify_architecture_package(
+            &self,
+            _project: &ProjectId,
+            spec: &latoile_core::SpecVersion,
+        ) -> PortResult<latoile_core::ArchitecturePackageValidation> {
+            Ok(test_fixtures::test_verification(spec))
         }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
             Ok(())
@@ -243,7 +275,7 @@ mod tests {
             content: "Je m'en occupe.\n\n```latoile-actions\n[{\"type\": \"create_tasks\", \"tasks\": [{\"title\": \"Login page\", \"role_id\": \"frontend\", \"description\": \"Form\"}]}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -253,12 +285,19 @@ mod tests {
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Task created: Login page → frontend");
 
-        let tasks = store.list_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let tasks = store
+            .list_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Login page");
         let events = store.events_since(0).await.unwrap();
         assert!(events.iter().any(|(_, e)| e.kind == EventKind::TaskReady));
-        assert!(events.iter().any(|(_, e)| e.kind == EventKind::MessagePosted));
+        assert!(
+            events
+                .iter()
+                .any(|(_, e)| e.kind == EventKind::MessagePosted)
+        );
     }
 
     #[tokio::test]
@@ -268,7 +307,7 @@ mod tests {
             content: "```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Login page\", \"role_id\": \"frontend\", \"prompt\": \"Build it\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -276,11 +315,13 @@ mod tests {
         let cards: serde_json::Value =
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Dispatch refused: Login page");
-        assert!(store
-            .list_for_project(&test_fixtures::PROJECT)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .list_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -297,7 +338,7 @@ mod tests {
             content: "Go.\n```latoile-actions\n[{\"type\": \"dispatch_task\", \"title\": \"Login page\", \"role_id\": \"frontend\", \"prompt\": \"Build it\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
@@ -305,7 +346,10 @@ mod tests {
         let cards: serde_json::Value =
             serde_json::from_str(outcome.message.actions.as_deref().unwrap()).unwrap();
         assert_eq!(cards[0]["title"], "Run started — Login page");
-        let tasks = store.list_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let tasks = store
+            .list_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(tasks[0].status, latoile_core::TaskStatus::InProgress);
     }
 
@@ -323,12 +367,15 @@ mod tests {
             content: "```latoile-actions\n[{\"type\": \"propose_spec\"}]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();
 
-        let specs = store.specs_for_project(&test_fixtures::PROJECT).await.unwrap();
+        let specs = store
+            .specs_for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap();
         assert_eq!(specs[0].version, 2);
         assert_eq!(specs[0].status, latoile_core::SpecStatus::Draft);
         assert_eq!(outcome.warnings.len(), 0);
@@ -341,7 +388,7 @@ mod tests {
             content: "Réponse.\n```latoile-actions\n[oops]\n```".into(),
             actions: None,
         };
-        let outcome = ManagerTurn::new(store.clone(), FakeAgents)
+        let outcome = ManagerTurn::new(store.clone(), FakeAgents, FakeBaselines)
             .record_reply(&test_fixtures::PROJECT, reply)
             .await
             .unwrap();

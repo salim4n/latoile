@@ -39,6 +39,9 @@ id_newtype!(ApprovalId);
 id_newtype!(PreviewId);
 id_newtype!(ConversationId);
 id_newtype!(MessageId);
+id_newtype!(ArchitectureSessionId);
+id_newtype!(ArchitectureQuestionId);
+id_newtype!(VisualComparisonId);
 
 id_newtype!(
     /// A role identifier (`manager`, `architect`, `backend`, `frontend`,

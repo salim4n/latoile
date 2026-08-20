@@ -6,7 +6,9 @@
 //! axum nor the outside world. The persistence module (`store/`) is the only
 //! place SQL lives outside the vault.
 
+pub mod architecture_turn;
 pub mod manager_actions;
+pub mod review_result;
 pub mod store;
 pub mod supervision;
 pub mod use_cases;

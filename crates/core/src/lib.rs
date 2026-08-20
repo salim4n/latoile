@@ -1,5 +1,6 @@
-//! The domain. Zero I/O, zero async, zero external dependencies — this crate
-//! must compile for any target and never know how it is persisted or served.
+//! The domain. Zero I/O and zero external dependencies — native async port
+//! signatures declare adapter contracts without owning a runtime. This crate
+//! never knows how it is persisted or served.
 //!
 //! Owns: entities (`Project`, `SpecVersion`, `Task`, `Run`, `Approval`,
 //! `Preview`, `Conversation`, `Message`), the state machines with their
@@ -11,7 +12,9 @@
 //! granted review approval, the Manager never executes.
 
 pub mod approval;
+pub mod architecture;
 pub mod conversation;
+pub mod delivery;
 pub mod error;
 pub mod event;
 pub mod ids;
@@ -22,17 +25,32 @@ pub mod project;
 pub mod run;
 pub mod spec;
 pub mod task;
+pub mod visual;
 
 pub use approval::{Approval, ApprovalKind, ApprovalStatus};
+pub use architecture::{
+    ARCHITECT_SKILL_NAME, ArchitectureOperatingMode, ArchitecturePackageEvidence,
+    ArchitecturePackageStatus, ArchitecturePackageValidation, ArchitecturePhase,
+    ArchitectureQuestion, ArchitectureQuestionStatus, ArchitectureSession, ArchitectureStatus,
+    ArchitectureValidationFinding, ArchitectureVisualScenario,
+};
 pub use conversation::{Author, Conversation, Message};
+pub use delivery::{Delivery, DeliveryStatus};
 pub use error::{DomainError, TransitionError};
 pub use event::{EventKind, NewEvent};
 pub use ids::{
-    ApprovalId, ConversationId, MessageId, PreviewId, ProjectId, RoleId, RunId, SpecVersionId,
-    TaskId,
+    ApprovalId, ArchitectureQuestionId, ArchitectureSessionId, ConversationId, MessageId,
+    PreviewId, ProjectId, RoleId, RunId, SpecVersionId, TaskId, VisualComparisonId,
 };
 pub use preview::{Preview, PreviewStatus};
 pub use project::{Project, ProjectStatus};
 pub use run::{Run, RunStatus, TriggeredBy};
-pub use spec::{SpecStatus, SpecVersion};
+pub use spec::{SpecProvenance, SpecStatus, SpecVersion};
 pub use task::{Task, TaskStatus};
+pub use visual::{
+    BLOCKING_ACCESSIBILITY_CHANGES, BLOCKING_GEOMETRY_DELTA_MILLI, BLOCKING_PIXEL_RATIO_MICROS,
+    CapturedVisualBaseline, CapturedVisualComparison, RESERVATION_PIXEL_RATIO_MICROS,
+    VisualBaseline, VisualBaselineCaptureOutcome, VisualBaselineCaptureRequest,
+    VisualBaselineStatus, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest, VisualComparisonStatus,
+};

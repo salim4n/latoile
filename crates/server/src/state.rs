@@ -14,13 +14,22 @@
 //! keeps the router concrete, `Send`-checked, and fakeable without touching
 //! the app's type safety.
 
-use latoile_agents::{AcpChannel, AgentCommand, AgentTimeouts, ChannelConfig, ProcessConnector, RootDirs};
+use crate::dirs::StoreDirs;
+use latoile_agents::{AcpChannel, AgentTimeouts, ChannelConfig, ProcessConnector, SharedRouting};
 use latoile_app::store::Store;
-use latoile_core::ids::{ProjectId, RunId};
+use latoile_capture::BaselineCapture;
+use latoile_core::ids::{ArchitectureSessionId, ProjectId, RunId};
 use latoile_core::ports::{
-    AgentChannel, GitHubClient, ManagerReply, PortResult, RepoInfo,
+    AgentChannel, ArchitectReply, ArchitecturePackageReply, ArchitecturePackageRequest,
+    GitHubClient, ManagerReply, PortResult, ProvisionWorkspaceInput, ProvisionedWorkspace,
+    PublishWorkBranchInput, PublishedWorkBranch, RepoInfo, VisualBaselineRenderer,
+    VisualComparisonRenderer, WorkBranchPublisher, WorkspaceProvisioner,
 };
-use latoile_core::Run;
+use latoile_core::{
+    ArchitecturePackageValidation, Run, SpecVersion, VisualBaseline, VisualBaselineCaptureOutcome,
+    VisualBaselineCaptureRequest, VisualComparison, VisualComparisonCaptureOutcome,
+    VisualComparisonCaptureRequest,
+};
 use latoile_github::{GitHub, GitHubConfig};
 use latoile_preview::Supervisor;
 use latoile_vault::Vault;
@@ -51,12 +60,14 @@ pub enum BuildError {
     Store(#[from] latoile_app::store::StoreError),
     #[error("vault: {0}")]
     Vault(#[from] latoile_vault::VaultError),
+    #[error("startup recovery: {0}")]
+    Recovery(#[from] latoile_app::use_cases::UseCaseError),
 }
 
 /// The agent channel, concrete. `Stub` exists only in tests.
 #[derive(Clone)]
 pub enum AgentSlot {
-    Real(Arc<AcpChannel<ProcessConnector, RootDirs>>),
+    Real(Arc<AcpChannel<ProcessConnector, StoreDirs, SharedRouting>>),
     #[cfg(test)]
     Stub(crate::tests::StubAgents),
 }
@@ -69,11 +80,139 @@ impl AgentChannel for AgentSlot {
             Self::Stub(stub) => stub.tell_manager(project, message).await,
         }
     }
-    async fn start_run(&self, run: &Run, prompt: &str) -> PortResult<String> {
+    async fn start_architecture(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        brief: &str,
+    ) -> PortResult<ArchitectReply> {
         match self {
-            Self::Real(channel) => channel.start_run(run, prompt).await,
+            Self::Real(channel) => channel.start_architecture(project, session, brief).await,
             #[cfg(test)]
-            Self::Stub(stub) => stub.start_run(run, prompt).await,
+            Self::Stub(stub) => stub.start_architecture(project, session, brief).await,
+        }
+    }
+    async fn continue_architecture(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        answer: &str,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .continue_architecture(project, session, answer)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => stub.continue_architecture(project, session, answer).await,
+        }
+    }
+    async fn retry_architecture_question(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel.retry_architecture_question(project, session).await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => stub.retry_architecture_question(project, session).await,
+        }
+    }
+    async fn retry_architecture_contract(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        current_phase: latoile_core::ArchitecturePhase,
+    ) -> PortResult<ArchitectReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .retry_architecture_contract(project, session, current_phase)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.retry_architecture_contract(project, session, current_phase)
+                    .await
+            }
+        }
+    }
+    async fn cancel_architecture(&self, session: &ArchitectureSessionId) -> PortResult<()> {
+        match self {
+            Self::Real(channel) => channel.cancel_architecture(session).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.cancel_architecture(session).await,
+        }
+    }
+    async fn generate_architecture_package(
+        &self,
+        project: &ProjectId,
+        session: &ArchitectureSessionId,
+        request: &ArchitecturePackageRequest,
+    ) -> PortResult<ArchitecturePackageReply> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .generate_architecture_package(project, session, request)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.generate_architecture_package(project, session, request)
+                    .await
+            }
+        }
+    }
+    async fn verify_architecture_package(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+    ) -> PortResult<ArchitecturePackageValidation> {
+        match self {
+            Self::Real(channel) => channel.verify_architecture_package(project, spec).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.verify_architecture_package(project, spec).await,
+        }
+    }
+    async fn read_architecture_artifact(
+        &self,
+        project: &ProjectId,
+        spec: &SpecVersion,
+        relative_path: &str,
+    ) -> PortResult<String> {
+        match self {
+            Self::Real(channel) => {
+                channel
+                    .read_architecture_artifact(project, spec, relative_path)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                stub.read_architecture_artifact(project, spec, relative_path)
+                    .await
+            }
+        }
+    }
+    async fn start_run(&self, project: &ProjectId, run: &Run, prompt: &str) -> PortResult<String> {
+        match self {
+            Self::Real(channel) => channel.start_run(project, run, prompt).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.start_run(project, run, prompt).await,
+        }
+    }
+    async fn resolve_permission(
+        &self,
+        run: &RunId,
+        request_id: &str,
+        granted: bool,
+    ) -> PortResult<()> {
+        match self {
+            Self::Real(channel) => channel.resolve_permission(run, request_id, granted).await,
+            #[cfg(test)]
+            Self::Stub(stub) => stub.resolve_permission(run, request_id, granted).await,
         }
     }
     async fn cancel_run(&self, run: &RunId) -> PortResult<()> {
@@ -93,6 +232,71 @@ pub enum GitHubSlot {
     Stub(Vec<RepoInfo>),
 }
 
+#[derive(Clone)]
+pub enum BaselineSlot {
+    Real(BaselineCapture),
+    #[cfg(test)]
+    Stub(crate::tests::StubBaselines),
+}
+
+impl VisualBaselineRenderer for BaselineSlot {
+    async fn capture(
+        &self,
+        request: &VisualBaselineCaptureRequest,
+    ) -> PortResult<VisualBaselineCaptureOutcome> {
+        match self {
+            Self::Real(renderer) => renderer.capture(request).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.capture(request).await,
+        }
+    }
+
+    async fn read_png(&self, baseline: &VisualBaseline) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_png(baseline).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_png(baseline).await,
+        }
+    }
+}
+
+impl VisualComparisonRenderer for BaselineSlot {
+    async fn compare(
+        &self,
+        request: &VisualComparisonCaptureRequest,
+    ) -> PortResult<VisualComparisonCaptureOutcome> {
+        match self {
+            Self::Real(renderer) => renderer.compare(request).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.compare(request).await,
+        }
+    }
+
+    async fn read_render_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_render_png(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_render_png(comparison).await,
+        }
+    }
+
+    async fn read_heatmap_png(&self, comparison: &VisualComparison) -> PortResult<Vec<u8>> {
+        match self {
+            Self::Real(renderer) => renderer.read_heatmap_png(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.read_heatmap_png(comparison).await,
+        }
+    }
+
+    async fn verify_comparison(&self, comparison: &VisualComparison) -> PortResult<()> {
+        match self {
+            Self::Real(renderer) => renderer.verify_comparison(comparison).await,
+            #[cfg(test)]
+            Self::Stub(renderer) => renderer.verify_comparison(comparison).await,
+        }
+    }
+}
+
 impl GitHubClient for GitHubSlot {
     async fn list_repos(&self) -> PortResult<Vec<RepoInfo>> {
         match self {
@@ -108,9 +312,71 @@ impl GitHubClient for GitHubSlot {
             Self::Stub(_) => Ok("https://github.com/stub/pr/1".into()),
         }
     }
+    async fn find_open_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> PortResult<Option<String>> {
+        match self {
+            Self::Real(github) => github.find_open_pull_request(repo, head, base).await,
+            #[cfg(test)]
+            Self::Stub(_) => Ok(Some(format!("https://github.com/{repo}/pull/1"))),
+        }
+    }
+}
+
+impl WorkBranchPublisher for GitHubSlot {
+    async fn verify_and_push(
+        &self,
+        input: &PublishWorkBranchInput,
+    ) -> PortResult<PublishedWorkBranch> {
+        match self {
+            Self::Real(github) => github.verify_and_push(input).await,
+            #[cfg(test)]
+            Self::Stub(_) => {
+                let sha = input.approved_shas.last().cloned().ok_or_else(|| {
+                    latoile_core::ports::PortError("no approved SHA supplied".into())
+                })?;
+                Ok(PublishedWorkBranch {
+                    work_branch: input.work_branch.clone(),
+                    local_sha: sha.clone(),
+                    remote_sha: sha,
+                })
+            }
+        }
+    }
+}
+
+impl WorkspaceProvisioner for GitHubSlot {
+    async fn provision(&self, input: &ProvisionWorkspaceInput) -> PortResult<ProvisionedWorkspace> {
+        match self {
+            Self::Real(github) => github.provision(input).await,
+            #[cfg(test)]
+            Self::Stub(_) => Ok(ProvisionedWorkspace {
+                default_branch: "main".into(),
+                work_branch: input.work_branch.clone(),
+                local_path: format!("/srv/latoile/{}", input.slug),
+                dev_command: input
+                    .dev_command
+                    .clone()
+                    .unwrap_or_else(|| "pnpm dev -- --port $PORT".into()),
+            }),
+        }
+    }
 }
 
 impl AgentSlot {
+    /// Drop persistent manager sessions (routing changed). The next message
+    /// respawns under the new provider; runs are ephemeral and unaffected.
+    pub async fn evict_managers(&self) {
+        match self {
+            Self::Real(channel) => channel.evict_managers().await,
+            #[cfg(test)]
+            Self::Stub(_) => {}
+        }
+    }
+
     /// What the channel recorded for a run — the supervision driver's
     /// window into the agent processes. `None` means the channel never saw
     /// this run (a restart loses the registry: the run is lost).
@@ -121,6 +387,25 @@ impl AgentSlot {
             Self::Stub(stub) => stub.run_states.lock().unwrap().get(run.as_str()).cloned(),
         }
     }
+
+    pub fn acknowledge_permission_expiry(&self, run: &RunId, request_id: &str) {
+        match self {
+            Self::Real(channel) => channel.acknowledge_permission_expiry(run, request_id),
+            #[cfg(test)]
+            Self::Stub(stub) => {
+                if matches!(
+                    stub.run_states.lock().unwrap().get(run.as_str()),
+                    Some(latoile_agents::RunState::PermissionExpired(request))
+                        if request.id == request_id
+                ) {
+                    stub.run_states
+                        .lock()
+                        .unwrap()
+                        .insert(run.as_str().to_string(), latoile_agents::RunState::Running);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -129,9 +414,18 @@ pub struct AppState {
     pub agents: AgentSlot,
     pub github: GitHubSlot,
     pub previews: Supervisor,
+    pub baselines: BaselineSlot,
     /// For the preview reverse proxy — separate from the GitHub client so a
     /// proxy failure never touches API state.
     pub proxy_http: reqwest::Client,
+    /// Click-to-login sessions for the agent runtime.
+    pub agent_auth: latoile_agents::AgentAuthManager,
+    /// The live role→provider map the channel reads; refreshed on PUT.
+    pub routing: SharedRouting,
+    /// One process-wide decision critical section. LaToile is single-user;
+    /// serializing this tiny write path makes HTTP retries/concurrency
+    /// exactly-once before they reach agent spawning.
+    pub decision_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) token: Arc<str>,
 }
 
@@ -161,7 +455,15 @@ fn resolve_token(config: &ServerConfig) -> (String, &'static str) {
 pub async fn build(
     config: &ServerConfig,
     db_path: &Path,
-) -> Result<(axum::Router, String, &'static str, tokio::task::JoinHandle<()>), BuildError> {
+) -> Result<
+    (
+        axum::Router,
+        String,
+        &'static str,
+        tokio::task::JoinHandle<()>,
+    ),
+    BuildError,
+> {
     let store = Store::open(db_path).await?;
     let (token, token_source) = resolve_token(config);
 
@@ -173,6 +475,7 @@ pub async fn build(
                 .github_api_base
                 .clone()
                 .unwrap_or_else(|| GitHubConfig::default().api_base),
+            workspace_root: config.workspace.clone(),
             ..GitHubConfig::default()
         },
         vault,
@@ -180,17 +483,27 @@ pub async fn build(
     );
 
     let timeouts = AgentTimeouts::default();
+    // Seed the live routing from the settings table.
+    let routing = SharedRouting::default();
+    let stored = latoile_app::use_cases::Routing::new(store.clone())
+        .get()
+        .await
+        .map_err(|e| {
+            BuildError::Store(latoile_app::store::StoreError::CorruptRow(e.to_string()))
+        })?;
+    routing.set_all(stored.into_iter().map(|r| (r.role, r.provider)).collect());
+
     let agents = AcpChannel::new(
         ChannelConfig {
             skills_dir: config.skills_dir.clone(),
             commands: std::collections::HashMap::new(),
-            default_command: AgentCommand::new("claude-agent-acp"),
-            timeouts,
+            ..ChannelConfig::default()
         },
         ProcessConnector {
             handshake: timeouts.handshake,
         },
-        RootDirs(config.workspace.clone()),
+        StoreDirs::new(store.clone(), config.workspace.clone()),
+        routing.clone(),
     );
 
     let state = AppState {
@@ -198,9 +511,14 @@ pub async fn build(
         agents: AgentSlot::Real(Arc::new(agents)),
         github: GitHubSlot::Real(github),
         previews: Supervisor::default(),
+        baselines: BaselineSlot::Real(BaselineCapture::new(config.config_home.join("baselines"))),
         proxy_http: reqwest::Client::new(),
+        agent_auth: latoile_agents::AgentAuthManager::production(),
+        routing,
+        decision_lock: Arc::new(tokio::sync::Mutex::new(())),
         token: Arc::from(token.as_str()),
     };
+    crate::driver::recover_startup(&state).await?;
     let driver = crate::driver::spawn(state.clone());
     Ok((crate::routes::router(state), token, token_source, driver))
 }

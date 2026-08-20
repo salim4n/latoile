@@ -5,8 +5,11 @@
 use super::UseCaseError;
 use latoile_core::event::{EventKind, NewEvent};
 use latoile_core::ids::{ProjectId, RoleId, RunId, TaskId};
-use latoile_core::ports::{AgentChannel, EventLog, RunStore, SpecStore, TaskStore};
-use latoile_core::{Run, Task, TriggeredBy};
+use latoile_core::ports::{
+    AgentChannel, EventLog, RunStore, SpecStore, TaskStore, VisualBaselineRenderer,
+    VisualBaselineStore,
+};
+use latoile_core::{DomainError, Run, Task, TriggeredBy};
 
 pub struct DispatchTaskInput {
     pub project_id: ProjectId,
@@ -24,22 +27,41 @@ pub struct DispatchedTask {
     pub run: Run,
 }
 
-pub struct DispatchTask<S, T, R, A, E> {
+pub struct DispatchTask<S, T, R, B, C, A, E> {
     specs: S,
     tasks: T,
     runs: R,
+    baselines: B,
+    baseline_renderer: C,
     agents: A,
     events: E,
 }
 
-impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
-    DispatchTask<S, T, R, A, E>
+impl<
+    S: SpecStore,
+    T: TaskStore,
+    R: RunStore,
+    B: VisualBaselineStore,
+    C: VisualBaselineRenderer,
+    A: AgentChannel,
+    E: EventLog,
+> DispatchTask<S, T, R, B, C, A, E>
 {
-    pub fn new(specs: S, tasks: T, runs: R, agents: A, events: E) -> Self {
+    pub fn new(
+        specs: S,
+        tasks: T,
+        runs: R,
+        baselines: B,
+        baseline_renderer: C,
+        agents: A,
+        events: E,
+    ) -> Self {
         Self {
             specs,
             tasks,
             runs,
+            baselines,
+            baseline_renderer,
             agents,
             events,
         }
@@ -48,6 +70,46 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
     pub async fn execute(&self, input: DispatchTaskInput) -> Result<DispatchedTask, UseCaseError> {
         // 2. Fetch: the approved spec this task materializes, if any.
         let spec = self.specs.approved_for_project(&input.project_id).await?;
+        if let Some(spec) = &spec {
+            let verification = self
+                .agents
+                .verify_architecture_package(&input.project_id, spec)
+                .await?;
+            if !verification.valid {
+                return Err(DomainError::Invariant(
+                    "the approved architecture package changed; create and approve a new version before dispatch",
+                )
+                .into());
+            }
+            let provenance = spec.provenance.as_ref().ok_or(DomainError::Invariant(
+                "the approved architecture has no immutable provenance",
+            ))?;
+            let baselines = self.baselines.list_for_spec(&spec.id).await?;
+            let complete = verification.scenarios.iter().all(|scenario| {
+                baselines.iter().any(|baseline| {
+                    baseline.satisfies(
+                        &spec.id,
+                        &provenance.manifest_digest,
+                        &provenance.package_commit_sha,
+                        &scenario.comparison_id,
+                    )
+                })
+            });
+            if !complete {
+                return Err(DomainError::Invariant(
+                    "required visual baselines are missing or failed; capture them before dispatch",
+                )
+                .into());
+            }
+            for baseline in baselines.iter().filter(|baseline| {
+                verification
+                    .scenarios
+                    .iter()
+                    .any(|scenario| scenario.comparison_id == baseline.comparison_id)
+            }) {
+                self.baseline_renderer.verify(baseline).await?;
+            }
+        }
 
         // 3. Domain. `Task::new` validates the title; `start` refuses
         // without a spec — before anything hits the database.
@@ -72,7 +134,10 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
         );
 
         // The agent channel is the only way a process ever starts.
-        let session = self.agents.start_run(&run, &input.prompt).await?;
+        let session = self
+            .agents
+            .start_run(&input.project_id, &run, &input.prompt)
+            .await?;
         run.acp_session_id = Some(session);
         run.begin()?;
 
@@ -92,10 +157,7 @@ impl<S: SpecStore, T: TaskStore, R: RunStore, A: AgentChannel, E: EventLog>
             .append(&NewEvent {
                 project_id: input.project_id,
                 kind: EventKind::RunStarted,
-                payload: format!(
-                    "{{\"task_id\":\"{}\",\"run_id\":\"{}\"}}",
-                    task.id, run.id
-                ),
+                payload: format!("{{\"task_id\":\"{}\",\"run_id\":\"{}\"}}", task.id, run.id),
             })
             .await?;
 
@@ -113,13 +175,39 @@ mod tests {
 
     /// A fake agent channel: never spawns, hands out session handles.
     struct FakeAgents;
+    struct FakeBaselines;
+
+    impl VisualBaselineRenderer for FakeBaselines {
+        async fn capture(
+            &self,
+            _request: &latoile_core::VisualBaselineCaptureRequest,
+        ) -> PortResult<latoile_core::VisualBaselineCaptureOutcome> {
+            unimplemented!()
+        }
+
+        async fn read_png(&self, _baseline: &latoile_core::VisualBaseline) -> PortResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
 
     impl AgentChannel for FakeAgents {
         async fn tell_manager(&self, _p: &ProjectId, _m: &str) -> PortResult<ManagerReply> {
             unimplemented!()
         }
-        async fn start_run(&self, _r: &Run, _prompt: &str) -> PortResult<String> {
+        async fn start_run(
+            &self,
+            _project: &ProjectId,
+            _r: &Run,
+            _prompt: &str,
+        ) -> PortResult<String> {
             Ok("acp-session-1".into())
+        }
+        async fn verify_architecture_package(
+            &self,
+            _project: &ProjectId,
+            spec: &latoile_core::SpecVersion,
+        ) -> PortResult<latoile_core::ArchitecturePackageValidation> {
+            Ok(test_fixtures::test_verification(spec))
         }
         async fn cancel_run(&self, _r: &RunId) -> PortResult<()> {
             Ok(())
@@ -145,11 +233,16 @@ mod tests {
             store.clone(),
             store.clone(),
             store.clone(),
+            store.clone(),
+            FakeBaselines,
             FakeAgents,
             store.clone(),
         );
 
-        let out = uc.execute(input(test_fixtures::PROJECT.clone())).await.unwrap();
+        let out = uc
+            .execute(input(test_fixtures::PROJECT.clone()))
+            .await
+            .unwrap();
 
         assert_eq!(out.task.status, TaskStatus::InProgress);
         assert_eq!(
@@ -179,20 +272,58 @@ mod tests {
             store.clone(),
             store.clone(),
             store.clone(),
+            store.clone(),
+            FakeBaselines,
             FakeAgents,
             store.clone(),
         );
 
-        assert!(uc.execute(input(test_fixtures::PROJECT.clone())).await.is_err());
-        assert!(store
-            .list_for_project(&test_fixtures::PROJECT)
+        assert!(
+            uc.execute(input(test_fixtures::PROJECT.clone()))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .list_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .since(&test_fixtures::PROJECT, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approved_spec_without_ready_baselines_cannot_start_code() {
+        let store = test_fixtures::store_with_approved_spec_without_baseline().await;
+        let uc = DispatchTask::new(
+            store.clone(),
+            store.clone(),
+            store.clone(),
+            store.clone(),
+            FakeBaselines,
+            FakeAgents,
+            store.clone(),
+        );
+
+        let error = uc
+            .execute(input(test_fixtures::PROJECT.clone()))
             .await
-            .unwrap()
-            .is_empty());
-        assert!(store
-            .since(&test_fixtures::PROJECT, 0)
-            .await
-            .unwrap()
-            .is_empty());
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("visual baselines"));
+        assert!(
+            store
+                .list_for_project(&test_fixtures::PROJECT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -27,6 +27,14 @@ fn row_to_message(row: &SqliteRow) -> Result<Message, StoreError> {
 
 const COLUMNS: &str = "id, conversation_id, author, content, actions";
 
+/// Chat read model with the audit timestamp used by the project workspace.
+/// The durable Message entity remains free of persistence metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMessageRow {
+    pub message: Message,
+    pub created_at: String,
+}
+
 impl Store {
     /// The conversation is created with the project (onboarding); it is not
     /// part of the port because no use case ever needs a project without one.
@@ -39,6 +47,36 @@ impl Store {
             .map_err(StoreError::from)?;
         Ok(())
     }
+
+    /// The `limit` most recent messages, oldest first, including display
+    /// timestamps for the workspace chat.
+    pub async fn recent_message_rows(
+        &self,
+        project: &ProjectId,
+        limit: u32,
+    ) -> PortResult<Vec<ProjectMessageRow>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS}, created_at FROM message
+             WHERE conversation_id = (SELECT id FROM conversation WHERE project_id = ?)
+             ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        ))
+        .bind(project.as_str())
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        let mut messages = rows
+            .iter()
+            .map(|row| {
+                Ok(ProjectMessageRow {
+                    message: row_to_message(row)?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
 }
 
 impl ConversationStore for Store {
@@ -48,14 +86,12 @@ impl ConversationStore for Store {
             .fetch_optional(self.pool())
             .await
             .map_err(StoreError::from)?;
-        row.map(
-            |r| -> Result<Conversation, StoreError> {
-                Ok(Conversation {
-                    id: ConversationId::new(r.try_get::<String, _>("id")?)?,
-                    project_id: ProjectId::new(r.try_get::<String, _>("project_id")?)?,
-                })
-            },
-        )
+        row.map(|r| -> Result<Conversation, StoreError> {
+            Ok(Conversation {
+                id: ConversationId::new(r.try_get::<String, _>("id")?)?,
+                project_id: ProjectId::new(r.try_get::<String, _>("project_id")?)?,
+            })
+        })
         .transpose()
         .map_err(Into::into)
     }
@@ -129,10 +165,7 @@ mod tests {
         let m = message("m1", &conv, Author::Manager, "Voici le plan.");
         s.append(&m).await.unwrap();
 
-        let back = s
-            .recent(&test_fixtures::PROJECT, 10)
-            .await
-            .unwrap();
+        let back = s.recent(&test_fixtures::PROJECT, 10).await.unwrap();
         assert_eq!(back, vec![m]);
     }
 
@@ -164,7 +197,27 @@ mod tests {
     #[tokio::test]
     async fn for_project_finds_the_conversation() {
         let (s, conv) = store_with_conversation().await;
-        let found = s.for_project(&test_fixtures::PROJECT).await.unwrap().unwrap();
+        let found = s
+            .for_project(&test_fixtures::PROJECT)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(found.id, conv);
+    }
+
+    #[tokio::test]
+    async fn project_rows_include_a_display_timestamp() {
+        let (s, conv) = store_with_conversation().await;
+        s.append(&message("m1", &conv, Author::Manager, "Voici le plan."))
+            .await
+            .unwrap();
+
+        let rows = s
+            .recent_message_rows(&test_fixtures::PROJECT, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(rows[0].message.id.as_str(), "m1");
+        assert!(rows[0].created_at.ends_with('Z'));
     }
 }

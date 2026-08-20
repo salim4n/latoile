@@ -48,15 +48,24 @@ export function ErrorState({
 }
 
 /// Two approval-ish cards, one command card, three rows — the Inbox shape.
-export function Skeletons() {
+export function Skeletons({ label }: { label?: string } = {}) {
   return (
-    <div aria-busy="true">
+    <div
+      aria-busy="true"
+      aria-label={label}
+      role={label ? "status" : undefined}
+    >
       <div className="sec">
         <h2 className="sec-title">
           <span className="skel" style={{ display: "inline-block", width: 190, height: 16, verticalAlign: "middle" }} />
         </h2>
         {[72, 88].map((w) => (
-          <div className="card item" aria-hidden="true" key={w}>
+          <div
+            className="card item"
+            aria-hidden="true"
+            data-testid="inbox-approval-skeleton"
+            key={w}
+          >
             <div className="skel skel-badge" />
             <div className="skel skel-title" style={{ width: `${w}%` }} />
             <div className="skel skel-line" />
@@ -78,7 +87,12 @@ export function Skeletons() {
           <span className="skel" style={{ display: "inline-block", width: 110, height: 16, verticalAlign: "middle" }} />
         </h2>
         {[38, 64, 30].map((w) => (
-          <div className="card item" aria-hidden="true" key={w}>
+          <div
+            className="card item"
+            aria-hidden="true"
+            data-testid="inbox-project-skeleton"
+            key={w}
+          >
             <div className="skel skel-title" style={{ marginTop: 0, width: `${w}%` }} />
             <div className="skel skel-line skel-line--short" />
           </div>

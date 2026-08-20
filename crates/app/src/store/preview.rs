@@ -77,6 +77,26 @@ impl PreviewStore for Store {
     }
 }
 
+impl Store {
+    /// Every preview whose database state claims a supervised process still
+    /// exists. Startup and the health loop reconcile this set with the
+    /// process-local supervisor registry.
+    pub async fn active_previews(&self) -> PortResult<Vec<Preview>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM preview
+             WHERE status IN ('starting', 'ready', 'stale')
+             ORDER BY project_id, id"
+        ))
+        .fetch_all(self.pool())
+        .await
+        .map_err(StoreError::from)?;
+        rows.iter()
+            .map(row_to_preview)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +152,18 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn active_previews_returns_only_process_claims() {
+        let s = test_fixtures::store_with_project().await;
+        let mut active = preview("pr1");
+        active.mark_ready(4242).unwrap();
+        s.save(&active).await.unwrap();
+        assert_eq!(s.active_previews().await.unwrap(), [active.clone()]);
+
+        active.fail().unwrap();
+        s.save(&active).await.unwrap();
+        assert!(s.active_previews().await.unwrap().is_empty());
     }
 }

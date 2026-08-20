@@ -51,7 +51,12 @@ mod tests {
     struct CountingSupervisor(Arc<AtomicUsize>);
 
     impl PreviewSupervisor for CountingSupervisor {
-        async fn ensure(&self, _p: &Preview, _cmd: &str) -> PortResult<(u32, u16)> {
+        async fn ensure(
+            &self,
+            _p: &Preview,
+            _cmd: &str,
+            _working_dir: &str,
+        ) -> PortResult<(u32, u16)> {
             Ok((4242, 4100))
         }
         async fn stop(&self, _p: &Preview) -> PortResult<()> {

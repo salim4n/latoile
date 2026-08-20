@@ -4,3 +4,6 @@ dist/
 .env
 *.local
 .DS_Store
+.latoile-canary/
+__pycache__/
+.gstack/

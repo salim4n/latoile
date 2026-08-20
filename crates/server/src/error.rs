@@ -32,6 +32,15 @@ impl ApiError {
         }
     }
 
+    /// 409 — the resource exists but is in the wrong state for the action.
+    pub(crate) fn conflict(code: &'static str, message: String) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code,
+            message,
+        }
+    }
+
     pub fn not_found(what: &'static str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,

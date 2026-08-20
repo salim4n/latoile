@@ -1,42 +1,98 @@
-// New project — GitHub repo picker (radio cards) + multi-line brief +
-// bottom-sticky primary action, per the mockup's default/sending states.
-// The brief becomes the first message to the project's Manager.
+// New project — GitHub repo picker, multi-line brief, and bottom-sticky
+// primary action. The repository name becomes the project name; the brief is
+// posted as the first durable Architect brief after creation.
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { useT } from "../i18n";
 import { Shell } from "../components/Shell";
-import { ErrorState, Skeletons } from "../components/states";
+import { EmptyState, ErrorState } from "../components/states";
+import { PlusIcon } from "../components/icons";
+
+const CONNECT_GITHUB_URL = "https://github.com/settings/tokens";
+
+function RepositoryLoading({ label }: { label: string }) {
+  return (
+    <div className="repo-loading" role="status" aria-label={label} aria-busy="true">
+      <div className="skel skel-line skel-line--short" />
+      {[72, 58, 66, 82].map((width) => (
+        <div className="card repo repo--skeleton" data-testid="repo-skeleton" aria-hidden="true" key={width}>
+          <div className="skel repo-radio-skeleton" />
+          <div className="repo-main">
+            <div className="skel skel-title" style={{ width: `${width}%` }} />
+            <div className="skel skel-line" />
+          </div>
+          <div className="skel skel-badge" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConnectRepositoryLink({ compact = false }: { compact?: boolean }) {
+  const { t } = useT();
+  return (
+    <a
+      className={compact ? "btn btn--primary" : "repo-more"}
+      href={CONNECT_GITHUB_URL}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <PlusIcon />
+      {t(compact ? "new.repo.empty.cta" : "new.repo.more")}
+    </a>
+  );
+}
 
 export function NewProjectScreen() {
-  const { t } = useT();
+  const { t, lang } = useT();
   const navigate = useNavigate();
   const repos = useAsync(api.repos, []);
   const [selected, setSelected] = useState<string | null>(null);
+  const [repoSearch, setRepoSearch] = useState("");
   const [brief, setBrief] = useState("");
+  const [devCommand, setDevCommand] = useState("");
+  const [briefError, setBriefError] = useState(false);
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selected || !brief.trim() || sending) return;
+  const normalizedSearch = repoSearch.trim().toLocaleLowerCase();
+  const visibleRepos = (repos.data ?? []).filter((repo) =>
+    `${repo.full_name} ${repo.description ?? ""}`.toLocaleLowerCase().includes(normalizedSearch),
+  );
+  const effectiveSelected =
+    selected ?? (normalizedSearch ? visibleRepos[0]?.full_name : repos.data?.[0]?.full_name) ?? null;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (sending) return;
+    if (!brief.trim()) {
+      setBriefError(true);
+      return;
+    }
+    if (!effectiveSelected) return;
+
     setSending(true);
     setFailed(false);
+    setBriefError(false);
     try {
-      const name = selected.split("/").pop() ?? selected;
-      const project = await api.createProject({
+      const name = effectiveSelected.split("/").pop() ?? effectiveSelected;
+      const body: Record<string, string> = {
         name,
         slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-        github_repo: selected,
+        github_repo: effectiveSelected,
         work_branch: "work",
-        // The workspace layout is the orchestrator pass's business; the
-        // repo identity is what V1 records here.
-        local_path: selected,
-        dev_command: "pnpm dev --port $PORT",
-      });
-      await api.sendMessage(project.id, brief.trim());
+      };
+      if (devCommand.trim()) body.dev_command = devCommand.trim();
+      const project = await api.createProject(body);
+      await api.sendMessage(
+        project.id,
+        brief.trim(),
+        "architecture_brief",
+        lang === "fr" ? "fr-FR" : "en-US",
+      );
       navigate(`/projects/${project.id}`);
     } catch {
       setFailed(true);
@@ -45,74 +101,128 @@ export function NewProjectScreen() {
   }
 
   return (
-    <Shell back={t("shell.back.projects")} title={t("new.title")}>
-      {repos.loading && <Skeletons />}
-      {repos.error && (
-        <ErrorState
-          title={t("new.repo.error")}
-          body={t("inbox.error.body")}
-          onRetry={repos.reload}
-        />
-      )}
-      {repos.data && (
-        <form aria-label={t("new.title")} onSubmit={submit}>
-          <fieldset className="fieldset" disabled={sending}>
-            <legend className="legend">{t("new.repo.legend")}</legend>
-            <div className="repo-list" role="radiogroup" aria-label={t("new.repo.legend")}>
-              {repos.data.map((repo) => (
-                <label className="card repo" key={repo.full_name}>
-                  <input
-                    type="radio"
-                    name="repo"
-                    value={repo.full_name}
-                    checked={selected === repo.full_name}
-                    onChange={() => setSelected(repo.full_name)}
-                  />
-                  <span className="repo-main">
-                    <span className="repo-name">{repo.full_name}</span>
-                    <span className="repo-desc">{repo.description ?? ""}</span>
-                  </span>
-                </label>
-              ))}
+    <Shell
+      back={t("shell.back.projects")}
+      title={t("new.title")}
+      crumb={
+        <>
+          <Link to="/projects">{t("nav.projects")}</Link>
+          {" / "}
+          {t("new.crumb")}
+        </>
+      }
+    >
+      <div className="new-project-page">
+        {repos.loading && <RepositoryLoading label={t("new.repo.loading")} />}
+        {repos.error && (
+          <ErrorState
+            title={t("new.repo.error")}
+            body={t("new.repo.error.body")}
+            onRetry={repos.reload}
+          />
+        )}
+        {repos.data && repos.data.length === 0 && (
+          <EmptyState
+            title={t("new.repo.empty.title")}
+            body={t("new.repo.empty.body")}
+            action={<ConnectRepositoryLink compact />}
+          />
+        )}
+        {repos.data && repos.data.length > 0 && (
+          <form aria-label={t("new.form.aria")} aria-busy={sending} onSubmit={submit} noValidate>
+            <fieldset className="fieldset" disabled={sending}>
+              <legend className="legend">{t("new.repo.legend")}</legend>
+              <label className="field-label repo-search-label" htmlFor="repo-search">
+                {t("new.repo.search.label")}
+              </label>
+              <input
+                className="text-field repo-search"
+                id="repo-search"
+                type="search"
+                value={repoSearch}
+                placeholder={t("new.repo.search.placeholder")}
+                onChange={(event) => setRepoSearch(event.target.value)}
+              />
+              <div className="repo-list" role="radiogroup" aria-label={t("new.repo.legend")}>
+                {visibleRepos.map((repo) => (
+                  <label className="card repo" key={repo.full_name}>
+                    <input
+                      type="radio"
+                      name="repo"
+                      value={repo.full_name}
+                      disabled={sending}
+                      checked={effectiveSelected === repo.full_name}
+                      onChange={() => setSelected(repo.full_name)}
+                    />
+                    <span className="repo-main">
+                      <span className="repo-name">{repo.full_name}</span>
+                      <span className="repo-desc">{repo.description ?? t("new.repo.no.description")}</span>
+                    </span>
+                    <span className="badge badge--neutral">
+                      {t(repo.private ? "new.repo.private" : "new.repo.public")}
+                    </span>
+                  </label>
+                ))}
+                {visibleRepos.length === 0 && (
+                  <p className="repo-no-results" role="status">
+                    {t("new.repo.search.empty")}
+                  </p>
+                )}
+                <ConnectRepositoryLink />
+              </div>
+            </fieldset>
+
+            <div className="fieldset">
+              <label className="field-label" htmlFor="brief">
+                {t("new.brief.label")}
+              </label>
+              <textarea
+                id="brief"
+                name="brief"
+                disabled={sending}
+                aria-invalid={briefError}
+                aria-describedby={briefError ? "brief-error" : "brief-hint"}
+                value={brief}
+                onChange={(event) => {
+                  setBrief(event.target.value);
+                  if (event.target.value.trim()) setBriefError(false);
+                }}
+              />
+              {briefError && (
+                <p className="field-error" id="brief-error" role="alert">
+                  {t("new.brief.required")}
+                </p>
+              )}
+              <p className="hint" id="brief-hint">{t("new.brief.hint")}</p>
             </div>
-          </fieldset>
 
-          <div className="fieldset">
-            <label className="field-label" htmlFor="brief">
-              {t("new.brief.label")}
-            </label>
-            <textarea
-              id="brief"
-              name="brief"
-              disabled={sending}
-              value={brief}
-              onChange={(e) => setBrief(e.target.value)}
-            />
-            <p className="hint">{t("new.brief.hint")}</p>
-          </div>
+            <div className="fieldset">
+              <label className="field-label" htmlFor="dev-command">
+                {t("new.dev.label")}
+              </label>
+              <input
+                className="text-field"
+                id="dev-command"
+                name="dev-command"
+                disabled={sending}
+                value={devCommand}
+                placeholder={t("new.dev.placeholder")}
+                onChange={(event) => setDevCommand(event.target.value)}
+              />
+              <p className="hint">{t("new.dev.hint")}</p>
+            </div>
 
-          <div className="submitbar">
-            <button
-              className="btn btn--primary btn--block"
-              type="submit"
-              disabled={!selected || !brief.trim() || sending}
-            >
-              {sending && <span className="spin" aria-hidden="true" />}
-              {sending ? t("new.sending") : t("new.submit")}
-            </button>
-            {sending && (
-              <p className="hint" style={{ textAlign: "center" }}>
-                {t("new.sending.note")}
-              </p>
-            )}
-            {failed && (
-              <p className="hint" style={{ textAlign: "center", color: "var(--danger)" }}>
-                {t("new.failed")}
-              </p>
-            )}
-          </div>
-        </form>
-      )}
+            <div className="submitbar new-project-submitbar">
+              <button className="btn btn--primary btn--block" type="submit" disabled={sending || !effectiveSelected}>
+                {sending && <span className="spin" aria-hidden="true" />}
+                {sending ? t("new.sending") : t("new.submit")}
+              </button>
+              {sending && <p className="submit-note">{t("new.sending.note")}</p>}
+              {failed && <p className="submit-error" role="alert">{t("new.failed")}</p>}
+            </div>
+          </form>
+        )}
+      </div>
     </Shell>
   );
 }

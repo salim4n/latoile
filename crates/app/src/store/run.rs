@@ -36,10 +36,18 @@ fn row_to_run(row: &SqliteRow) -> Result<Run, StoreError> {
         acp_session_id: row.try_get("acp_session_id")?,
         status: parse_status(&row.try_get::<String, _>("status")?)?,
         summary: row.try_get("summary")?,
+        base_sha: row.try_get("base_sha")?,
+        head_sha: row.try_get("head_sha")?,
+        artifacts: row.try_get("artifacts")?,
+        reviewed_run_id: row
+            .try_get::<Option<String>, _>("reviewed_run_id")?
+            .map(RunId::new)
+            .transpose()?,
     })
 }
 
-const COLUMNS: &str = "id, task_id, role_id, triggered_by, acp_session_id, status, summary";
+const COLUMNS: &str = "id, task_id, role_id, triggered_by, acp_session_id, status, summary, \
+                       base_sha, head_sha, artifacts, reviewed_run_id";
 
 impl RunStore for Store {
     async fn get(&self, id: &RunId) -> PortResult<Option<Run>> {
@@ -79,12 +87,17 @@ impl RunStore for Store {
 
     async fn save(&self, run: &Run) -> PortResult<()> {
         sqlx::query(
-            "INSERT INTO run (id, task_id, role_id, triggered_by, acp_session_id, status, summary)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO run (id, task_id, role_id, triggered_by, acp_session_id, status, summary,
+                              base_sha, head_sha, artifacts, reviewed_run_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                acp_session_id = excluded.acp_session_id,
                status = excluded.status,
                summary = excluded.summary,
+               base_sha = excluded.base_sha,
+               head_sha = excluded.head_sha,
+               artifacts = excluded.artifacts,
+               reviewed_run_id = excluded.reviewed_run_id,
                ended_at = CASE
                    WHEN excluded.status IN ('finished', 'error', 'cancelled')
                    THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -100,6 +113,10 @@ impl RunStore for Store {
         .bind(&run.acp_session_id)
         .bind(run.status.as_str())
         .bind(&run.summary)
+        .bind(&run.base_sha)
+        .bind(&run.head_sha)
+        .bind(&run.artifacts)
+        .bind(run.reviewed_run_id.as_ref().map(RunId::as_str))
         .execute(self.pool())
         .await
         .map_err(StoreError::from)?;
@@ -148,6 +165,13 @@ mod tests {
         let mut r = run("r1", &task);
         r.begin().unwrap();
         r.acp_session_id = Some("acp-1".into());
+        r.finish("implemented and tested").unwrap();
+        r.attach_evidence(
+            Some("1111111".into()),
+            Some("2222222".into()),
+            r#"{"commits":[{"sha":"2222222","subject":"feat: ship"}]}"#.into(),
+        )
+        .unwrap();
         s.save(&r).await.unwrap();
 
         let back = s.get(&r.id).await.unwrap().unwrap();
@@ -185,5 +209,48 @@ mod tests {
         s.save(&r1).await.unwrap();
         s.save(&run("r2", &task)).await.unwrap();
         assert_eq!(s.list_for_task(&task).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_reviewer_subject_round_trips_and_cannot_be_rebound() {
+        let (store, task) = store_with_task().await;
+        let mut subject = run("executor-1", &task);
+        subject.begin().unwrap();
+        subject.finish("done").unwrap();
+        store.save(&subject).await.unwrap();
+        let mut forged_executor = run("executor-forged", &task);
+        forged_executor.begin().unwrap();
+        forged_executor.finish("done").unwrap();
+        forged_executor.reviewed_run_id = Some(subject.id.clone());
+        assert!(store.save(&forged_executor).await.is_err());
+        let mut reviewer = Run::new(
+            RunId::new("reviewer-1").unwrap(),
+            task,
+            RoleId::new("reviewer").unwrap(),
+            TriggeredBy::Manager,
+        );
+        reviewer
+            .bind_review_subject(RunId::new("executor-1").unwrap())
+            .unwrap();
+        store.save(&reviewer).await.unwrap();
+        assert_eq!(
+            store
+                .get(&reviewer.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .reviewed_run_id
+                .unwrap()
+                .as_str(),
+            "executor-1"
+        );
+
+        // The domain refuses normal rebinding; the migration trigger is the
+        // second line of defence for a manually reconstructed aggregate.
+        assert!(reviewer
+            .bind_review_subject(RunId::new("executor-2").unwrap())
+            .is_err());
+        reviewer.reviewed_run_id = Some(RunId::new("executor-2").unwrap());
+        assert!(store.save(&reviewer).await.is_err());
     }
 }
