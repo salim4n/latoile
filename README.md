@@ -1,5 +1,10 @@
 # LaToile
 
+> [!IMPORTANT]
+> **Development paused as of August 20, 2026.** LaToile is not under active
+> development or maintenance. This repository remains available as an
+> architectural and prototype reference, with no release or support schedule.
+
 **An AI-native, self-hosted project workbench.** You talk to a Manager agent; it orchestrates a fixed-role agent team — Architect, Backend, Frontend, Reviewer — that specs, builds, and verifies. You watch the application take shape live (web preview, mobile viewport first), and nothing merges without your explicit approval.
 
 > *La Toile* — the parallel network your agents travel through while you stay on the surface.
@@ -107,7 +112,8 @@ Deferred beyond V1: multi-user auth, configurable teams, branch-per-run parallel
 
 ## Contributing
 
-The repository is active. Run [`scripts/guardian.sh`](scripts/guardian.sh) before proposing a change; architecture or product feedback belongs in GitHub issues. LaToile never merges a delivered Pull Request automatically.
+Development is paused. New features and Pull Requests are not being actively
+reviewed. Existing issues and repository history remain available for reference.
 
 ## License
 
